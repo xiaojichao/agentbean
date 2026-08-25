@@ -15,7 +15,7 @@ describe('AgentBean Next browser smoke script', () => {
     const memberId = '9f94e7b0-a6a8-4bd0-a5c9-4d69deed7465';
 
     try {
-      const error = createBrowserSmokeWaitTimeoutError({
+      const waitError = createBrowserSmokeWaitTimeoutError({
         flow: 'webui-members',
         route: 'http://127.0.0.1/team/settings/members',
         waitStage: 'waitForFunction',
@@ -23,6 +23,7 @@ describe('AgentBean Next browser smoke script', () => {
         description: `human member "${memberId}" detail to render with role member`,
         elapsedMs: 60_021,
       });
+      const error = new Error('device detail wrapper retained the wait failure', { cause: waitError });
       const context = await writeBrowserSmokeFailureContext({
         artifacts: { failureContext },
         page: { readCurrentRoute: async () => 'http://127.0.0.1/team/settings/members?member=selected' },
@@ -39,7 +40,7 @@ describe('AgentBean Next browser smoke script', () => {
         selector: '[data-smoke="human-member-detail"]',
         description: `human member "${memberId}" detail to render with role member`,
         entityIds: [memberId],
-        error: `Timed out waiting for human member "${memberId}" detail to render with role member`,
+        error: 'device detail wrapper retained the wait failure',
       });
       expect(JSON.parse(readFileSync(failureContext, 'utf8'))).toEqual(context);
       expect(stableDataSmokeSelector(`document.querySelector('[data-smoke="human-member-detail"]')`))

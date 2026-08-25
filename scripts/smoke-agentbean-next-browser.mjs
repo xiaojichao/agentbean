@@ -127,11 +127,20 @@ export function createBrowserSmokeWaitTimeoutError({
   return error;
 }
 
+function browserSmokeFailureContextFrom(error) {
+  const seen = new Set();
+  let current = error;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    if (current.browserSmokeFailureContext) return current.browserSmokeFailureContext;
+    current = current.cause;
+  }
+  return undefined;
+}
+
 export async function writeBrowserSmokeFailureContext({ artifacts, page, flow, error }) {
   const message = error instanceof Error ? error.message : String(error);
-  const waitContext = error && typeof error === 'object'
-    ? error.browserSmokeFailureContext
-    : undefined;
+  const waitContext = browserSmokeFailureContextFrom(error);
   let route = waitContext?.route ?? null;
   if (page?.readCurrentRoute) {
     try {
@@ -3988,7 +3997,10 @@ async function waitForWebUiDeviceDetail({ page, deviceId, name, timeoutMs }) {
         };
       })()
     `).catch((debugError) => ({ debugError: debugError instanceof Error ? debugError.message : String(debugError) }));
-    throw new Error(`${error instanceof Error ? error.message : String(error)}; current detail ${JSON.stringify(debug)}`);
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}; current detail ${JSON.stringify(debug)}`,
+      { cause: error },
+    );
   }
 }
 

@@ -342,7 +342,7 @@ function categoryPareto(items) {
 export function computeBrowserSmokeRetryDiagnostics(resolution, jobResults = []) {
   const jobsByRun = new Map(jobResults.map((result) => [result.runId, result]));
   const runs = resolution.firstRuns
-    .filter(({ run }) => Boolean(run.conclusion) && run.conclusion !== 'cancelled')
+    .filter(({ run }) => Boolean(run.conclusion))
     .map((entry) => {
       const result = jobsByRun.get(entry.run.id);
       const steps = (result?.jobs ?? []).flatMap((job) => job.steps ?? []);
@@ -683,7 +683,7 @@ export async function collectSdlcFlowMetrics(
     { from, to },
   );
   const completedFirstRuns = firstPassResolution.firstRuns
-    .filter(({ run }) => Boolean(run.conclusion) && run.conclusion !== 'cancelled');
+    .filter(({ run }) => Boolean(run.conclusion));
   const firstPassJobResults = await mapWithConcurrency(
     completedFirstRuns,
     JOB_FETCH_CONCURRENCY,
