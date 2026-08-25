@@ -191,24 +191,60 @@ jobs:
             --api.host 127.0.0.1 \
             -t "runtime capability -> custom agent -> message -> daemon reply"
 
-      - name: Run AgentBean Next browser smoke
+      - name: Run AgentBean Next browser smoke attempt 1
+        id: browser_smoke_attempt_1
         if: steps.changes.outputs.should_validate == 'true' && steps.changes.outputs.should_browser_smoke == 'true'
+        continue-on-error: true
         env:
-          AGENTBEAN_NEXT_BROWSER_SMOKE_ARTIFACTS_DIR: artifacts/agentbean-next-browser-smoke
+          AGENTBEAN_NEXT_BROWSER_SMOKE_ARTIFACTS_DIR: artifacts/agentbean-next-browser-smoke/attempt-1
+          CHROME_BIN: /usr/bin/google-chrome
+        run: npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000
+
+      - name: Run AgentBean Next browser smoke retry
+        id: browser_smoke_attempt_2
+        if: steps.changes.outputs.should_validate == 'true' && steps.changes.outputs.should_browser_smoke == 'true' && steps.browser_smoke_attempt_1.outcome == 'failure'
+        env:
+          AGENTBEAN_NEXT_BROWSER_SMOKE_ARTIFACTS_DIR: artifacts/agentbean-next-browser-smoke/attempt-2
           CHROME_BIN: /usr/bin/google-chrome
         run: |
-          set +e
+          echo "::warning::Browser smoke failed once; retrying once for transient WebUI races."
           npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "::warning::Browser smoke failed once; retrying once for transient WebUI races."
-            npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000
-            status=$?
-          fi
-          exit "$status"
+
+      - name: Record AgentBean Next browser smoke retry outcome
+        if: always() && !cancelled() && steps.changes.outputs.should_validate == 'true' && steps.changes.outputs.should_browser_smoke == 'true'
+        env:
+          FIRST_OUTCOME: ${{ steps.browser_smoke_attempt_1.outcome }}
+          RETRY_OUTCOME: ${{ steps.browser_smoke_attempt_2.outcome }}
+        run: |
+          mkdir -p artifacts/agentbean-next-browser-smoke
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+
+          const firstOutcome = process.env.FIRST_OUTCOME || 'unknown';
+          const retryOutcome = process.env.RETRY_OUTCOME || 'skipped';
+          const classification = firstOutcome === 'success' && retryOutcome === 'skipped'
+            ? 'no-retry'
+            : firstOutcome === 'failure' && retryOutcome === 'success'
+              ? 'retry-recovered'
+              : firstOutcome === 'failure' && retryOutcome === 'failure'
+                ? 'retry-failed'
+                : 'unknown';
+          writeFileSync(
+            'artifacts/agentbean-next-browser-smoke/retry-outcome.json',
+            JSON.stringify({
+              schemaVersion: 1,
+              classification,
+              attempts: [
+                { attempt: 1, outcome: firstOutcome, artifactsDir: 'attempt-1' },
+                ...(retryOutcome === 'skipped' ? [] : [{ attempt: 2, outcome: retryOutcome, artifactsDir: 'attempt-2' }]),
+              ],
+            }, null, 2),
+          );
+          if (classification === 'unknown') process.exitCode = 1;
+          NODE
 
       - name: Upload AgentBean Next browser smoke artifacts
-        if: steps.changes.outputs.should_validate == 'true' && steps.changes.outputs.should_browser_smoke == 'true' && !cancelled()
+        if: always() && !cancelled() && steps.changes.outputs.should_validate == 'true' && steps.changes.outputs.should_browser_smoke == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: agentbean-next-browser-smoke

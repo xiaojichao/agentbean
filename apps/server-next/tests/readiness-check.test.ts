@@ -26,6 +26,7 @@ describe('AgentBean Next readiness checker', () => {
       'ci-runs-package-scoped-phase-tests',
       'ci-detects-pr-merge-readiness-changes',
       'ci-builds-canonical-packages-before-browser-smoke',
+      'ci-preserves-browser-smoke-retry-evidence',
       'ci-runs-production-readiness-before-deploy',
       'daemon-install-smoke-script',
       'entry-smoke-script',

@@ -67,6 +67,12 @@ gh api repos/xiaojichao/agentbean/actions/runs/30595768911/jobs --paginate \
 
 PR [#1244](https://github.com/xiaojichao/agentbean/pull/1244) 的 CI run [32737950056](https://github.com/xiaojichao/agentbean/actions/runs/32737950056) 在基线窗口之后提供了可复现的 flaky 旁证：首次 browser smoke 因等待成员详情渲染超时失败，同一 run 的一次 retry 随后以 `53/53` 通过。远端 CI 继续保留一次 retry 用于区分瞬态竞争；本地 `npm run preflight:changed -- --browser` 不自动重试，第一次失败直接暴露，并仅在改动触及 `apps/server-next/**` 或 `apps/web-next/**` 时追加完整 browser gate。默认 preflight、daemon-only、docs-only 和 git hook 行为均不变。
 
+## Browser 失败证据与周报分类
+
+Issue [#1247](https://github.com/xiaojichao/agentbean/issues/1247) 将远端 browser smoke 的首次执行与条件 retry 拆成显式 Actions steps，并把 artifact 隔离到 `attempt-1` / `attempt-2`。失败 wait 额外写入包含 flow、route、稳定 selector 或等待描述、实体 ID、等待阶段与耗时的 `failure-context.json`，因此 retry 不再覆盖首次失败截图与上下文。
+
+周报直接使用 jobs/steps 元数据区分未重试、retry 恢复和 retry 仍失败，不下载完整日志，也不从最终 job 结论猜测历史 run。没有显式 attempt steps 的历史样本保留为 `unknown`；本地 browser preflight 仍不 retry，远端 gate 也未删减任何覆盖。
+
 ## Primary sources
 
 - [CI/CD workflow（origin/main）](https://github.com/xiaojichao/agentbean/blob/main/.github/workflows/ci-cd.yml)

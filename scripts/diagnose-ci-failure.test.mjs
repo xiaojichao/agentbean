@@ -89,6 +89,22 @@ test('does not call a browser timeout flaky when the retry repeats the failure',
   assert.equal(result.failures[0].flakyAssessment.status, 'unlikely');
 });
 
+test('treats a failed explicit browser retry step as repeated evidence and keeps the local reproduction', () => {
+  const browserJob = job({
+    name: 'Validate AgentBean Next',
+    steps: [{ name: 'Run AgentBean Next browser smoke retry', conclusion: 'failure', number: 13 }],
+  });
+  const logs = new Map([[browserJob.id, {
+    text: 'FAIL webui-smoke-runtime-error: Timed out waiting for member detail',
+    truncated: false,
+    originalChars: 75,
+  }]]);
+  const result = analyzeCiFailure({ repository: 'xiaojichao/agentbean', run: run(), jobs: [browserJob], logsByJobId: logs });
+  assert.equal(result.summary.primaryCategory, 'browser_smoke');
+  assert.equal(result.failures[0].flakyAssessment.status, 'unlikely');
+  assert.equal(result.failures[0].reproduction.command, 'npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000');
+});
+
 test('marks strong runner or network signatures as possible flaky infrastructure', () => {
   const infraJob = job({ name: 'Validate AgentBean Next', steps: [{ name: 'Install AgentBean Next workspace dependencies', conclusion: 'failure' }] });
   const logs = new Map([[infraJob.id, {

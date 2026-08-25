@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  computeBrowserSmokeRetryDiagnostics,
   computeDeliveryMetrics,
   computeFirstPassCiDiagnostics,
   computeFirstPassCiMetrics,
@@ -199,6 +200,53 @@ test('first-pass CI diagnostics use documented fixed category priority and expos
   assert.deepEqual(result.jobsTruncatedRunIds, [2]);
 });
 
+test('browser smoke retry diagnostics distinguish no retry, recovered retry, repeated failure, and historical unknown', () => {
+  const resolution = resolveFirstPassCiRuns([
+    { id: 1, created_at: '2026-08-01T01:00:00Z', conclusion: 'success', pull_requests: [{ number: 10 }] },
+    { id: 2, created_at: '2026-08-01T01:00:00Z', conclusion: 'success', pull_requests: [{ number: 11 }] },
+    { id: 3, created_at: '2026-08-01T01:00:00Z', conclusion: 'failure', pull_requests: [{ number: 12 }] },
+    { id: 4, created_at: '2026-08-01T01:00:00Z', conclusion: 'success', pull_requests: [{ number: 13 }] },
+    { id: 5, created_at: '2026-08-01T01:00:00Z', conclusion: 'success', pull_requests: [{ number: 14 }] },
+  ]);
+  const result = computeBrowserSmokeRetryDiagnostics(resolution, [
+    { runId: 1, jobsCapped: false, jobs: [{ steps: [
+      { name: 'Run AgentBean Next browser smoke attempt 1', conclusion: 'success' },
+      { name: 'Run AgentBean Next browser smoke retry', conclusion: 'skipped' },
+    ] }] },
+    { runId: 2, jobsCapped: false, jobs: [{ steps: [
+      { name: 'Run AgentBean Next browser smoke attempt 1', conclusion: 'success' },
+      { name: 'Run AgentBean Next browser smoke retry', conclusion: 'success' },
+    ] }] },
+    { runId: 3, jobsCapped: false, jobs: [{ steps: [
+      { name: 'Run AgentBean Next browser smoke attempt 1', conclusion: 'success' },
+      { name: 'Run AgentBean Next browser smoke retry', conclusion: 'failure' },
+    ] }] },
+    { runId: 4, jobsCapped: false, jobs: [{ steps: [
+      { name: 'Run AgentBean Next browser smoke attempt 1', conclusion: 'skipped' },
+      { name: 'Run AgentBean Next browser smoke retry', conclusion: 'skipped' },
+    ] }] },
+    { runId: 5, jobsCapped: false, jobs: [{ steps: [
+      { name: 'Run AgentBean Next browser smoke', conclusion: 'success' },
+    ] }] },
+  ]);
+
+  assert.deepEqual(result.counts, {
+    noRetry: 1,
+    retryRecovered: 1,
+    retryFailed: 1,
+    notApplicable: 1,
+    unknown: 1,
+  });
+  assert.equal(result.applicableSampleSize, 3);
+  assert.deepEqual(result.runs.map((run) => run.category), [
+    'no_retry',
+    'retry_recovered',
+    'retry_failed',
+    'not_applicable',
+    'unknown',
+  ]);
+});
+
 test('first-pass CI falls back to PR commit SHA when Actions omits pull_requests', () => {
   const result = computeFirstPassCiMetrics([{
     id: 1,
@@ -385,6 +433,15 @@ test('human report surfaces core metrics and data-quality warnings', () => {
           categories: [{ category: 'package_tests_or_boundaries', count: 1 }],
         },
         cancellationPareto: { sampleSize: 0, categories: [] },
+        browserSmokeRetry: {
+          counts: {
+            noRetry: 1,
+            retryRecovered: 1,
+            retryFailed: 0,
+            notApplicable: 0,
+            unknown: 0,
+          },
+        },
         completedFirstRunsExcludingCancellationsWithLaterRun: 2,
         successRateExcludingCancellationsWithLaterRun: 0.5,
       },
@@ -404,6 +461,7 @@ test('human report surfaces core metrics and data-quality warnings', () => {
   assert.match(text, /首次 CI 成功率：50.0%/);
   assert.match(text, /排除存在后续 run 的取消后：50.0%/);
   assert.match(text, /首次 CI 失败 Pareto：package_tests_or_boundaries 1\/1/);
+  assert.match(text, /Browser smoke retry：未重试 1，retry 恢复 1，retry 仍失败 0/);
   assert.match(text, /Codex stale review：1\/3/);
   assert.match(text, /示例提示/);
 });
@@ -430,4 +488,18 @@ test('weekly workflow generates a read-only JSON artifact from the trusted defau
   assert.match(workflow, /--json > artifacts\/sdlc-flow-metrics\/report\.json/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
   assert.doesNotMatch(workflow, /issues:\s*write|pull-requests:\s*write|contents:\s*write/);
+});
+
+test('CI workflow preserves browser attempts and exposes retry outcome without weakening the retry gate', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/ci-cd.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /id: browser_smoke_attempt_1[\s\S]*continue-on-error: true/);
+  assert.match(workflow, /agentbean-next-browser-smoke\/attempt-1/);
+  assert.match(workflow, /id: browser_smoke_attempt_2/);
+  assert.match(workflow, /steps\.browser_smoke_attempt_1\.outcome == 'failure'/);
+  assert.match(workflow, /agentbean-next-browser-smoke\/attempt-2/);
+  assert.match(workflow, /retry-outcome\.json/);
+  assert.match(workflow, /'retry-recovered'/);
+  assert.match(workflow, /'retry-failed'/);
+  assert.match(workflow, /classification === 'unknown'\) process\.exitCode = 1/);
+  assert.match(workflow, /Upload AgentBean Next browser smoke artifacts[\s\S]*if: always\(\) && !cancelled\(\)/);
 });

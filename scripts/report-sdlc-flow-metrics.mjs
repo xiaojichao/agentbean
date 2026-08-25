@@ -10,6 +10,9 @@ const WORKFLOW_FILE = 'ci-cd.yml';
 const DEPLOY_JOB = 'Deploy production';
 const PRODUCTION_SMOKE_JOB = 'AgentBean Next production smoke';
 const HEALTH_STEP = 'Wait for production server healthcheck';
+const BROWSER_SMOKE_ATTEMPT_1_STEP = 'Run AgentBean Next browser smoke attempt 1';
+const BROWSER_SMOKE_ATTEMPT_2_STEP = 'Run AgentBean Next browser smoke retry';
+const LEGACY_BROWSER_SMOKE_STEP = 'Run AgentBean Next browser smoke';
 const JOB_FETCH_CONCURRENCY = 6;
 const execFileAsync = promisify(execFile);
 
@@ -336,6 +339,53 @@ function categoryPareto(items) {
   };
 }
 
+export function computeBrowserSmokeRetryDiagnostics(resolution, jobResults = []) {
+  const jobsByRun = new Map(jobResults.map((result) => [result.runId, result]));
+  const runs = resolution.firstRuns
+    .filter(({ run }) => Boolean(run.conclusion) && run.conclusion !== 'cancelled')
+    .map((entry) => {
+      const result = jobsByRun.get(entry.run.id);
+      const steps = (result?.jobs ?? []).flatMap((job) => job.steps ?? []);
+      const firstAttempt = steps.find((step) => step.name === BROWSER_SMOKE_ATTEMPT_1_STEP);
+      const retryAttempt = steps.find((step) => step.name === BROWSER_SMOKE_ATTEMPT_2_STEP);
+      const legacyAttempt = steps.find((step) => step.name === LEGACY_BROWSER_SMOKE_STEP);
+      let category = 'unknown';
+      if (!result?.jobsCapped) {
+        if (firstAttempt?.conclusion === 'skipped') {
+          category = 'not_applicable';
+        } else if (retryAttempt?.conclusion === 'success') {
+          category = 'retry_recovered';
+        } else if (retryAttempt?.conclusion && !['skipped', 'success'].includes(retryAttempt.conclusion)) {
+          category = 'retry_failed';
+        } else if (firstAttempt?.conclusion === 'success' && retryAttempt?.conclusion === 'skipped') {
+          category = 'no_retry';
+        } else if (!firstAttempt && legacyAttempt?.conclusion === 'skipped') {
+          category = 'not_applicable';
+        }
+      }
+      return {
+        category,
+        prNumber: entry.prNumber,
+        runId: entry.run.id,
+        firstAttemptConclusion: firstAttempt?.conclusion ?? null,
+        retryAttemptConclusion: retryAttempt?.conclusion ?? null,
+      };
+    });
+  const count = (category) => runs.filter((run) => run.category === category).length;
+  return {
+    sampleSize: runs.length,
+    applicableSampleSize: count('no_retry') + count('retry_recovered') + count('retry_failed'),
+    counts: {
+      noRetry: count('no_retry'),
+      retryRecovered: count('retry_recovered'),
+      retryFailed: count('retry_failed'),
+      notApplicable: count('not_applicable'),
+      unknown: count('unknown'),
+    },
+    runs,
+  };
+}
+
 export function computeFirstPassCiDiagnostics(resolution, jobResults = []) {
   const jobsByRun = new Map(jobResults.map((result) => [result.runId, result]));
   const nonSuccessRuns = resolution.firstRuns
@@ -387,6 +437,7 @@ export function computeFirstPassCiDiagnostics(resolution, jobResults = []) {
     nonSuccessRuns,
     failurePareto: categoryPareto(failures),
     cancellationPareto: categoryPareto(cancellations),
+    browserSmokeRetry: computeBrowserSmokeRetryDiagnostics(resolution, jobResults),
     cancellationsWithLaterRunCount,
     completedFirstRunsExcludingCancellationsWithLaterRun,
     successRateExcludingCancellationsWithLaterRun: completedFirstRunsExcludingCancellationsWithLaterRun === 0
@@ -631,10 +682,10 @@ export async function collectSdlcFlowMetrics(
     prResult.pullRequests,
     { from, to },
   );
-  const failedFirstRuns = firstPassResolution.firstRuns
-    .filter(({ run }) => run.conclusion === 'failure');
+  const completedFirstRuns = firstPassResolution.firstRuns
+    .filter(({ run }) => Boolean(run.conclusion) && run.conclusion !== 'cancelled');
   const firstPassJobResults = await mapWithConcurrency(
-    failedFirstRuns,
+    completedFirstRuns,
     JOB_FETCH_CONCURRENCY,
     async ({ run }) => {
       const result = await fetchRunJobs({ ...repository, runId: run.id }, runCommandAsync);
@@ -674,6 +725,9 @@ export async function collectSdlcFlowMetrics(
   if (firstPassDiagnostics.jobsTruncatedRunIds.length > 0) {
     warnings.push(`部分 first-pass CI run 的 jobs 超过 1000 项：${firstPassDiagnostics.jobsTruncatedRunIds.join(', ')}`);
   }
+  if (firstPassDiagnostics.browserSmokeRetry.counts.unknown > 0) {
+    warnings.push(`${firstPassDiagnostics.browserSmokeRetry.counts.unknown} 个已完成 first-pass run 缺少完整的显式 browser smoke attempt 证据，重试结果记为 unknown`);
+  }
 
   return {
     schemaVersion: 1,
@@ -687,6 +741,7 @@ export async function collectSdlcFlowMetrics(
       staleCodexReview: '观察窗口内有更新的 open、非 draft PR：有 Codex review，但没有 review 覆盖当前 head',
       firstPassCiSuccess: '窗口内 pull_request 事件中，每个 PR 最早一次 CI/CD run 的 conclusion',
       firstPassCiFailurePareto: '失败 first-run 按固定优先级归一失败 job/step；不读取完整日志',
+      browserSmokeRetry: '已完成 first-run 的显式 browser smoke attempt steps：未重试、retry 恢复或 retry 仍失败；不读取完整日志',
       firstPassCiCancellationPareto: '取消 first-run 仅按是否存在同 PR 后续 run 分类；不把相关性直接断言为 concurrency supersede',
       mergeToProductionSmoke: 'merge commit 对应 main push run：mergedAt → production smoke job 完成',
       deployToFirstHealthy: '同一 main push run：deploy job 完成 → healthcheck step 完成',
@@ -735,6 +790,10 @@ function paretoLine(label, pareto) {
   return `${label}：${categories || '无样本'}`;
 }
 
+function browserSmokeRetryLine(metric) {
+  return `Browser smoke retry：未重试 ${metric.counts.noRetry}，retry 恢复 ${metric.counts.retryRecovered}，retry 仍失败 ${metric.counts.retryFailed}，不适用 ${metric.counts.notApplicable}，未知 ${metric.counts.unknown}`;
+}
+
 export function formatSdlcFlowMetrics(result) {
   const lines = [
     `AgentBean SDLC 流程指标（${result.window.from.slice(0, 10)} 至 ${result.window.to.slice(0, 10)}）`,
@@ -743,6 +802,7 @@ export function formatSdlcFlowMetrics(result) {
     `排除存在后续 run 的取消后：${formatPercent(result.firstPassCi.diagnostics.successRateExcludingCancellationsWithLaterRun)}（${result.firstPassCi.success}/${result.firstPassCi.diagnostics.completedFirstRunsExcludingCancellationsWithLaterRun}）`,
     paretoLine('首次 CI 失败 Pareto', result.firstPassCi.diagnostics.failurePareto),
     paretoLine('首次 CI 取消 Pareto', result.firstPassCi.diagnostics.cancellationPareto),
+    browserSmokeRetryLine(result.firstPassCi.diagnostics.browserSmokeRetry),
     metricLine('Draft → Ready', result.pullRequests.draftToReady),
     metricLine('Ready → 首次 Review', result.pullRequests.readyToFirstReview),
     `Codex stale review：${result.pullRequests.staleCodexReview.count}/${result.pullRequests.staleCodexReview.eligibleOpenNonDraft}`,

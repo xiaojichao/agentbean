@@ -10,6 +10,11 @@ const DEFAULT_MAX_LOG_CHARS = 20_000;
 const FAILURE_CONCLUSIONS = new Set([
   'failure', 'timed_out', 'action_required', 'startup_failure', 'cancelled',
 ]);
+const BROWSER_SMOKE_REPRODUCTION = {
+  command: 'npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000',
+  scope: 'local_with_browser',
+  note: '需要 Chrome；CI 首次失败时会在独立 step 中重试一次。',
+};
 
 const REPRODUCTIONS = new Map([
   ['Run AgentBean Next readiness checks', {
@@ -40,11 +45,9 @@ const REPRODUCTIONS = new Map([
     command: 'npm run preview:agentbean-next',
     scope: 'local',
   }],
-  ['Run AgentBean Next browser smoke', {
-    command: 'npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000',
-    scope: 'local_with_browser',
-    note: '需要 Chrome；CI 使用 CHROME_BIN=/usr/bin/google-chrome，并会重试一次。',
-  }],
+  ['Run AgentBean Next browser smoke', BROWSER_SMOKE_REPRODUCTION],
+  ['Run AgentBean Next browser smoke attempt 1', BROWSER_SMOKE_REPRODUCTION],
+  ['Run AgentBean Next browser smoke retry', BROWSER_SMOKE_REPRODUCTION],
   ['Run AgentBean Next production readiness checks', {
     command: 'npm run check:agentbean-next-readiness -- --production',
     scope: 'local_with_production_env',
@@ -283,7 +286,7 @@ function classifyFailure(job, steps, log) {
   return { category: 'unknown', confidence: 'low' };
 }
 
-function assessFlaky(job, log, { truncated = false, signals = null } = {}) {
+function assessFlaky(job, log, { truncated = false, signals = null, retryStepFailed = false } = {}) {
   if (job.conclusion === 'cancelled') {
     return { status: 'insufficient_evidence', reasons: ['run/job 被取消，没有稳定性证据'] };
   }
@@ -301,6 +304,9 @@ function assessFlaky(job, log, { truncated = false, signals = null } = {}) {
         ...observedReasons,
       ],
     };
+  }
+  if (retryStepFailed) {
+    return { status: 'unlikely', reasons: ['显式 browser smoke retry step 仍失败；同一次 run 已观察到两次尝试'] };
   }
   if (observed.retryMarker && observed.failureMarkers >= 2) {
     return { status: 'unlikely', reasons: ['完整脱敏日志显示同一次 run 内重试后仍出现失败证据'] };
@@ -380,6 +386,7 @@ export function analyzeCiFailure({ repository, run, jobs, jobsTruncated = false,
       flakyAssessment: assessFlaky(job, logEntry.text, {
         truncated: Boolean(logEntry.truncated),
         signals: logEntry.signals ?? null,
+        retryStepFailed: steps.some((step) => step.name === 'Run AgentBean Next browser smoke retry'),
       }),
       log: {
         available: !logEntry.unavailable,
