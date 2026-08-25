@@ -1,0 +1,2 @@
+{"file":"docs/agents/sdlc-flow-metrics.md","reason":"核对周报口径、历史数据质量与 browser retry 分类合同。"}
+{"file":"docs/agents/ci-failure-diagnosis.md","reason":"核对显式 retry 失败的 CI 诊断与复现置信度合同。"}

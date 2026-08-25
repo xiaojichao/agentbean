@@ -1,0 +1,37 @@
+{
+  "id": "browser-smoke-diagnostics",
+  "name": "browser-smoke-diagnostics",
+  "title": "保留 browser smoke 重试证据并纳入 SDLC 周报",
+  "description": "Issue #1247：保留两次 browser smoke 证据、补失败上下文，并让周报区分 retry 结果。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "xiaojichao",
+  "assignee": "xiaojichao",
+  "createdAt": "2026-08-25",
+  "completedAt": "2026-08-25",
+  "branch": "codex/browser-smoke-diagnostics",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "lineage": {
+      "schemaVersion": 1,
+      "request": [],
+      "context": [],
+      "decisions": [],
+      "design": [],
+      "implementation": [],
+      "delivery": [],
+      "evidence": []
+    }
+  }
+}
