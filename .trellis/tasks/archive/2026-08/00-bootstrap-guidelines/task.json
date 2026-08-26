@@ -3,7 +3,7 @@
   "name": "00-bootstrap-guidelines",
   "title": "Bootstrap Guidelines",
   "description": "Fill in project development guidelines for AI agents",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "docs",
   "scope": null,
   "package": null,
@@ -11,12 +11,12 @@
   "creator": "xiaojichao",
   "assignee": "xiaojichao",
   "createdAt": "2026-08-05",
-  "completedAt": null,
+  "completedAt": "2026-08-26",
   "branch": null,
-  "base_branch": null,
+  "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
-  "pr_url": null,
+  "commit": "09eee7af94163c33ae2e4a0b0bb922933801939c",
+  "pr_url": "https://github.com/xiaojichao/agentbean/pull/1092",
   "subtasks": [],
   "children": [],
   "parent": null,
@@ -31,6 +31,6 @@
     ".trellis/spec/web/",
     ".trellis/spec/web-next/"
   ],
-  "notes": "First-time setup task created by trellis init (frontend project)",
+  "notes": "First-time setup task created by trellis init (frontend project). 已由 08-06-spec-bootstrap-refresh 按真实代码库完成并通过 PR #1092 合入；本任务作为被替代的初始化模板归档，未回填模板 checklist。",
   "meta": {}
 }
