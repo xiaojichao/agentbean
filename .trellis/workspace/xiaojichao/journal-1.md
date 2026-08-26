@@ -125,3 +125,24 @@ PR #1136 合并(57feba3f gate 放宽 + d70c78ac Review 阻塞收敛);修复生�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: 待审核任务卡片输出列表化
+
+**Date**: 2026-08-26
+**Task**: 待审核任务卡片输出列表化
+**Branch**: `codex/pending-review-output-list`
+
+### Summary
+
+按 Server projection 将待审核输出逐文件渲染为语义化无序列表，保留审核状态映射与摘要回退；Node 24 定向测试、web-next 构建和独立检查均通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e6dbe7bf` | (see git log) |
+
+### Status
+
+[OK] **Completed**
