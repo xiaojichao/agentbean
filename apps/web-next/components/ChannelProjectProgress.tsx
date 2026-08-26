@@ -442,17 +442,32 @@ function ProjectWorkCard({
 }
 
 /** 原型 mini-package：待审核输出按焦点包成员清单展示（投影未就绪回落文字摘要）。 */
-function projectReviewMemberList(projection: TaskCardReviewProjection | null): string | null {
+function projectReviewMemberList(projection: TaskCardReviewProjection | null) {
   if (!projection || projection.package.members.length === 0) return null;
   const stateByMember = new Map(
     projection.availableActions.map((action) => [`${action.collectionId}:${action.versionId}`, action.reviewState] as const),
   );
-  return projection.package.members
-    .map((member) => {
-      const state = stateByMember.get(`${member.collectionId}:${member.artifactVersionId}`);
-      return `${member.shortLabel} ${member.filename}${state ? `（${reviewStateLabel(state)}）` : ''}`;
-    })
-    .join('；');
+  return (
+    <ul
+      aria-label="待审核输出文件"
+      className="mt-1 list-disc space-y-0.5 pl-4 marker:text-sky-700"
+      data-smoke="project-card-review-member-list"
+    >
+      {projection.package.members.map((member) => {
+        const state = stateByMember.get(`${member.collectionId}:${member.artifactVersionId}`);
+        return (
+          <li
+            key={`${member.collectionId}:${member.artifactVersionId}`}
+            className="min-w-0 pl-0.5"
+          >
+            <span className="font-medium text-neutral-500">{member.shortLabel}</span>{' '}
+            <span className="break-all" title={member.filename}>{member.filename}</span>
+            {state ? <span className="text-neutral-500">（{reviewStateLabel(state)}）</span> : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 function ProjectCardFact({ label, value }: { label: string; value: string }) {

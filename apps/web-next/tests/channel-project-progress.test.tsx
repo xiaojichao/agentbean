@@ -1,24 +1,47 @@
 // @vitest-environment jsdom
 
 import React from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, test, vi } from 'vitest';
-import type { ChannelProjectOverviewDto, ChannelTaskWorkspaceV1 } from '@agentbean/contracts';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import type {
+  ChannelProjectOverviewDto,
+  ChannelTaskWorkspaceV1,
+  OutputPackageDto,
+  PackageMemberAvailableActionsDto,
+} from '@agentbean/contracts';
 
 import { ChannelProjectProgress } from '../components/ChannelProjectProgress';
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
+const mocks = vi.hoisted(() => ({
+  getOutputPackage: vi.fn(),
+  onUpdated: vi.fn(() => () => {}),
+  onArtifactsUpdated: vi.fn(() => () => {}),
+}));
+
 // review lane 卡片挂载 TaskCardReviewPanel 会拉焦点包投影；默认投影不可得（面板不渲染）。
 vi.mock('@/lib/socket', () => ({
   projectEvents: () => ({
-    getOutputPackage: vi.fn().mockResolvedValue({ ok: false, error: 'NOT_FOUND' }),
-    onUpdated: () => () => {},
-    onArtifactsUpdated: () => () => {},
+    getOutputPackage: mocks.getOutputPackage,
+    onUpdated: mocks.onUpdated,
+    onArtifactsUpdated: mocks.onArtifactsUpdated,
   }),
 }));
 
-afterEach(cleanup);
+beforeEach(() => {
+  mocks.getOutputPackage.mockReset();
+  mocks.getOutputPackage.mockResolvedValue({ ok: false, error: 'NOT_FOUND' });
+  mocks.onUpdated.mockReset();
+  mocks.onUpdated.mockReturnValue(() => {});
+  mocks.onArtifactsUpdated.mockReset();
+  mocks.onArtifactsUpdated.mockReturnValue(() => {});
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 function renderProgress(props: Partial<Parameters<typeof ChannelProjectProgress>[0]> = {}) {
   const callbacks = {
@@ -105,12 +128,60 @@ describe('频道项目推进工作区', () => {
     expect(card?.textContent).toContain('建议审核人审核人');
     expect(card?.textContent).toContain('待审核输出');
     expect(card?.textContent).toContain('文件审核 1/3（待补齐）');
+    expect(card?.querySelector('ul')).toBeNull();
     expect(card?.textContent).toContain('当前状态：待审核');
     expect(card?.textContent).not.toContain('Agent 已形成');
     // 原型对齐：审核动作内嵌卡片；「查看交付文件与审核」侧边栏入口与提示语移除。
     expect(card?.textContent).not.toContain('查看交付文件与审核');
     expect(card?.textContent).not.toContain('任务卡片只做状态摘要和入口');
     expect(document.querySelector('[data-smoke="task-card-review-entry"]')).toBeNull();
+  });
+
+  test('待审核输出按 Server 投影顺序渲染语义列表，并按当前成员版本展示审核态', async () => {
+    const longFilename = '这是一份用于验证任务卡片不会被超长文件名撑破的发布方案.md';
+    mocks.getOutputPackage.mockResolvedValue({
+      ok: true,
+      package: outputPackageFixture([
+        { sequence: 1, shortLabel: 'F1', filename: longFilename, artifactVersionId: 'v-1', collectionId: 'c-1' },
+        { sequence: 2, shortLabel: 'F2', filename: '分镜提示词.md', artifactVersionId: 'v-2', collectionId: 'c-2' },
+        { sequence: 3, shortLabel: 'F3', filename: '交付说明.md', artifactVersionId: 'v-3', collectionId: 'c-3' },
+      ]),
+      availableActions: [
+        memberAction('c-1', 'v-1', 'approved'),
+        memberAction('c-2', 'v-2', 'changes_requested'),
+        memberAction('c-3', 'v-old', 'rejected'),
+      ],
+    });
+    const review = reviewProgressFixture('pkg-1');
+
+    renderProgress(review);
+
+    const list = await screen.findByRole('list', { name: '待审核输出文件' });
+    expect(list.className).toContain('list-disc');
+    const items = within(list).getAllByRole('listitem');
+    expect(items.map((item) => item.textContent)).toEqual([
+      `F1 ${longFilename}（已通过）`,
+      'F2 分镜提示词.md（要求修改）',
+      'F3 交付说明.md',
+    ]);
+    const longFilenameNode = screen.getByTitle(longFilename);
+    expect(longFilenameNode.className).toContain('break-all');
+  });
+
+  test('焦点包成员为空时保留交付摘要且不渲染空列表', async () => {
+    mocks.getOutputPackage.mockResolvedValue({
+      ok: true,
+      package: outputPackageFixture([]),
+      availableActions: [],
+    });
+    const review = reviewProgressFixture('pkg-empty');
+
+    renderProgress(review);
+
+    await screen.findByText('查看交付文件');
+    const card = document.querySelector('[data-smoke="channel-project-stage-card"]');
+    expect(card?.textContent).toContain('交付包 2 个 · 文件审核 1/3（待补齐） · 最终版 1/2');
+    expect(card?.querySelector('ul')).toBeNull();
   });
 
   test('零个必需文件时将文件审核展示为不适用', () => {
@@ -347,6 +418,77 @@ describe('频道项目推进工作区', () => {
     expect(screen.queryByRole('button', { name: '项目设置 / 阶段配置' })).toBeNull();
   });
 });
+
+function reviewProgressFixture(focusPackageId: string) {
+  const baseOverview = overview();
+  const reviewStage = {
+    ...baseOverview.stages[0]!,
+    id: 'stage-review',
+    name: '交付审核',
+    task: { ...baseOverview.stages[0]!.task, id: 'task-review', status: 'in_review' as const },
+    aggregateStatus: 'in_review' as const,
+  };
+  const baseWorkspace = workspace();
+  const baseEntry = baseWorkspace.entries[0]!;
+  return {
+    overview: { ...baseOverview, stages: [reviewStage] },
+    workspace: {
+      ...baseWorkspace,
+      entries: [{
+        ...baseEntry,
+        task: reviewStage.task,
+        stage: reviewStage,
+        responsibilityFocus: { kind: 'review_wait' as const, detail: '等待成员审核交付' },
+        delivery: {
+          ...baseEntry.delivery,
+          focusPackageId,
+          focusReviewState: 'pending' as const,
+          fileReviewApprovedCount: 1,
+          fileReviewRequiredCount: 3,
+          fileReviewComplete: false,
+        },
+        review: { reviewerIds: ['reviewer-1'] },
+      }],
+    },
+    selectedStageId: 'stage-review',
+  };
+}
+
+function outputPackageFixture(members: OutputPackageDto['members']): OutputPackageDto {
+  return {
+    schemaVersion: 1,
+    packageId: 'pkg-1',
+    teamId: 'team-1',
+    channelId: 'channel-1',
+    revision: 1,
+    deliveryId: 'delivery-1',
+    publishId: 'publish-1',
+    workspaceRevisionId: 'workspace-revision-1',
+    agentId: 'agent-1',
+    taskId: 'task-review',
+    taskBinding: 'managed',
+    taskAttempt: 1,
+    members,
+    memberCount: members.length,
+    status: 'recorded',
+    createdAt: 1_786_000_000_000,
+  } as OutputPackageDto;
+}
+
+function memberAction(
+  collectionId: string,
+  versionId: string,
+  reviewState: PackageMemberAvailableActionsDto['reviewState'],
+): PackageMemberAvailableActionsDto {
+  return {
+    collectionId,
+    versionId,
+    reviewState,
+    isFinalVersion: false,
+    collectionRevision: 1,
+    actions: [],
+  };
+}
 
 const participants = [
   { id: 'creator-1', name: '创建者', kind: 'human' as const },
