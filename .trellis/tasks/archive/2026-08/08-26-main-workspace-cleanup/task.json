@@ -1,0 +1,41 @@
+{
+  "id": "main-workspace-cleanup",
+  "name": "main-workspace-cleanup",
+  "title": "清理主工作区历史遗留",
+  "description": "保护并分类主工作区本地资料，归档三个已完成 Trellis 遗留任务，最终安全恢复主工作区协调状态",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "trellis",
+  "package": null,
+  "priority": "P2",
+  "creator": "xiaojichao",
+  "assignee": "xiaojichao",
+  "createdAt": "2026-08-26",
+  "completedAt": "2026-08-26",
+  "branch": "codex/main-workspace-cleanup",
+  "base_branch": "main",
+  "worktree_path": "/Users/shaw/AgentBean/.worktrees/main-workspace-cleanup",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    ".trellis/tasks/archive/2026-08/00-bootstrap-guidelines/",
+    ".trellis/tasks/archive/2026-08/08-06-spec-bootstrap-refresh/",
+    ".trellis/tasks/archive/2026-08/08-16-align-task-card-review-panel/"
+  ],
+  "notes": "恢复包：/Users/shaw/AgentBean-main-workspace-recovery/2026-08-26-main-workspace-cleanup.PmBi2u；主工作区备份 stash 对象：f674148114a91b3a576e62a01d7a794026c931bb；旧 main worktree cached diff SHA-256：32e230c4974942c103377e378d75463f90d5b3e7a015666340c75cc2951ea846。独立验收 AC1-AC6 全部通过，归档改动尚未提交到 main。",
+  "meta": {
+    "lineage": {
+      "schemaVersion": 1,
+      "request": [],
+      "context": [],
+      "decisions": [],
+      "design": [],
+      "implementation": [],
+      "delivery": [],
+      "evidence": []
+    }
+  }
+}

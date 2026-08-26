@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 7
 - **Last Active**: 2026-08-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~127 | Active |
+| `journal-1.md` | ~169 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-08-26 | 清理主工作区历史遗留 | `3eb83024` | `codex/main-workspace-cleanup` |
 | 6 | 2026-08-26 | 待审核任务卡片输出列表化 | `e6dbe7bf` | `codex/pending-review-output-list` |
 | 5 | 2026-08-25 | Browser smoke 重试证据与周报分类 | `777f2c1e` | `codex/browser-smoke-diagnostics` |
 | 4 | 2026-08-09 | 调整任务状态信息分层 | `466a2259` | `codex/task-status-information-layer` |

@@ -146,3 +146,24 @@ PR #1136 合并(57feba3f gate 放宽 + d70c78ac Review 阻塞收敛);修复生�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: 清理主工作区历史遗留
+
+**Date**: 2026-08-26
+**Task**: 清理主工作区历史遗留
+**Branch**: `codex/main-workspace-cleanup`
+
+### Summary
+
+将主工作区 12 项本地资料保存到仓外恢复包和 Git stash，安全释放被旧 worktree 占用的 main 并 fast-forward 到 origin/main；保留旧 worktree 的 125 项 staged 改动及指纹，补齐并归档三个已交付 Trellis 任务。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3eb83024` | (see git log) |
+
+### Status
+
+[OK] **Completed**
