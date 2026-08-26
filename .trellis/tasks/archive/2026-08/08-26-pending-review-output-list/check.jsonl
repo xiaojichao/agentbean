@@ -1,0 +1,2 @@
+{"file":".trellis/spec/web-next/frontend/components-and-state.md","reason":"检查组件职责、Tailwind 样式和既有 Server-owned 状态边界未漂移"}
+{"file":".trellis/spec/web-next/frontend/testing.md","reason":"检查列表语义、回退路径和 web-next 验证命令覆盖完整"}

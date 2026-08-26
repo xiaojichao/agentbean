@@ -1,0 +1,2 @@
+{"file":".trellis/spec/web-next/frontend/components-and-state.md","reason":"沿用 web-next 组件与 Tailwind 实现惯例，保持卡片职责与现有状态边界"}
+{"file":".trellis/spec/web-next/frontend/testing.md","reason":"为语义化列表和回退行为补充符合仓库惯例的 RTL/jsdom 测试"}

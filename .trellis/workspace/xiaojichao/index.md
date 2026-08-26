@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
-- **Last Active**: 2026-08-25
+- **Total Sessions**: 6
+- **Last Active**: 2026-08-26
 <!-- @@@/auto:current-status -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-08-26 | 待审核任务卡片输出列表化 | `e6dbe7bf` | `codex/pending-review-output-list` |
 | 5 | 2026-08-25 | Browser smoke 重试证据与周报分类 | `777f2c1e` | `codex/browser-smoke-diagnostics` |
 | 4 | 2026-08-09 | 调整任务状态信息分层 | `466a2259` | `codex/task-status-information-layer` |
 | 3 | 2026-08-09 | 同步 README 与 CI_CD 文档至 AgentBean Next | `496921ad`, `d9c51cd2` | `docs/update-readme-cicd` |
