@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { Bot, MessagesSquare, ClipboardList, Users, ChevronDown, Settings, Monitor, LayoutDashboard, Plus, Check, Globe, Lock, TriangleAlert } from 'lucide-react';
+import { Activity, Bell, BookOpen, Check, CircleHelp, ClipboardList, ExternalLink, Globe, Lock, MessagesSquare, Monitor, Plus, Search, Settings, Users } from 'lucide-react';
 import { agentEvents, channelEvents, deviceEvents, getWebSocket, piProviderEvents, teamEvents } from '@/lib/socket';
 import type { PiConfigurationReadinessDto } from '@agentbean/contracts';
 import { useAgentBeanStore } from '@/lib/store';
@@ -21,6 +21,8 @@ export function Sidebar() {
   const setCurrentTeamId = useAgentBeanStore((s) => s.setCurrentTeamId);
   const applyTeamsSnapshot = useAgentBeanStore((s) => s.applyTeamsSnapshot);
   const [showTeams, setShowTeams] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [piReadiness, setPiReadiness] = useState<PiConfigurationReadinessDto | null>(null);
 
@@ -54,13 +56,17 @@ export function Sidebar() {
     };
   }, [conn, currentUser?.id, currentUser?.role]);
 
-  // Close popover on outside click
+  // 点击侧栏外部时关闭浮层，保持三个入口互斥。
   useEffect(() => {
-    if (!showTeams) return;
-    const handler = (e: MouseEvent) => setShowTeams(false);
+    if (!showTeams && !showNotifications && !showHelp) return;
+    const handler = () => {
+      setShowTeams(false);
+      setShowNotifications(false);
+      setShowHelp(false);
+    };
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
-  }, [showTeams]);
+  }, [showHelp, showNotifications, showTeams]);
 
   const currentTeam = teams.find((n) => n.id === currentTeamId);
   const np = currentTeam?.path ?? 'default';
@@ -88,34 +94,31 @@ export function Sidebar() {
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
 
   return (
-    <aside className="flex w-14 shrink-0 flex-col border-r border-neutral-200 bg-neutral-50 md:w-52" data-smoke="app-sidebar">
-      {/* Brand */}
-      <div className="flex h-14 items-center justify-center gap-2.5 border-b border-neutral-200 px-2 md:justify-start md:px-4">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-neutral-900 text-white">
-          <Bot size={16} />
-        </div>
-        <span className="hidden text-sm font-semibold tracking-tight md:inline">AgentBean</span>
-      </div>
-
-      {/* Team Switcher + Add */}
-      <div className="flex items-center gap-1.5 px-2 py-2 md:px-3">
-        <div className="relative flex-1 min-w-0">
+    <aside className="relative z-20 flex w-16 shrink-0 flex-col border-r border-neutral-900/20 bg-[#F4D24F]" data-smoke="app-sidebar">
+      {/* Team switcher */}
+      <div className="relative flex h-16 items-center justify-center border-b border-neutral-900/20 px-2">
           <button
-            onClick={() => { setShowTeams((v) => !v); }}
-            className="flex h-[30px] w-full items-center justify-center gap-1.5 rounded-md border border-neutral-200 bg-white px-1 text-xs transition-colors hover:bg-neutral-50 md:justify-between md:px-2.5"
+            onClick={(event) => {
+              event.stopPropagation();
+              setShowTeams((value) => !value);
+              setShowNotifications(false);
+              setShowHelp(false);
+            }}
+            className="flex h-10 w-10 items-center justify-center border-2 border-neutral-900 bg-neutral-900 text-sm font-bold text-[#F4D24F] shadow-[2px_2px_0_0_#171717] transition-transform hover:-translate-y-0.5"
             aria-label={`切换团队，当前团队：${currentTeam?.name ?? '当前团队'}`}
             title={currentTeam?.name ?? '切换团队'}
+            aria-expanded={showTeams}
+            data-smoke="team-switcher"
           >
-            <span className="font-semibold md:hidden" aria-hidden="true">{currentTeam?.name?.trim().charAt(0) || '团'}</span>
-            <span className="hidden truncate font-medium md:inline">{currentTeam?.name ?? '当前团队'}</span>
-            <ChevronDown size={12} className={`hidden shrink-0 text-neutral-400 transition-transform md:block ${showTeams ? 'rotate-180' : ''}`} />
+            <span aria-hidden="true">{currentTeam?.name?.trim().charAt(0).toUpperCase() || '团'}</span>
           </button>
           {showTeams && (
             <div
-              className="absolute top-full left-0 mt-1 rounded-lg border border-neutral-200 bg-white shadow-xl z-30 w-52 overflow-hidden"
+              className="absolute left-full top-2 z-50 ml-2 w-64 overflow-hidden border-2 border-neutral-900 bg-white shadow-[4px_4px_0_0_#171717]"
               onClick={(e) => e.stopPropagation()}
+              data-smoke="team-switcher-menu"
             >
-              <div className="p-1.5">
+              <div className="max-h-72 overflow-y-auto p-2">
                 {teams.length === 0 ? (
                   <div className="px-3 py-2 text-xs text-neutral-400">没有可用团队</div>
                 ) : (
@@ -123,74 +126,102 @@ export function Sidebar() {
                     <button
                       key={n.id}
                       onClick={() => handleSwitch(n.id)}
-                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs hover:bg-neutral-50 transition-colors"
+                      className="flex w-full items-center gap-2 px-2 py-2 text-left text-xs transition-colors hover:bg-amber-50"
                     >
-                      {n.id === currentTeamId ? (
-                        <Check size={14} className="shrink-0 text-neutral-900" />
-                      ) : (
-                        <span className="w-3.5" />
-                      )}
-                      <span className={`truncate ${n.id === currentTeamId ? 'font-medium text-neutral-900' : 'text-neutral-600'}`}>
-                        {n.name}
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center bg-neutral-900 font-bold text-[#F4D24F]">{n.name.trim().charAt(0).toUpperCase() || '团'}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className={`block truncate ${n.id === currentTeamId ? 'font-semibold text-neutral-900' : 'text-neutral-700'}`}>{n.name}</span>
+                        <span className="block truncate text-[10px] text-neutral-400">/{n.path}</span>
                       </span>
                       {n.type === 'public' ? (
-                        <Globe size={10} className="shrink-0 text-neutral-400 ml-auto" />
+                        <Globe size={12} className="shrink-0 text-neutral-400" />
                       ) : (
-                        <Lock size={10} className="shrink-0 text-neutral-400 ml-auto" />
+                        <Lock size={12} className="shrink-0 text-neutral-400" />
                       )}
+                      {n.id === currentTeamId && <Check size={14} className="shrink-0 text-neutral-900" />}
                     </button>
                   ))
                 )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowTeams(false);
-                    setShowCreateDialog(true);
-                  }}
-                  className="mt-1 flex w-full items-center gap-2 border-t border-neutral-100 px-2.5 py-2 text-xs font-medium text-neutral-700 hover:bg-neutral-50 md:hidden"
-                >
-                  <Plus size={14} />
-                  创建团队
-                </button>
               </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTeams(false);
+                  setShowCreateDialog(true);
+                }}
+                className="flex w-full items-center gap-2 border-t-2 border-neutral-900 px-3 py-2.5 text-xs font-semibold text-neutral-800 hover:bg-[#F4D24F]"
+              >
+                <Plus size={14} />
+                切换或创建团队
+              </button>
             </div>
           )}
-        </div>
-        <button
-          onClick={() => setShowCreateDialog(true)}
-          className="hidden h-[30px] w-[30px] shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-white text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-700 md:flex"
-          title="创建团队"
-        >
-          <Plus size={14} />
-        </button>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto border-t border-neutral-200 px-2 py-3 space-y-0.5">
-        <NavItem href={`/${np}/chat`} icon={<MessagesSquare size={16} />} label="聊天" active={isActive(`/${np}/chat`)} />
-        <NavItem href={`/${np}/tasks`} icon={<ClipboardList size={16} />} label="任务" active={isActive(`/${np}/tasks`)} />
-        <NavItem href={`/${np}/members`} icon={<Users size={16} />} label="成员" active={isActive(`/${np}/members`)} />
-        <NavItem href={`/${np}/devices`} icon={<Monitor size={16} />} label="设备" active={isActive(`/${np}/devices`)} />
-        {isAdmin && (
-          <NavItem href={`/${np}/dashboard`} icon={<LayoutDashboard size={16} />} label="仪表盘" active={isActive(`/${np}/dashboard`)} />
-        )}
+      <nav className="flex flex-1 flex-col items-center gap-1 overflow-visible px-2 py-3" aria-label="主导航">
+        <NavItem href={`/${np}/search`} icon={<Search size={19} />} label="搜索" active={isActive(`/${np}/search`)} />
+        <NavItem href={`/${np}/chat`} icon={<MessagesSquare size={19} />} label="聊天" active={isActive(`/${np}/chat`) || isActive(`/${np}/channel`) || isActive(`/${np}/dm`)} />
+        <NavItem href={`/${np}/activity`} icon={<Activity size={19} />} label="活动" active={isActive(`/${np}/activity`)} />
+        <NavItem href={`/${np}/tasks`} icon={<ClipboardList size={19} />} label="任务" active={isActive(`/${np}/tasks`)} />
+        <NavItem href={`/${np}/members`} icon={<Users size={19} />} label="成员" active={isActive(`/${np}/members`)} />
+        <NavItem href={`/${np}/devices`} icon={<Monitor size={19} />} label="设备" active={isActive(`/${np}/devices`)} />
       </nav>
 
-      {/* Bottom: settings */}
-      <div className="space-y-2 border-t border-neutral-200 px-2 py-2">
-        {isAdmin && piReadiness?.status === 'attention_required' && (
-          <Link
-            href={`/${np}/dashboard/pi`}
-            className="flex items-center justify-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-900 hover:bg-amber-100 md:justify-start"
-            data-smoke="pi-configuration-readiness-alert"
-            aria-label="PI 配置需要处理"
-            title="PI 配置需要处理"
-          >
-            <TriangleAlert size={14} className="shrink-0" />
-            <span className="hidden md:inline">PI 需要处理</span>
-          </Link>
+      {/* Bottom utilities */}
+      <div className="relative flex flex-col items-center gap-1 border-t border-neutral-900/20 px-2 py-3">
+        <RailButton
+          icon={<Bell size={19} />}
+          label="提醒"
+          active={showNotifications}
+          badge={isAdmin && piReadiness?.status === 'attention_required'}
+          onClick={(event) => {
+            event.stopPropagation();
+            setShowNotifications((value) => !value);
+            setShowTeams(false);
+            setShowHelp(false);
+          }}
+        />
+        {showNotifications && (
+          <div className="absolute bottom-24 left-full z-50 ml-2 w-72 border-2 border-neutral-900 bg-white shadow-[4px_4px_0_0_#171717]" onClick={(event) => event.stopPropagation()} data-smoke="notifications-menu">
+            <div className="border-b-2 border-neutral-900 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">提醒</div>
+            {isAdmin && piReadiness?.status === 'attention_required' ? (
+              <Link href={`/${np}/dashboard/pi`} className="flex items-center gap-2 px-3 py-3 text-sm font-medium text-amber-900 hover:bg-amber-50" data-smoke="pi-configuration-readiness-alert">
+                <Bell size={15} />
+                PI 需要处理
+              </Link>
+            ) : (
+              <div className="px-3 py-5 text-center text-xs text-neutral-400">暂无提醒</div>
+            )}
+          </div>
         )}
-        <NavItem href={`/${np}/settings`} icon={<Settings size={16} />} label="设置" active={isActive(`/${np}/settings`)} />
+        <RailButton
+          icon={<CircleHelp size={19} />}
+          label="帮助和资源"
+          active={showHelp}
+          onClick={(event) => {
+            event.stopPropagation();
+            setShowHelp((value) => !value);
+            setShowTeams(false);
+            setShowNotifications(false);
+          }}
+        />
+        {showHelp && (
+          <div className="absolute bottom-12 left-full z-50 ml-2 w-72 border-2 border-neutral-900 bg-white shadow-[4px_4px_0_0_#171717]" onClick={(event) => event.stopPropagation()} data-smoke="help-resources-menu">
+            <div className="border-b-2 border-neutral-900 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">帮助和资源</div>
+            <a href="https://github.com/xiaojichao/agentbean#readme" target="_blank" rel="noreferrer" className="flex items-center gap-2 px-3 py-2.5 text-sm text-neutral-700 hover:bg-amber-50">
+              <BookOpen size={15} />
+              AgentBean 文档
+              <ExternalLink size={12} className="ml-auto text-neutral-400" />
+            </a>
+            <a href="https://github.com/xiaojichao/agentbean/issues" target="_blank" rel="noreferrer" className="flex items-center gap-2 px-3 py-2.5 text-sm text-neutral-700 hover:bg-amber-50">
+              <CircleHelp size={15} />
+              提交反馈
+              <ExternalLink size={12} className="ml-auto text-neutral-400" />
+            </a>
+          </div>
+        )}
+        <NavItem href={`/${np}/settings`} icon={<Settings size={19} />} label="设置" active={isActive(`/${np}/settings`)} />
       </div>
 
       {/* Create Team Dialog */}
@@ -220,13 +251,54 @@ function NavItem({ href, icon, label, active }: { href: string; icon: React.Reac
     <Link
       href={href}
       title={label}
-      className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm ${
-        active ? 'bg-neutral-200/70 font-medium text-neutral-900' : 'text-neutral-600 hover:bg-neutral-100'
-      } justify-center md:justify-start`}
+      aria-label={label}
+      className={`group relative flex h-10 w-10 items-center justify-center border-2 text-sm transition-colors ${
+        active ? 'border-neutral-900 bg-white text-neutral-900 shadow-[2px_2px_0_0_#171717]' : 'border-transparent text-neutral-900 hover:border-neutral-900/30 hover:bg-white/40'
+      }`}
     >
       {icon}
-      <span className="hidden md:inline">{label}</span>
+      <span className="sr-only">{label}</span>
+      <RailTooltip label={label} />
     </Link>
+  );
+}
+
+function RailButton({
+  icon,
+  label,
+  active,
+  badge = false,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active: boolean;
+  badge?: boolean;
+  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-expanded={active}
+      className={`group relative flex h-10 w-10 items-center justify-center border-2 transition-colors ${
+        active ? 'border-neutral-900 bg-white text-neutral-900 shadow-[2px_2px_0_0_#171717]' : 'border-transparent text-neutral-900 hover:border-neutral-900/30 hover:bg-white/40'
+      }`}
+    >
+      {icon}
+      {badge && <span className="absolute right-1 top-1 h-2 w-2 rounded-full border border-neutral-900 bg-pink-500" aria-label="有新提醒" />}
+      <RailTooltip label={label} />
+    </button>
+  );
+}
+
+function RailTooltip({ label }: { label: string }) {
+  return (
+    <span aria-hidden="true" className="pointer-events-none absolute left-full z-[60] ml-2 whitespace-nowrap border border-neutral-900 bg-neutral-900 px-2 py-1 text-[11px] font-medium text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+      {label}
+    </span>
   );
 }
 

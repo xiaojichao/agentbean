@@ -4,6 +4,8 @@ import { describe, expect, test } from 'vitest';
 const chatSource = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
 const appShellSource = readFileSync(new URL('../components/app-shell.tsx', import.meta.url), 'utf8');
 const sidebarSource = readFileSync(new URL('../components/sidebar.tsx', import.meta.url), 'utf8');
+const searchPageSource = readFileSync(new URL('../app/[teamPath]/search/page.tsx', import.meta.url), 'utf8');
+const activityPageSource = readFileSync(new URL('../app/[teamPath]/activity/page.tsx', import.meta.url), 'utf8');
 
 describe('chat task surface', () => {
   test('keeps task-linked messages as compact timeline badges', () => {
@@ -14,23 +16,38 @@ describe('chat task surface', () => {
     expect(source).not.toContain('function ChatTaskCard');
   });
 
-  test('窄屏保留紧凑全局导航并让已选频道主内容占满剩余空间', () => {
+  test('全局侧栏对齐 Raft 单列入口，搜索与活动离开聊天侧栏成为独立页面', () => {
     expect(appShellSource).toContain('flex min-w-0 flex-1 flex-col overflow-hidden');
-    expect(sidebarSource).toContain('w-14 shrink-0');
-    expect(sidebarSource).toContain('md:w-52');
-    expect(sidebarSource).toContain('<span className="hidden md:inline">{label}</span>');
+    expect(sidebarSource).toContain('w-16 shrink-0');
+    expect(sidebarSource).not.toContain('md:w-52');
+    expect(sidebarSource).toContain('<span className="sr-only">{label}</span>');
+    expect(sidebarSource).not.toContain('<Bot');
+    expect(sidebarSource).toContain('href={`/${np}/search`}');
+    expect(sidebarSource).toContain('href={`/${np}/activity`}');
+    expect(sidebarSource.indexOf('label="搜索"')).toBeLessThan(sidebarSource.indexOf('label="聊天"'));
+    expect(sidebarSource.indexOf('label="聊天"')).toBeLessThan(sidebarSource.indexOf('label="活动"'));
+    expect(sidebarSource.indexOf('label="活动"')).toBeLessThan(sidebarSource.indexOf('label="任务"'));
+    expect(sidebarSource).toContain('label="提醒"');
+    expect(sidebarSource).toContain('label="帮助和资源"');
+    expect(sidebarSource).toContain('label="设置"');
     expect(chatSource).toContain("activeChannel && !mobileConversationListOpen ? 'hidden md:flex md:w-60' : 'flex w-full md:w-60'");
+    expect(chatSource).toContain('{!standalone && (');
     expect(chatSource).toContain('data-smoke="channel-mobile-list-back"');
     expect(chatSource).toContain('onClick={() => setMobileConversationListOpen(true)}');
     expect(chatSource).toContain('setMobileConversationListOpen(false); setActiveChannel(ch.id)');
-    expect(chatSource).toContain("setMobileConversationListOpen(false); setSidebarView(sidebarView === 'inbox' ? 'channels' : 'inbox')");
     expect(chatSource).toContain("setMobileConversationListOpen(false); setSidebarView(sidebarView === 'saved' ? 'channels' : 'saved')");
     expect(chatSource).toContain("setMobileConversationListOpen(false); setSidebarView(sidebarView === 'pinned' ? 'channels' : 'pinned')");
+    expect(chatSource).not.toContain('data-smoke="channel-search-open"');
+    expect(chatSource).not.toContain('openActiveConversationSearch');
+    expect(chatSource).toContain("pathname.endsWith('/search')");
+    expect(chatSource).toContain("pathname.endsWith('/activity')");
+    expect(searchPageSource).toContain('<ChatPage />');
+    expect(activityPageSource).toContain('<ChatPage />');
     expect(chatSource).toContain('className="flex min-w-0 flex-1 overflow-hidden"');
     expect(sidebarSource).toContain('切换团队，当前团队：');
-    expect(sidebarSource).toContain('className="font-semibold md:hidden"');
-    expect(sidebarSource).toContain('创建团队');
-    expect(sidebarSource).toContain('aria-label="PI 配置需要处理"');
+    expect(sidebarSource).toContain('切换或创建团队');
+    expect(sidebarSource).toContain('data-smoke="notifications-menu"');
+    expect(sidebarSource).toContain('data-smoke="help-resources-menu"');
   });
 
   test('普通任务从整枚徽标打开完整状态菜单，受管任务只保留取消与关闭', () => {
