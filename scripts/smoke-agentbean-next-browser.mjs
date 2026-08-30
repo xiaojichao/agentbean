@@ -555,7 +555,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       check(
         'webui-channel-tasks-no-project-facts',
         taskResult.channelNoProjectFactsVerified === true,
-        'Verified a no-stage channel defaults to ordinary Tasks, hides empty project facts, guides explicit setup, and clears stale detail when switching subviews',
+        'Verified every channel (incl. #all) renders the unified project workbench (empty lanes without facts, managed lanes with prior tasks) and clears stale task deep links',
       ),
     );
 
@@ -1942,12 +1942,13 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   await page.waitForFunction(
     `(() => {
       return document.querySelector('[data-smoke="channel-project-progress"]') !== null
-        && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null
-        && document.querySelector('[data-smoke="channel-project-progress"]') !== null
+        && document.querySelector('[data-smoke="channel-project-settings-entry"]') !== null
+        && ['active', 'review', 'complete'].every((lane) =>
+          document.querySelector('[data-smoke="channel-project-lane-' + lane + '"]') !== null)
         && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null;
     })()
     `,
-    'non-default channel locks the Tasks tab to the project workbench subview',
+    'non-default channel renders the unified project workbench with empty lanes and the settings entry',
     timeoutMs,
   );
 
@@ -1960,7 +1961,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
     timeoutMs,
   );
 
-  // #all（默认频道）：与普通频道一致锁定项目工作台；已有普通任务时 setup prompt 提示显式绑定。
+  // #all（默认频道）：与普通频道一致锁定项目工作台（空数据为三条空泳道）。
   await page.navigate(new URL(`/${teamPath}/chat`, root).toString());
   const clickedAll = await page.evaluateJson(`
     (() => {
@@ -2064,11 +2065,7 @@ async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, webS
       const surface = document.querySelector('[data-smoke="channel-project-progress"]');
       if (!surface) return false;
       const text = surface.textContent ?? '';
-      const settingsButton = Array.from(surface.querySelectorAll('button'))
-        .find((candidate) => {
-          const label = candidate.textContent?.trim() ?? '';
-          return label === '项目设置 / 阶段配置' || label === '查看项目设置' || label === '配置首个项目阶段';
-        });
+      const settingsButton = surface.querySelector('[data-smoke="channel-project-settings-entry"]');
       return !text.includes('阶段依赖')
         && !text.includes('添加依赖')
         && Boolean(settingsButton)
@@ -2080,11 +2077,7 @@ async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, webS
   );
   const openedSettings = await page.evaluateJson(`
     (() => {
-      const button = Array.from(document.querySelectorAll('button'))
-        .find((candidate) => {
-          const label = candidate.textContent?.trim() ?? '';
-          return label === '项目设置 / 阶段配置' || label === '查看项目设置' || label === '配置首个项目阶段';
-        });
+      const button = document.querySelector('[data-smoke="channel-project-settings-entry"]');
       if (!button) return false;
       button.click();
       return true;

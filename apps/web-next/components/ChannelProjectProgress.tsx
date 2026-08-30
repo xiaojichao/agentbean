@@ -142,12 +142,12 @@ export function ChannelProjectProgress({
               <span className="rounded bg-neutral-200 px-2 py-1 text-xs font-medium text-neutral-600">已归档 · 只读</span>
             ) : null}
           </div>
-          <div className="flex flex-wrap items-center justify-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center justify-center gap-2">
             <select
               aria-label="项目任务创建者"
               value={creatorFilter}
               onChange={(event) => setCreatorFilter(event.target.value)}
-              className={filterClass}
+              className={`${filterClass} max-w-44 truncate`}
             >
               <option value="all">全部创建者</option>
               {participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
@@ -156,7 +156,7 @@ export function ChannelProjectProgress({
               aria-label="项目任务责任焦点"
               value={focusFilter}
               onChange={(event) => setFocusFilter(event.target.value)}
-              className={filterClass}
+              className={`${filterClass} max-w-44 truncate`}
             >
               <option value="all">全部责任焦点</option>
               <option value="unassigned">尚未产生责任</option>
@@ -167,7 +167,7 @@ export function ChannelProjectProgress({
               aria-label="项目任务审核人"
               value={reviewerFilter}
               onChange={(event) => setReviewerFilter(event.target.value)}
-              className={filterClass}
+              className={`${filterClass} max-w-44 truncate`}
             >
               <option value="all">全部审核事实</option>
               {currentUserId ? <option value="pending-me">待我审核</option> : null}
@@ -182,10 +182,12 @@ export function ChannelProjectProgress({
               type="button"
               onClick={onOpenSettings}
               data-smoke="channel-project-settings-entry"
-              className="flex h-8 items-center gap-1.5 rounded-md bg-neutral-900 px-3 text-xs font-semibold text-white hover:bg-neutral-800"
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-neutral-900 px-3 text-xs font-semibold text-white hover:bg-neutral-800"
             >
               <Settings2 size={13} />
-              {archived || overview?.archived ? '查看项目设置' : '配置首个项目阶段'}
+              {archived || overview?.archived
+                ? '查看项目设置'
+                : stages.length > 0 ? '项目设置' : '配置首个项目阶段'}
             </button>
           </div>
         </div>
