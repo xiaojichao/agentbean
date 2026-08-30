@@ -61,14 +61,6 @@ describe('chat message layout', () => {
     expect(bubble).toContain("variant={showArtifactList ? 'list' : 'card'}");
   });
 
-  test('文件库（ConversationFiles）按文件来源 senderKind 门禁编辑入口', () => {
-    const filesSurface = chatPage.slice(
-      chatPage.indexOf('function ConversationFiles('),
-      chatPage.indexOf('function TaskDetailPanel('),
-    );
-    expect(filesSurface).toMatch(/editable=\{file\.senderKind === 'agent'\}/);
-  });
-
   test('主聊天线跨日显示日期分隔线，并断开跨日消息分组', () => {
     const timeline = chatPage.slice(
       chatPage.indexOf('{rootMessages.map((msg, index) => {'),

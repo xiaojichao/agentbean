@@ -562,7 +562,7 @@ export function ProjectFilesBoard({
         {/* 左栏:文件组卡片混排。 */}
         <aside className="w-64 shrink-0 overflow-y-auto border-r border-neutral-200 bg-neutral-50 p-2.5" data-smoke="file-group-rail">
           {filteredCards.length === 0 ? (
-            <p className="px-1 py-4 text-center text-xs text-neutral-400">无匹配文件组</p>
+            <p className="px-1 py-4 text-center text-xs text-neutral-400">{displayCards.length === 0 ? '暂无文件组' : '无匹配文件组'}</p>
           ) : null}
           {filteredCards.map((card) => (
             <FileGroupCard

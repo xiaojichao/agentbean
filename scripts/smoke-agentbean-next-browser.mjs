@@ -502,11 +502,10 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
     checks.push(
       check('webui-channel-file-upload-readable', channelFilesResult.uploadReadable === true, `WebUI uploaded and downloaded ordinary attachment ${channelFilesResult.filename}`),
       check(
-        'webui-channel-files-attachment-surface',
-        channelFilesResult.attachmentSurfaceVisible === true
-          && channelFilesResult.logicalBoardVisible === false
-          && channelFilesResult.ordinaryEntryVisible === true,
-        `WebUI opens attachment files surface and lists ordinary attachment ${channelFilesResult.filename}`,
+        'webui-channel-files-unified-board',
+        channelFilesResult.logicalBoardVisible === true
+          && channelFilesResult.attachmentSurfaceVisible === false,
+        `WebUI files tab renders the unified logical board (ordinary attachment stays in chat, not files)`,
       ),
     );
 
@@ -1942,9 +1941,9 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks`, root).toString());
   await page.waitForFunction(
     `(() => {
-      return document.querySelector('[data-smoke="channel-project-setup-prompt"], [data-smoke="channel-project-progress"]') !== null
+      return document.querySelector('[data-smoke="channel-project-progress"]') !== null
         && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null
-        && document.querySelector('[data-smoke="channel-project-setup-prompt"], [data-smoke="channel-project-progress"]') !== null
+        && document.querySelector('[data-smoke="channel-project-progress"]') !== null
         && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null;
     })()
     `,
@@ -1955,7 +1954,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   // tasksView=plain 深链在锁定 project 的频道回落到锁定视图（AC6：不 404、显示锁定视图）。
   await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks&tasksView=plain`, root).toString());
   await page.waitForFunction(
-    `document.querySelector('[data-smoke="channel-project-setup-prompt"], [data-smoke="channel-project-progress"]') !== null
+    `document.querySelector('[data-smoke="channel-project-progress"]') !== null
       && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null`,
     'tasksView=plain deep link falls back to the locked project workbench',
     timeoutMs,
@@ -2006,20 +2005,16 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
     })()
   `);
   if (!openedTasksTab) throw new Error('Could not open the Tasks tab in #all');
-  // 注意：webui 流程里 Phase 2 DAG 段会用 session 默认频道（#all）发 asTask 消息留下受管任务，
-  // 此处 #all 可能渲染泳道而非 setup prompt——两种形态都锁定统一项目工作台。
+  // 注意：#all 统一渲染项目工作台（空数据为三条空泳道；Phase 2 DAG 段的先行受管任务使泳道有卡）。
   await page.waitForFunction(
     `
     (() => {
-      const prompt = document.querySelector('[data-smoke="channel-project-setup-prompt"]');
-      const progress = document.querySelector('[data-smoke="channel-project-progress"]');
-      return (prompt !== null || progress !== null)
-        && (prompt === null || /已有 \d+ 个普通任务/.test(prompt.textContent ?? ''))
+      return document.querySelector('[data-smoke="channel-project-progress"]') !== null
         && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null
         && !Array.from(document.querySelectorAll('button')).some((button) => (button.textContent ?? '').trim().includes('新建普通任务'));
     })()
     `,
-    'default #all channel locks the Tasks tab to the unified project workbench (setup prompt or managed lanes)',
+    'default #all channel locks the Tasks tab to the unified project workbench (empty or managed lanes)',
     timeoutMs,
   );
 
@@ -2028,7 +2023,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   await page.waitForFunction(
     `!new URLSearchParams(window.location.search).has('task')
       && document.querySelector('[data-smoke="chat-task-detail"]') === null
-      && document.querySelector('[data-smoke="channel-project-progress"], [data-smoke="channel-project-setup-prompt"]') !== null`,
+      && document.querySelector('[data-smoke="channel-project-progress"]') !== null`,
     'task-only deep link falls back to the unified project workbench without the retired detail panel',
     timeoutMs,
   );
@@ -2049,25 +2044,24 @@ async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, webS
   }
   await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks&tasksView=plain`, root).toString());
   await page.waitForFunction(
-    `document.querySelector('[data-smoke="channel-project-setup-prompt"], [data-smoke="channel-project-progress"]') !== null
+    `document.querySelector('[data-smoke="channel-project-progress"]') !== null
       && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null`,
     'channel Tasks stays locked to the project workbench regardless of the tasksView URL param',
     timeoutMs,
   );
   await page.reload();
   await page.waitForFunction(
-    `document.querySelector('[data-smoke="channel-project-setup-prompt"], [data-smoke="channel-project-progress"]') !== null`,
+    `document.querySelector('[data-smoke="channel-project-progress"]') !== null`,
     'channel Tasks preserves the locked project subview after refresh',
     timeoutMs,
   );
 
   // #1179：项目设置独立于默认推进面；打开后可见配置面，推进面本身不混排创建阶段/依赖表单。
-  // 自建频道无项目数据时渲染 setup prompt（其「配置首个项目阶段」同为设置入口），两种形态都接受。
+  // 工具栏设置入口（「配置首个项目阶段」/归档态「查看项目设置」）承载打开动作。
   await page.waitForFunction(
     `
     (() => {
-      const surface = document.querySelector('[data-smoke="channel-project-progress"]')
-        ?? document.querySelector('[data-smoke="channel-project-setup-prompt"]');
+      const surface = document.querySelector('[data-smoke="channel-project-progress"]');
       if (!surface) return false;
       const text = surface.textContent ?? '';
       const settingsButton = Array.from(surface.querySelectorAll('button'))
@@ -5176,38 +5170,31 @@ export async function exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs }) 
 
 export async function exerciseChannelFilesBrowserSmoke({ page, filename, timeoutMs }) {
   await page.click('[data-smoke="channel-files-tab"]');
-  // 无项目投影的普通公共频道回落附件文件页；有输出包/集合/画像时才进逻辑产物板。
-  // 首轮投影拉取期间会短暂显示 loading，需等其消失后再判定表面，并等到附件行出现。
+  // 产品决策（2026-08-30）：所有会话统一渲染文件库逻辑产物板；无项目数据面呈现空板形态，
+  // 普通附件不再进入文件 tab（上传/下载仍走消息内链路）。
+  // 首轮投影拉取期间会短暂显示 loading，需等其消失后再判定表面。
   await page.waitForFunction(
     `!document.querySelector('[data-smoke="files-project-surface-loading"]')
-      && Boolean(document.querySelector('[data-smoke="channel-files-view"]'))
-      && !Boolean(document.querySelector('[data-smoke="project-files-board"]'))
-      && Array.from(document.querySelectorAll('[data-smoke="channel-file-entry"]'))
-        .some((entry) => entry.dataset.filename === ${JSON.stringify(filename)})`,
-    'channel attachment files surface to list uploaded file',
+      && Boolean(document.querySelector('[data-smoke="project-files-board"]'))
+      && !document.querySelector('[data-smoke="channel-files-view"]')`,
+    'channel files tab to render the unified logical board',
     timeoutMs,
   );
   const result = await page.evaluateJson(`
     (() => {
       const filename = ${JSON.stringify(filename)};
-      const ordinaryEntryVisible = Array.from(document.querySelectorAll('[data-smoke="channel-file-entry"]'))
-        .some((entry) => entry.dataset.filename === filename);
       return {
         filename,
         attachmentSurfaceVisible: Boolean(document.querySelector('[data-smoke="channel-files-view"]')),
         logicalBoardVisible: Boolean(document.querySelector('[data-smoke="project-files-board"]')),
-        ordinaryEntryVisible,
       };
     })()
   `);
-  // 本 smoke 只上传普通附件、不创建项目阶段/输出包，因此必须落在附件浏览面，
-  // 且上传文件应出现在 channel-file-entry 中（而不是被逻辑产物板吞掉）。
   if (!result
     || result.filename !== filename
-    || result.attachmentSurfaceVisible !== true
-    || result.logicalBoardVisible !== false
-    || result.ordinaryEntryVisible !== true) {
-    throw new Error('Channel attachment files surface contract failed');
+    || result.logicalBoardVisible !== true
+    || result.attachmentSurfaceVisible !== false) {
+    throw new Error('Unified channel files board contract failed');
   }
   return result;
 }

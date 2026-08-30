@@ -2,9 +2,9 @@
 
 import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDeliveryOverviewV1, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDeliveryOverviewV1, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -43,7 +43,6 @@ import {
 } from '@/components/ChannelProjectOverview';
 import {
   ChannelProjectProgress,
-  ChannelProjectSetupPrompt,
   type ChannelProjectProgressState,
 } from '@/components/ChannelProjectProgress';
 import { acceptChannelProjectOverview } from '@/lib/channel-project-overview';
@@ -66,7 +65,6 @@ import { outputPackageFromMeta, inlineOutputPackageFromMeta, type OutputPackageM
 import { buildPackageReturnComposerDraft } from '@/lib/output-package-return-handoff';
 import { OutputPackagePreviewModal } from '@/components/OutputPackagePreviewModal';
 import { ProjectReferenceChips } from '@/components/project/ProjectReferenceChips';
-import { ProjectDocumentReferenceButton } from '@/components/project/ProjectDocumentReferenceButton';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
 import { ArtifactViewer, isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
 import { MarkdownDocumentEditor } from '@/components/channel-documents/MarkdownDocumentEditor';
@@ -138,19 +136,6 @@ interface TaskItem {
   sortOrder: number;
   createdAt: number;
   updatedAt: number;
-}
-
-interface ConversationFile {
-  artifact: Artifact;
-  documentId?: string;
-  documentRevisionId?: string;
-  messageId?: string;
-  createdAt: number;
-  senderKind: ChatMessage['senderKind'];
-  senderId: string | null;
-  logicalPath?: string;
-  role?: string;
-  workspaceRunId?: string;
 }
 
 interface OpenChannelDocument {
@@ -408,13 +393,6 @@ export default function ChatPage() {
   const [mentionIndex, setMentionIndex] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([]);
   const [threadAttachments, setThreadAttachments] = useState<ComposerAttachment[]>([]);
-  const [channelFiles, setChannelFiles] = useState<ConversationFile[]>([]);
-  const [channelFilesCursor, setChannelFilesCursor] = useState<string | undefined>();
-  const [channelFilesQuery, setChannelFilesQuery] = useState('');
-  const [channelFilesRole, setChannelFilesRole] = useState<ArtifactRole | 'all'>('all');
-  const [channelFilesPath, setChannelFilesPath] = useState('');
-  const [channelFileDirectories, setChannelFileDirectories] = useState<NonNullable<ChannelFilesResultDto['directories']>>([]);
-  const [channelFilesLoading, setChannelFilesLoading] = useState(false);
   const [openChannelDocument, setOpenChannelDocument] = useState<OpenChannelDocument | null>(null);
   // #1062 「基于此修改」修订编辑器(复用 MarkdownDocumentEditor,独立于 Channel document)。
   const [openArtifactRevision, setOpenArtifactRevision] = useState<OpenArtifactRevision | null>(null);
@@ -425,12 +403,10 @@ export default function ChatPage() {
     initialVersionId?: string;
     readOnly?: boolean;
   } | null>(null);
-  const channelFilesRequestRevisionRef = useRef(0);
   const outputPackageProjectionRequestRef = useRef(0);
   const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
   /** 仅用于 composer 历史 chip 标签解析；文件库不再展示文档包列表。 */
   const [projectDocumentBundles, setProjectDocumentBundles] = useState<ProjectDocumentBundleDto[]>([]);
-  const [projectDocumentBundlesArchived, setProjectDocumentBundlesArchived] = useState(false);
   /** 文件页项目投影是否已完成首轮拉取，避免普通频道在空数据时闪一下逻辑产物板。 */
   const [filesProjectSurfaceReady, setFilesProjectSurfaceReady] = useState(false);
   // #1060 OutputPackage 投影(Files 面;与讨论串/Task 同一 Server 事实)。
@@ -652,84 +628,14 @@ export default function ChatPage() {
     };
   }, [activeChannel, conn, currentTeamId, applyChannelHistory, applyDispatchStatus, handleMessage, upsertActivityMessages]);
 
-  const loadChannelFiles = useCallback(async (reset = true) => {
-    if (!activeChannel || conn !== 'open') return;
-    const requestRevision = channelFilesRequestRevisionRef.current + 1;
-    channelFilesRequestRevisionRef.current = requestRevision;
-    setChannelFilesLoading(true);
-    try {
-      const cursor = reset ? undefined : channelFilesCursor;
-      const [result, documentsResult] = await Promise.all([
-        channelFilesQuery.trim()
-          ? channelEvents().searchFiles(activeChannel, channelFilesQuery, cursor, 50, channelFilesPath, channelFilesRole)
-          : channelEvents().listFiles(activeChannel, cursor, 50, channelFilesPath, channelFilesRole),
-        channelEvents().listDocuments(activeChannel),
-      ]);
-      if (requestRevision !== channelFilesRequestRevisionRef.current) return;
-      if (!result.ok || !result.files) {
-        if (reset && !channelFilesQuery.trim() && !channelFilesPath) {
-          setChannelFiles(legacyConversationFiles(messagesByChannel[activeChannel] ?? []));
-          setChannelFileDirectories([]);
-        }
-        return;
-      }
-      const documents = new Map((documentsResult.documents ?? []).map((document) => [document.id, document]));
-      const mapped = result.files.map((entry) => channelFileToConversationFile(entry, documents));
-      setChannelFiles((previous) => reset ? mapped : [...previous, ...mapped]);
-      setChannelFilesCursor(result.nextCursor);
-      if (reset) setChannelFileDirectories(result.directories ?? []);
-    } finally {
-      if (requestRevision === channelFilesRequestRevisionRef.current) {
-        setChannelFilesLoading(false);
-      }
-    }
-  }, [activeChannel, channelFilesCursor, channelFilesPath, channelFilesQuery, channelFilesRole, conn, messagesByChannel]);
-
-  useEffect(() => {
-    setChannelFilesPath(searchParams.get('filePath') ?? '');
-  }, [searchParams]);
-
-  /**
-   * 文件页是否使用逻辑产物板（原型左栏三卡 + 七列表）。
-   * 有项目画像、输出包、pending 交付或产物集合时进入；否则普通公共频道回落附件浏览。
-   * ChannelDocument 数量不参与门禁——不得因「有 .md」单独冒出「频道文档」面。
-   */
-  const hasProjectFilesSurface = Boolean(channelProjectOverview)
-    || outputPackages.length > 0
-    || outputPackagePendings.length > 0
-    || (projectArtifactLibrary?.collections.length ?? 0) > 0;
-
-  // 所有频道（含 #all 与私聊）同一 gate：无项目数据面时回落附件浏览。
-  useEffect(() => {
-    channelFilesRequestRevisionRef.current += 1;
-    setChannelFiles([]);
-    setChannelFilesCursor(undefined);
-    setChannelFileDirectories([]);
-    setChannelFilesLoading(false);
-    if (tab !== 'files' || !activeChannel || conn !== 'open') return;
-    const useAttachmentFiles = filesProjectSurfaceReady && !hasProjectFilesSurface;
-    if (useAttachmentFiles) void loadChannelFiles(true);
-  }, [
-    activeChannel,
-    conn,
-    tab,
-    channelFilesPath,
-    channelFilesQuery,
-    channelFilesRole,
-    filesProjectSurfaceReady,
-    hasProjectFilesSurface,
-    loadChannelFiles,
-  ]);
-
   // #823 逻辑产物视图按需拉取 Server 投影。
   // 设计/原型：文件库只展示输出包/文件集合/等待上游，不展示「频道文档」顶栏。
-  // 无项目投影的普通公共频道回落 ConversationFiles（附件浏览）。
+  // 所有会话统一渲染逻辑产物板；无项目数据面时呈现空板形态。
   useEffect(() => {
     let active = true;
     setProjectArtifactLibrary(null);
     setChannelProjectOverview(null);
     setProjectDocumentBundles([]);
-    setProjectDocumentBundlesArchived(false);
     setOutputPackages([]);
     setOutputPackagePendings([]);
     setFilesProjectSurfaceReady(false);
@@ -746,7 +652,6 @@ export default function ChatPage() {
     const bundlesPromise = projectEvents().documentBundles(activeChannel).then((result) => {
       if (!active) return;
       setProjectDocumentBundles(result.ok ? result.bundles ?? [] : []);
-      setProjectDocumentBundlesArchived(result.ok ? Boolean(result.archived) : false);
     });
     // #1060 OutputPackage:Files 面读取同一 Server 事实(packages + pendingDeliveries)。
     const packagesPromise = refreshOutputPackageProjection(activeChannel);
@@ -1175,9 +1080,6 @@ export default function ChatPage() {
       content: savedContent,
       ...(!savedResponse?.ok ? { notice: '文档已保存；固定资源后的内容将在重新打开时加载。' } : {}),
     } : null);
-    setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
-      ? { ...file, artifact: result.document!.currentRevision.artifact }
-      : file));
     return { ok: true as const, revisionId: result.document.currentRevisionId };
   }, [activeChannel, openChannelDocument]);
 
@@ -1218,9 +1120,6 @@ export default function ChatPage() {
       revisions: history.ok ? history.revisions ?? current.revisions : current.revisions,
       content,
     } : null);
-    setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
-      ? { ...file, artifact: result.document!.currentRevision.artifact }
-      : file));
     return {
       ok: true as const,
       snapshot: {
@@ -1259,9 +1158,6 @@ export default function ChatPage() {
       revisions: history.ok ? history.revisions ?? current.revisions : current.revisions,
       content,
     } : null);
-    setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
-      ? { ...file, artifact: result.document!.currentRevision.artifact }
-      : file));
     appendMessage({
       ...result.message,
       artifacts: [result.document.currentRevision.artifact],
@@ -2999,7 +2895,8 @@ export default function ChatPage() {
               <div className="flex flex-1 items-center justify-center text-sm text-neutral-400" data-smoke="files-project-surface-loading">
                 加载文件库…
               </div>
-            ) : activeChannel && hasProjectFilesSurface ? (
+            ) : activeChannel ? (
+              // 所有会话（含 #all/私聊）统一渲染文件库逻辑产物板；无项目数据面时呈现空板形态。
               <ProjectFilesBoard
                 channelId={activeChannel}
                 packages={outputPackages}
@@ -3024,46 +2921,7 @@ export default function ChatPage() {
                 loadPromotableArtifacts={loadChannelPromotableArtifacts}
                 onPromote={promoteChannelArtifact}
               />
-            ) : (
-              <ConversationFiles
-                files={channelFiles}
-                loading={channelFilesLoading}
-                hasMore={Boolean(channelFilesCursor)}
-                searchQuery={channelFilesQuery}
-                onSearchQuery={setChannelFilesQuery}
-                role={channelFilesRole}
-                onRole={setChannelFilesRole}
-                path={channelFilesPath}
-                directories={channelFileDirectories}
-                onOpenDirectory={(path) => {
-                  const params = new URLSearchParams(searchParams.toString());
-                  params.set('chatTab', 'files');
-                  params.set('filePath', path);
-                  router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
-                }}
-                onOpenRoot={() => {
-                  const params = new URLSearchParams(searchParams.toString());
-                  params.set('chatTab', 'files');
-                  params.delete('filePath');
-                  router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
-                }}
-                onLoadMore={() => void loadChannelFiles(false)}
-                onEditArtifact={(artifact, documentId) => void openMarkdownDocumentEditor(artifact, documentId)}
-                documentReferenceArchived={projectDocumentBundlesArchived}
-                referenceSelections={projectReferenceSelections}
-                onDocumentReferenceSelection={(selection, documentId) => {
-                  setProjectReferenceSelections((current) => [
-                    ...current.filter((item) =>
-                      item.kind !== 'document' || item.documentId !== documentId),
-                    ...(selection ? [selection] : []),
-                  ]);
-                }}
-                agents={agents}
-                humanProfiles={humanProfiles}
-                channelMembers={channelMembers}
-                onJump={jumpToMessage}
-              />
-            )}
+            ) : null}
           </div>
         )}
         </>
@@ -4012,158 +3870,6 @@ function ConversationTasks({
           </div>
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function ConversationFiles({
-  files,
-  loading,
-  hasMore,
-  searchQuery,
-  onSearchQuery,
-  role,
-  onRole,
-  path,
-  directories,
-  onOpenDirectory,
-  onOpenRoot,
-  onLoadMore,
-  onEditArtifact,
-  documentReferenceArchived,
-  referenceSelections,
-  onDocumentReferenceSelection,
-  agents,
-  humanProfiles,
-  channelMembers,
-  onJump,
-}: {
-  files: ConversationFile[];
-  loading: boolean;
-  hasMore: boolean;
-  searchQuery: string;
-  onSearchQuery: (query: string) => void;
-  role: ArtifactRole | 'all';
-  onRole: (role: ArtifactRole | 'all') => void;
-  path: string;
-  directories: NonNullable<ChannelFilesResultDto['directories']>;
-  onOpenDirectory: (path: string) => void;
-  onOpenRoot: () => void;
-  onLoadMore: () => void;
-  onEditArtifact: (artifact: Artifact, documentId?: string) => void;
-  documentReferenceArchived: boolean;
-  referenceSelections: readonly ProjectReferenceSelectionRequestDto[];
-  onDocumentReferenceSelection: (selection: ProjectReferenceSelectionRequestDto | null, documentId: string) => void;
-  agents: Record<string, AgentSnapshot>;
-  humanProfiles: HumanProfile[];
-  channelMembers: ChannelMemberEntry[];
-  onJump: (messageId: string) => void;
-}) {
-  const currentUser = useAgentBeanStore((s) => s.currentUser);
-  return (
-    <div data-smoke="channel-files-view" className="min-h-0 flex-1 overflow-y-auto bg-white p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <Search size={14} className="text-neutral-400" />
-        <input data-smoke="channel-files-search" value={searchQuery} onChange={(event) => onSearchQuery(event.target.value)} placeholder="按文件名搜索" className="h-8 min-w-0 flex-1 border border-neutral-300 px-2 text-xs outline-none focus:border-neutral-900" />
-        <select value={role} onChange={(event) => onRole(event.target.value as ArtifactRole | 'all')} className="h-8 border border-neutral-300 bg-white px-2 text-xs outline-none focus:border-neutral-900" aria-label="按文件角色筛选">
-          <option value="all">全部角色</option>
-          <option value="attachment">普通附件</option>
-          <option value="deliverable">交付物</option>
-          <option value="run_output">运行产物</option>
-          <option value="intermediate">中间产物</option>
-        </select>
-      </div>
-      {path && (
-        <div className="mb-3 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
-          <button onClick={onOpenRoot} className="hover:text-neutral-900">文件</button>
-          {path.split('/').map((part, index, parts) => (
-            <span key={`${part}-${index}`}>
-              <span className="mx-1 text-neutral-300">/</span>
-              <button onClick={() => onOpenDirectory(parts.slice(0, index + 1).join('/'))} className="hover:text-neutral-900">{part}</button>
-            </span>
-          ))}
-        </div>
-      )}
-      {loading && files.length === 0 ? (
-        <div className="flex h-32 items-center justify-center text-sm text-neutral-400">加载文件中…</div>
-      ) : files.length === 0 && directories.length === 0 ? (
-        <div className="flex h-full flex-col items-center justify-center gap-2 text-neutral-400">
-          <FolderOpen size={32} strokeWidth={1.5} />
-          <span className="text-sm">暂无文件</span>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {directories.map((directory) => (
-            <button data-smoke="channel-files-directory" data-path={directory.path} key={directory.path} onClick={() => onOpenDirectory(directory.path)} className="flex w-full items-center gap-3 border border-neutral-300 bg-amber-50 px-3 py-3 text-left hover:border-neutral-900">
-              <div className="w-24 shrink-0">
-                <DirectoryPreview previews={directory.previewUrls ?? []} />
-              </div>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-semibold text-neutral-900">{directory.name}</span>
-                <span className="text-xs text-neutral-500">{directory.fileCount} 个文件</span>
-              </span>
-            </button>
-          ))}
-          {files.map((file) => {
-            return (
-              <div data-smoke="channel-file-entry" data-filename={file.artifact.filename} data-path={file.logicalPath ?? ''} key={file.artifact.id} className="border border-neutral-300 bg-white p-3 hover:border-neutral-900">
-                <ChatArtifactPreview
-                  artifact={file.artifact}
-                  teamId={file.artifact.teamId}
-                  channelId={file.artifact.channelId}
-                  editable={file.senderKind === 'agent'}
-                  onEdit={() => onEditArtifact(file.artifact, file.documentId)}
-                />
-                <div className="mt-2 flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-neutral-500">
-                    <span>{formatDateTime(file.createdAt)}</span>
-                    <span className="text-neutral-300">·</span>
-                    <span className="truncate">{speakerName({ id: file.messageId ?? file.artifact.id, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
-                    {file.role && <span>· {channelFileRoleLabel(file.role)}</span>}
-                    {file.logicalPath && <span className="min-w-0 truncate">· {file.logicalPath}</span>}
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {file.documentId && file.documentRevisionId && (
-                      <ProjectDocumentReferenceButton
-                        documentId={file.documentId}
-                        revisionId={file.documentRevisionId}
-                        selected={referenceSelections.some((selection) =>
-                          selection.kind === 'document' && selection.documentId === file.documentId)}
-                        disabled={documentReferenceArchived}
-                        onChange={(selection) => onDocumentReferenceSelection(selection, file.documentId!)}
-                      />
-                    )}
-                    {file.messageId && (
-                      <button onClick={() => onJump(file.messageId!)} className="flex h-8 w-8 shrink-0 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
-                        <ExternalLink size={15} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-      {hasMore && <button onClick={onLoadMore} disabled={loading} className="mt-4 w-full border border-neutral-300 py-2 text-xs text-neutral-600 hover:border-neutral-900 disabled:opacity-50">{loading ? '加载中…' : '加载更多'}</button>}
-    </div>
-  );
-}
-
-function DirectoryPreview({ previews }: { previews: string[] }) {
-  if (previews.length === 0) {
-    return (
-      <div className="flex aspect-video items-center justify-center bg-neutral-100 text-neutral-400">
-        <FolderOpen size={28} strokeWidth={1.5} />
-      </div>
-    );
-  }
-  return (
-    <div className="grid aspect-video grid-cols-2 grid-rows-2 gap-px overflow-hidden bg-neutral-200">
-      {previews.slice(0, 4).map((preview) => {
-        const src = artifactUrl(preview);
-        return src ? <img key={preview} src={src} alt="" className="h-full w-full object-cover" /> : null;
-      })}
     </div>
   );
 }
@@ -6467,45 +6173,6 @@ function uniqueMessages(messages: ChatMessage[]): ChatMessage[] {
 
 function channelDocumentIdForArtifact(artifactId: string): string {
   return `channel-document:${artifactId}`;
-}
-
-function channelFileToConversationFile(entry: ChannelFileEntryDto, documents: Map<string, ChannelDocumentDto>): ConversationFile {
-  const documentId = entry.documentId ?? channelDocumentIdForArtifact(entry.artifact.id);
-  const document = documents.get(documentId);
-  return {
-    artifact: document?.currentRevision.artifact ?? entry.artifact,
-    ...(document ? {
-      documentId: document.id,
-      documentRevisionId: document.currentRevisionId,
-    } : {}),
-    ...(entry.source.messageId ? { messageId: entry.source.messageId } : {}),
-    createdAt: entry.artifact.createdAt || entry.source.messageCreatedAt,
-    senderKind: entry.source.senderKind,
-    senderId: entry.source.senderId,
-    ...(entry.logicalPath ? { logicalPath: entry.logicalPath } : {}),
-    ...(entry.role ? { role: entry.role } : {}),
-    ...(entry.source.workspaceRunId ? { workspaceRunId: entry.source.workspaceRunId } : {}),
-  };
-}
-
-function legacyConversationFiles(messages: ChatMessage[]): ConversationFile[] {
-  return messages
-    .filter((message) => !isDeletedMessage(message))
-    .flatMap((message) => (message.artifacts ?? []).map((artifact) => ({
-      artifact,
-      messageId: message.id,
-      createdAt: artifact.createdAt || message.createdAt,
-      senderKind: message.senderKind,
-      senderId: message.senderId,
-      logicalPath: artifact.relativePath ?? artifact.filename,
-    })));
-}
-
-function channelFileRoleLabel(role: string): string {
-  if (role === 'intermediate') return '中间产物';
-  if (role === 'run_output') return '运行产物';
-  if (role === 'deliverable') return '交付物';
-  return '普通附件';
 }
 
 function trimWorkspaceRunLog(text: string, maxChars = 1200): string {
