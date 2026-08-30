@@ -1,8 +1,8 @@
 'use client';
 
 import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, ChevronRight, Smile, ChevronDown, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { Hash, Search, Plus, Bookmark, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, ChevronRight, Smile, ChevronDown, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
 import { WEB_EVENTS, type ArtifactDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDeliveryOverviewV1, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
@@ -96,7 +96,7 @@ type ChatTaskMenuTarget = { surface: 'main' | 'thread'; messageId: string } | nu
 type ComposerAttachmentStatus = 'uploading' | 'ready' | 'failed';
 type MessageContextMenuPosition = { x: number; y: number } | null;
 type ReactionEmojiMap = Map<string, string>;
-type SearchChannelScope = { channelId: string; label: string };
+type SidebarView = 'channels' | 'search' | 'inbox' | 'saved' | 'pinned';
 
 const MESSAGE_REACTION_CHOICES = ['👍', '❤️', '🎉', '👀', '🔥', '😂', '✅'] as const;
 const EMPTY_CHAT_MESSAGES: ChatMessage[] = [];
@@ -298,6 +298,7 @@ export default function ChatPage() {
   const upsertActivityMessages = useAgentBeanStore((s) => s.upsertActivityMessages);
   const applyDispatchStatus = useAgentBeanStore((s) => s.applyDispatchStatus);
   const router = useRouter();
+  const pathname = usePathname();
   const params = useParams();
   const np = useCurrentTeamPath();
   const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : np;
@@ -348,9 +349,15 @@ export default function ChatPage() {
   const [showMembers, setShowMembers] = useState(false);
   const [channelMembers, setChannelMembers] = useState<ChannelMemberEntry[]>([]);
   const [humanProfiles, setHumanProfiles] = useState<HumanProfile[]>([]);
-  const [sidebarView, setSidebarView] = useState<'channels' | 'search' | 'inbox' | 'saved' | 'pinned'>('channels');
+  const [sidebarView, setSidebarView] = useState<SidebarView>('channels');
+  const routeSidebarView: SidebarView | null = pathname.endsWith('/search')
+    ? 'search'
+    : pathname.endsWith('/activity')
+      ? 'inbox'
+      : null;
+  const standalone = routeSidebarView !== null;
+  const displayedSidebarView = routeSidebarView ?? sidebarView;
   const [mobileConversationListOpen, setMobileConversationListOpen] = useState(false);
-  const [searchChannelScope, setSearchChannelScope] = useState<SearchChannelScope | null>(null);
   const [channelsExpanded, setChannelsExpanded] = useState(true);
   const [dmsExpanded, setDmsExpanded] = useState(true);
   const [channelSort, setChannelSort] = useState<SidebarSortMode>('manual');
@@ -380,11 +387,6 @@ export default function ChatPage() {
   );
   const activityVisibleList = useMemo(() => [...activityVisibleIds], [activityVisibleIds]);
   const activityVisibleKey = activityVisibleList.join('\u001f');
-  const inboxUnread = useMemo(
-    () => inboxActivityMessages(projectChatViewMessages(activityMessages), activityVisibleIds)
-      .filter((message) => !doneIds.has(message.id)).length,
-    [activityMessages, activityVisibleIds, doneIds],
-  );
   const [profileAgentCache, setProfileAgentCache] = useState<Record<string, AgentSnapshot>>({});
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -2445,19 +2447,10 @@ export default function ChatPage() {
     });
   };
 
-  const openActiveConversationSearch = () => {
-    if (!activeChannel) return;
-    setSearchChannelScope({
-      channelId: activeChannel,
-      label: isDm ? `@${activeDmName || '私聊'}` : `#${activeName || '频道'}`,
-    });
-    setMobileConversationListOpen(false);
-    setSidebarView('search');
-  };
-
   return (
     <div ref={chatContainerRef} className="flex min-w-0 flex-1 overflow-hidden">
       {/* Left sidebar — channel list */}
+      {!standalone && (
       <div
         className={`${activeChannel && !mobileConversationListOpen ? 'hidden md:flex md:w-60' : 'flex w-full md:w-60'} shrink-0 flex-col border-r border-neutral-200 bg-[#F8F5E6]`}
         data-smoke="conversation-sidebar"
@@ -2465,24 +2458,8 @@ export default function ChatPage() {
         {/* Chat label */}
         <div className="flex h-14 items-center border-b border-neutral-300/40 px-4 text-xs font-semibold uppercase tracking-wider text-neutral-500">聊天</div>
 
-        {/* Search / Activity / Saved buttons */}
+        {/* 收藏/固定保留在聊天内；搜索与活动改由全局图标栏承载。 */}
         <div className="px-2 py-2 space-y-0.5">
-          <button onClick={() => {
-            setSearchChannelScope(null);
-            setMobileConversationListOpen(false);
-            setSidebarView(sidebarView === 'search' ? 'channels' : 'search');
-          }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'search' && !searchChannelScope ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
-            <Search size={14} className="text-neutral-400 shrink-0" />
-            <span>搜索</span>
-            <span className="ml-auto text-[10px] text-neutral-400">⌘K</span>
-          </button>
-          <button onClick={() => { setMobileConversationListOpen(false); setSidebarView(sidebarView === 'inbox' ? 'channels' : 'inbox'); }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'inbox' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
-            <Activity size={14} className="text-neutral-400 shrink-0" />
-            <span>活动</span>
-            {inboxUnread > 0 && (
-              <span className="ml-auto rounded bg-pink-100 px-1.5 py-0.5 text-[10px] font-medium text-pink-600">{inboxUnread}</span>
-            )}
-          </button>
           <button onClick={() => { setMobileConversationListOpen(false); setSidebarView(sidebarView === 'saved' ? 'channels' : 'saved'); }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'saved' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Bookmark size={14} className="text-neutral-400 shrink-0" />
             <span>收藏</span>
@@ -2567,11 +2544,15 @@ export default function ChatPage() {
           )}
         </div>
       </div>
+      )}
 
       {/* Right panel */}
       <div className="flex flex-1 flex-col min-w-0">
-        {sidebarView === 'search' ? (
-          <SearchView onClose={() => setSidebarView('channels')} onJump={async (chId, message) => {
+        {displayedSidebarView === 'search' ? (
+          <SearchView onClose={() => {
+            if (standalone) router.push(`/${np}/chat`);
+            else setSidebarView('channels');
+          }} onJump={async (chId, message) => {
             setActiveChannel(chId);
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
@@ -2592,22 +2573,22 @@ export default function ChatPage() {
             if (targetMessageId) query.set('message', `${chId}:${targetMessageId}`);
             const qs = query.toString();
             router.push(`${path}${qs ? `?${qs}` : ''}`);
-          }} humanProfiles={humanProfiles} channelScope={searchChannelScope} onClearChannelScope={() => setSearchChannelScope(null)} />
-        ) : sidebarView === 'inbox' ? (
+          }} humanProfiles={humanProfiles} />
+        ) : displayedSidebarView === 'inbox' ? (
           <ActivityView onJump={(chId) => {
             setActiveChannel(chId);
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
             router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
           }} humanProfiles={humanProfiles} doneIds={doneIds} setDoneIds={setDoneIds} mutedChannelIds={mutedChannelIds} />
-        ) : sidebarView === 'saved' ? (
+        ) : displayedSidebarView === 'saved' ? (
           <SavedView savedMessages={savedDisplayMessages} onUnsave={(msgId) => toggleSave(msgId)} onJump={(chId) => {
             setActiveChannel(chId);
             setSidebarView('channels');
             const dm = dms.find((item) => item.id === chId);
             router.push(dm ? `/${np}/dm/${chId}` : `/${np}/channel/${chId}`);
           }} humanProfiles={humanProfiles} />
-        ) : sidebarView === 'pinned' ? (
+        ) : displayedSidebarView === 'pinned' ? (
           <PinnedView pinnedMessages={pinnedDisplayMessages} onUnpin={(msg) => togglePin(msg)} onJump={(msg) => {
             setActiveChannel(msg.channelId);
             setSidebarView('channels');
@@ -2664,9 +2645,6 @@ export default function ChatPage() {
               )}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <button onClick={openActiveConversationSearch} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title={isDm ? '搜索此私聊' : '搜索此频道'} data-smoke="channel-search-open">
-                <Search size={14} />
-              </button>
               {!isDm && (
                 <>
                   <button
@@ -6201,14 +6179,10 @@ function SearchView({
   onClose,
   onJump,
   humanProfiles,
-  channelScope,
-  onClearChannelScope,
 }: {
   onClose: () => void;
   onJump: (channelId: string, message?: ChatMessage) => void;
   humanProfiles: HumanProfile[];
-  channelScope?: SearchChannelScope | null;
-  onClearChannelScope?: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [mineOnly, setMineOnly] = useState(false);
@@ -6223,15 +6197,14 @@ function SearchView({
   useEffect(() => {
     if (!query.trim()) { setResults(null); return; }
     const timer = setTimeout(async () => {
-      const res = await channelEvents().searchMessages(query.trim(), 30, channelScope?.channelId);
+      const res = await channelEvents().searchMessages(query.trim(), 30);
       if (res.ok && res.messages) setResults(res.messages);
     }, 300);
     return () => clearTimeout(timer);
-  }, [query, channelScope?.channelId]);
+  }, [query]);
 
   const q = query.trim().toLowerCase();
-  const scopedToChannel = Boolean(channelScope);
-  const channelMatches = q && !scopedToChannel && scope !== 'dms'
+  const channelMatches = q && scope !== 'dms'
     ? channels.filter((c) => c.name.toLowerCase().includes(q)).map((c) => ({
         id: c.id,
         title: c.name,
@@ -6239,7 +6212,7 @@ function SearchView({
         subtitle: c.visibility === 'private' ? '私有频道' : '频道',
       }))
     : [];
-  const dmMatches = q && !scopedToChannel && scope !== 'channels'
+  const dmMatches = q && scope !== 'channels'
     ? dms.filter((dm) => {
         const agent = agents[dm.dmTargetId];
         const name = agent?.name ?? dm.name;
@@ -6257,9 +6230,7 @@ function SearchView({
     : [];
   const messageMatches = projectChatViewMessages(results ?? [])
     .filter((msg) => !mineOnly || msg.senderId === currentUser?.id)
-    .filter((msg) => !channelScope || msg.channelId === channelScope.channelId)
     .filter((msg) => {
-      if (channelScope) return true;
       if (scope === 'channels') return !dms.some((dm) => dm.id === msg.channelId);
       if (scope === 'dms') return dms.some((dm) => dm.id === msg.channelId);
       return true;
@@ -6277,24 +6248,15 @@ function SearchView({
       <div className="flex h-14 items-center border-b border-neutral-200 px-6">
         <div className="flex w-full items-center gap-3">
           <Search size={18} className="text-neutral-400" />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} autoFocus placeholder={channelScope ? `搜索 ${channelScope.label} 中的消息...` : '搜索频道、私聊、成员、消息...'} className="flex-1 text-sm outline-none placeholder:text-neutral-400" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} autoFocus placeholder="搜索频道、私聊、成员、消息..." className="flex-1 text-sm outline-none placeholder:text-neutral-400" />
           <button onClick={onClose} className="rounded bg-neutral-100 px-2 py-0.5 text-[10px] text-neutral-500">ESC</button>
         </div>
       </div>
       <div className="flex items-center gap-2 border-b border-neutral-200 px-6 py-2">
         <button onClick={() => setMineOnly((v) => !v)} className={`rounded-full px-3 py-1 text-xs font-medium ${mineOnly ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'}`}>我的消息</button>
-        {channelScope ? (
-          <>
-            <span className="rounded-full bg-neutral-900 px-3 py-1 text-xs font-medium text-white">范围：{channelScope.label}</span>
-            {onClearChannelScope && (
-              <button onClick={onClearChannelScope} className="rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-200">全部位置</button>
-            )}
-          </>
-        ) : (
-          <button onClick={() => setScope(scope === 'all' ? 'channels' : scope === 'channels' ? 'dms' : 'all')} className="rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-200">
-            {scope === 'all' ? '全部位置' : scope === 'channels' ? '频道' : '私聊'}
-          </button>
-        )}
+        <button onClick={() => setScope(scope === 'all' ? 'channels' : scope === 'channels' ? 'dms' : 'all')} className="rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-200">
+          {scope === 'all' ? '全部位置' : scope === 'channels' ? '频道' : '私聊'}
+        </button>
         <button className="rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-500">任意时间</button>
         <div className="ml-auto flex items-center gap-2 text-xs text-neutral-500">
           <span>排序</span>
@@ -6306,8 +6268,8 @@ function SearchView({
         {results === null && !query.trim() && (
           <div className="flex flex-col items-center justify-center py-16 text-neutral-400">
             <Search size={32} strokeWidth={1.5} />
-            <p className="mt-2 text-sm font-medium">{channelScope ? `搜索 ${channelScope.label}` : '搜索一切'}</p>
-            <p className="text-xs">{channelScope ? '只搜索当前会话的消息历史' : '搜索频道、私聊、成员和消息历史'}</p>
+            <p className="mt-2 text-sm font-medium">搜索一切</p>
+            <p className="text-xs">搜索频道、私聊、成员和消息历史</p>
           </div>
         )}
         {query.trim() && total === 0 && (

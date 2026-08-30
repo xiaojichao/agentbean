@@ -4113,9 +4113,9 @@ export async function exerciseWebUiSettingsBusinessSmoke({
       const input = document.querySelector('[data-smoke="settings-team-name-input"]');
       const button = document.querySelector('[data-smoke="settings-team-name-save"]');
       const message = document.querySelector('[data-smoke="settings-team-name-message"]');
-      return document.body.textContent.includes(${JSON.stringify(teamName)})
-        && input?.value === ${JSON.stringify(teamName)}
-        && (message?.textContent.includes('保存成功') || Boolean(button?.disabled));
+      return input?.value === ${JSON.stringify(teamName)}
+        && message?.textContent.includes('保存成功')
+        && Boolean(button?.disabled);
     })()
     `,
     `settings team name "${teamName}" to save`,
@@ -4157,7 +4157,9 @@ export async function exerciseWebUiSettingsBusinessSmoke({
     `
     (() => {
       const code = ${JSON.stringify(joinCode)};
-      return document.body.textContent.includes(${JSON.stringify(teamName)})
+      const input = document.querySelector('[data-smoke="settings-team-name-input"]');
+      return input?.value === ${JSON.stringify(teamName)}
+        && input?.dataset.teamId === ${JSON.stringify(session.team.id)}
         && !Array.from(document.querySelectorAll('[data-smoke="settings-join-link"]'))
           .some((candidate) => candidate.dataset.joinCode === code);
     })()

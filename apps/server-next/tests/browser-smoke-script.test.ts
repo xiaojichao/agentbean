@@ -1238,6 +1238,12 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('agentbean.browserSettings.v1'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-browser-send-mod-enter'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-team-name-input'))).toBe(true);
+    const settingsNameSavedWait = waitForFunctionCalls.find((call) => call[1].description.includes('settings team name "WebUI Settings'));
+    expect(settingsNameSavedWait?.[1].expression).toContain("message?.textContent.includes('保存成功')");
+    expect(settingsNameSavedWait?.[1].expression).not.toContain('document.body.textContent');
+    const settingsRestoredWait = waitForFunctionCalls.find((call) => call[1].description.includes('revoked join link state to restore after refresh'));
+    expect(settingsRestoredWait?.[1].expression).toContain('settings-team-name-input');
+    expect(settingsRestoredWait?.[1].expression).not.toContain('document.body.textContent');
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('settings-join-link'))).toBe(true);
     const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
     expect(evaluateJsonCalls.some((call) => call[1].includes('settings-join-revoke'))).toBe(true);
