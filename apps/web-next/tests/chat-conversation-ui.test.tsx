@@ -3,8 +3,17 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 const chatSource = readFileSync(join(process.cwd(), 'app/[teamPath]/chat/page.tsx'), 'utf8');
+const sidebarSource = readFileSync(join(process.cwd(), 'components/sidebar.tsx'), 'utf8');
 
 describe('频道与私聊共享会话界面', () => {
+  test('会话栏背景与全局左栏保持一致', () => {
+    expect(sidebarSource).toContain('data-smoke="app-sidebar"');
+    expect(sidebarSource).toContain('bg-[#F7F7F5]');
+    expect(chatSource).toContain('bg-[#F7F7F5]`}\n        data-smoke="conversation-sidebar"');
+    expect(chatSource).toContain('border border-[#F7F7F5] ${statusDotClass(dmStatus)}');
+    expect(chatSource).not.toContain('#F8F5E6');
+  });
+
   test('聊天、任务、文件标签在文字前展示对应图标', () => {
     expect(chatSource).toContain('data-smoke="channel-chat-tab"');
     expect(chatSource).toContain('<MessageSquare size={13} />聊天');

@@ -2452,7 +2452,7 @@ export default function ChatPage() {
       {/* Left sidebar — channel list */}
       {!standalone && (
       <div
-        className={`${activeChannel && !mobileConversationListOpen ? 'hidden md:flex md:w-60' : 'flex w-full md:w-60'} shrink-0 flex-col border-r border-neutral-200 bg-[#F8F5E6]`}
+        className={`${activeChannel && !mobileConversationListOpen ? 'hidden md:flex md:w-60' : 'flex w-full md:w-60'} shrink-0 flex-col border-r border-neutral-200 bg-[#F7F7F5]`}
         data-smoke="conversation-sidebar"
       >
         {/* Chat label */}
@@ -2530,7 +2530,7 @@ export default function ChatPage() {
                   <button key={dm.id} onClick={() => { setMobileConversationListOpen(false); setActiveChannel(dm.id); setSidebarView('channels'); router.push(`/${np}/dm/${dm.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === dm.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
                     <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-purple-100 text-[10px] font-semibold text-purple-700">
                       {dmName[0]?.toUpperCase() ?? 'A'}
-                      <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border border-[#F8F5E6] ${statusDotClass(dmStatus)}`} />
+                      <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border border-[#F7F7F5] ${statusDotClass(dmStatus)}`} />
                     </div>
                     <div className="min-w-0 flex-1 text-left">
                       <div className="truncate text-sm leading-4">{dmName}</div>
