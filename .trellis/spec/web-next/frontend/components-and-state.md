@@ -95,9 +95,11 @@
 
 ### 11. 文件库「逻辑产物」视图 = `ProjectFilesBoard`：左文件组卡 + 右七列文件表 + 工具栏引用
 
-`apps/web-next/components/project/ProjectFilesBoard.tsx` 是频道文件标签页的唯一视图
-（替换旧的 OutputPackageList + ProjectArtifactLibrary 上下堆叠，也不再向频道用户暴露
-「文件/逻辑产物」子切换；`ConversationFiles` 仅保留给私聊等非频道 surface 复用）：
+`apps/web-next/components/project/ProjectFilesBoard.tsx` 是所有会话（频道、默认频道
+#all、私聊）文件标签页的项目数据面视图（替换旧的 OutputPackageList +
+ProjectArtifactLibrary 上下堆叠，也不向用户暴露「文件/逻辑产物」子切换；产品决策
+2026-08-30 起 #all/私聊与普通频道同一 gate——有项目画像/输出包/pending 交付/产物集合
+即进本组件，否则统一回落 `ConversationFiles` 附件浏览）：
 
 - 左栏 `FileGroupRail`：输出包 / 文件集合 / **等待上游**（有阶段无产物，纯前端差集）
   三类卡片混排，按 `lastActivityAt` 倒序；kind 用不同 chip 色；已经属于

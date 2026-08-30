@@ -86,7 +86,6 @@ import {
   type TaskStatus,
 } from '@/lib/task-status';
 import {
-  channelTaskEntrySubview,
   channelTaskHasProjectFacts,
   channelTasksHistoryMode,
   matchingChannelTaskStageId,
@@ -1501,7 +1500,7 @@ export default function ChatPage() {
       params.delete('message');
       // #1178 AC1：task-only 阶段详情深链（task=task:<taskId>）与 thread 共存——
       // 刷新/返回后 task/stage/thread 关联同时恢复；消息型 task 深链与 thread 互斥
-      // （taskParam 回灌会清 threadRootId），仍清除。stage/chatTab/tasksView 不动。
+      // （taskParam 回灌会清 threadRootId），仍清除。stage/chatTab 不动。
       if (!params.get('task')?.startsWith('task:')) params.delete('task');
     } else {
       params.delete('thread');

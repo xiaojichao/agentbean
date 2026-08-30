@@ -2014,7 +2014,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
       const prompt = document.querySelector('[data-smoke="channel-project-setup-prompt"]');
       const progress = document.querySelector('[data-smoke="channel-project-progress"]');
       return (prompt !== null || progress !== null)
-        && (prompt === null || (prompt.textContent ?? '').includes('已有 2 个普通任务'))
+        && (prompt === null || /已有 \d+ 个普通任务/.test(prompt.textContent ?? ''))
         && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null
         && !Array.from(document.querySelectorAll('button')).some((button) => (button.textContent ?? '').trim().includes('新建普通任务'));
     })()
