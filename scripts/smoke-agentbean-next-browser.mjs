@@ -2006,17 +2006,20 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
     })()
   `);
   if (!openedTasksTab) throw new Error('Could not open the Tasks tab in #all');
+  // 注意：webui 流程里 Phase 2 DAG 段会用 session 默认频道（#all）发 asTask 消息留下受管任务，
+  // 此处 #all 可能渲染泳道而非 setup prompt——两种形态都锁定统一项目工作台。
   await page.waitForFunction(
     `
     (() => {
       const prompt = document.querySelector('[data-smoke="channel-project-setup-prompt"]');
-      return prompt !== null
-        && (prompt.textContent ?? '').includes('已有 2 个普通任务')
+      const progress = document.querySelector('[data-smoke="channel-project-progress"]');
+      return (prompt !== null || progress !== null)
+        && (prompt === null || (prompt.textContent ?? '').includes('已有 2 个普通任务'))
         && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null
         && !Array.from(document.querySelectorAll('button')).some((button) => (button.textContent ?? '').trim().includes('新建普通任务'));
     })()
     `,
-    'default #all channel locks the Tasks tab to the unified project workbench with an ordinary-task setup prompt',
+    'default #all channel locks the Tasks tab to the unified project workbench (setup prompt or managed lanes)',
     timeoutMs,
   );
 

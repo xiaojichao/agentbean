@@ -158,7 +158,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(smoke).toContain('channel-plain-task-workspace');
     // 频道级子视图统一（产品决策 2026-08-30）：所有频道（含 #all/私聊）一律锁项目工作台。
     expect(smoke).toContain('non-default channel locks the Tasks tab to the project workbench subview');
-    expect(smoke).toContain('default #all channel locks the Tasks tab to the unified project workbench with an ordinary-task setup prompt');
+    expect(smoke).toContain('default #all channel locks the Tasks tab to the unified project workbench (setup prompt or managed lanes)');
     expect(smoke).toContain('task-only deep link falls back to the unified project workbench without the retired detail panel');
     expect(smoke).toContain("!new URLSearchParams(window.location.search).has('task')");
     expect(smoke).toContain("document.querySelector('[data-smoke=\"chat-task-detail\"]') === null");
