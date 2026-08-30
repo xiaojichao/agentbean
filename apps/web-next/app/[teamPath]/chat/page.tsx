@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, ChevronRight, Smile, ChevronDown, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, ChevronRight, Smile, ChevronDown, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
 import { WEB_EVENTS, type ArtifactDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDeliveryOverviewV1, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
@@ -445,9 +445,7 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const threadImageInputRef = useRef<HTMLInputElement>(null);
   const threadFileInputRef = useRef<HTMLInputElement>(null);
   // #1064：线程 composer 焦点（Task 页「交给 Agent 处理」预填后移焦）。
   const threadTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1301,7 +1299,6 @@ export default function ChatPage() {
   );
   const activeDmAgent = activeDm ? agents[activeDm.dmTargetId] : undefined;
   const activeDmName = activeDmAgent?.name ?? activeDm?.name ?? '';
-  const activeDmSubtitle = activeDmAgent?.description?.trim() || activeDmAgent?.role || '智能体私聊';
   const taskParticipants: ChannelMemberEntry[] = [
     ...(currentUser && !channelMembers.some((member) => member.kind === 'human' && member.id === currentUser.id)
       ? [{ id: currentUser.id, name: `${currentUser.username}（你）`, kind: 'human' as const }]
@@ -2627,7 +2624,7 @@ export default function ChatPage() {
         <>
         {/* Conversation header */}
         {activeChannel && (
-          <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
+          <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4" data-smoke="conversation-header">
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <button
                 type="button"
@@ -2641,24 +2638,28 @@ export default function ChatPage() {
               </button>
               {isDm ? (
                 <>
-                  <button onClick={() => activeDm && openProfile({ kind: 'agent', id: activeDm.dmTargetId })} className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-purple-100 text-xs font-semibold text-purple-700 hover:ring-2 hover:ring-neutral-900" title="查看智能体资料">
+                  <button onClick={() => activeDm && openProfile({ kind: 'agent', id: activeDm.dmTargetId })} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-purple-100 text-xs font-semibold text-purple-700 hover:ring-2 hover:ring-neutral-900" title="查看智能体资料" data-smoke="dm-header-avatar">
                     {activeDmName[0]?.toUpperCase() ?? 'A'}
-                    <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white ${statusDotClass(activeDmAgent?.status)}`} />
                   </button>
                   <div className="min-w-0">
-                    <button onClick={() => activeDm && openProfile({ kind: 'agent', id: activeDm.dmTargetId })} className="block truncate text-left text-sm font-semibold text-neutral-900 hover:underline">{activeDmName}</button>
-                    <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-neutral-400">
+                    <div className="flex min-w-0 items-center gap-1.5" data-smoke="dm-header-status">
+                      <button onClick={() => activeDm && openProfile({ kind: 'agent', id: activeDm.dmTargetId })} className="truncate text-left text-sm font-semibold text-neutral-900 hover:underline">{activeDmName}</button>
                       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDotClass(activeDmAgent?.status)}`} />
-                      <span className="shrink-0">{statusLabel(activeDmAgent?.status)}</span>
-                      <span className="text-neutral-300">·</span>
-                      <span className="truncate">{activeDmSubtitle}</span>
+                      <span className="shrink-0 text-[11px] text-neutral-400">{statusLabel(activeDmAgent?.status)}</span>
                     </div>
                   </div>
                 </>
               ) : (
                 <>
-                  {activeChannelObj?.visibility === 'private' ? <Lock size={14} className="shrink-0 text-neutral-400" /> : <Hash size={14} className="shrink-0 text-neutral-400" />}
-                  <span className="truncate text-sm font-semibold">{activeName}</span>
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-600" data-smoke="channel-header-visibility">
+                    {activeChannelObj?.visibility === 'private' ? <Lock size={16} /> : <Hash size={16} />}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-neutral-900">{activeName}</div>
+                    {activeChannelObj?.title?.trim() && (
+                      <div className="truncate text-[11px] text-neutral-400" data-smoke="channel-header-description">{activeChannelObj.title.trim()}</div>
+                    )}
+                  </div>
                 </>
               )}
             </div>
@@ -2704,9 +2705,9 @@ export default function ChatPage() {
         {/* Tabs */}
         {activeChannel && (
           <div className="flex border-b border-neutral-200">
-            <button onClick={() => switchTab('chat')} className={`border-b-2 px-4 py-2 text-xs font-medium tracking-wide ${tab === 'chat' ? 'border-amber-400 text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>聊天</button>
-            <button onClick={() => switchTab('tasks')} className={`border-b-2 px-4 py-2 text-xs tracking-wide ${tab === 'tasks' ? 'border-amber-400 font-medium text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>任务</button>
-            <button data-smoke="channel-files-tab" onClick={() => switchTab('files')} className={`border-b-2 px-4 py-2 text-xs tracking-wide ${tab === 'files' ? 'border-amber-400 font-medium text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>文件</button>
+            <button data-smoke="channel-chat-tab" onClick={() => switchTab('chat')} className={`inline-flex items-center gap-1.5 border-b-2 px-4 py-2 text-xs font-medium tracking-wide ${tab === 'chat' ? 'border-amber-400 text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}><MessageSquare size={13} />聊天</button>
+            <button data-smoke="channel-tasks-tab" onClick={() => switchTab('tasks')} className={`inline-flex items-center gap-1.5 border-b-2 px-4 py-2 text-xs tracking-wide ${tab === 'tasks' ? 'border-amber-400 font-medium text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}><ListTodo size={13} />任务</button>
+            <button data-smoke="channel-files-tab" onClick={() => switchTab('files')} className={`inline-flex items-center gap-1.5 border-b-2 px-4 py-2 text-xs tracking-wide ${tab === 'files' ? 'border-amber-400 font-medium text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}><Paperclip size={13} />文件</button>
           </div>
         )}
 
@@ -2856,14 +2857,14 @@ export default function ChatPage() {
                     />
                   )}
                   <div className="flex items-center justify-between px-2 pb-2">
-                    <div className="flex items-center gap-1">
-                      <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { if (e.target.files) uploadFiles(e.target.files, 'main'); e.currentTarget.value = ''; }} />
+                    <div className="flex items-center">
                       <input data-smoke="chat-file-input" ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files) uploadFiles(e.target.files, 'main'); e.currentTarget.value = ''; }} />
-                      <button onClick={() => imageInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传图片"><Image size={16} /></button>
                       <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传附件"><Paperclip size={16} /></button>
-                      <label className="ml-1 flex cursor-pointer items-center gap-1 text-neutral-400 hover:text-neutral-600"><input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} className="rounded border-neutral-300" /><span className="text-xs">作为任务</span></label>
                     </div>
-                    <button data-smoke="chat-message-send" onClick={sendMessage} disabled={sendingMessage || uploading || hasUploadingAttachments(pendingAttachments) || hasFailedAttachments(pendingAttachments) || (!input.trim() && readyArtifacts(pendingAttachments).length === 0 && projectReferenceSelections.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
+                    <div className="flex items-center gap-2" data-smoke="chat-composer-right-actions">
+                      <label className="flex cursor-pointer items-center gap-1 text-neutral-400 hover:text-neutral-600" data-smoke="chat-as-task-toggle"><input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} className="rounded border-neutral-300" /><span className="text-xs">作为任务</span></label>
+                      <button data-smoke="chat-message-send" onClick={sendMessage} disabled={sendingMessage || uploading || hasUploadingAttachments(pendingAttachments) || hasFailedAttachments(pendingAttachments) || (!input.trim() && readyArtifacts(pendingAttachments).length === 0 && projectReferenceSelections.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3071,7 +3072,6 @@ export default function ChatPage() {
             }}
             uploading={uploading}
             submitting={threadContinuationSubmitting}
-            imageInputRef={threadImageInputRef}
             fileInputRef={threadFileInputRef}
             threadTextareaRef={threadTextareaRef}
             savedIds={savedIds}
@@ -4124,7 +4124,6 @@ function ThreadPanel({
   onAddSelection,
   uploading,
   submitting,
-  imageInputRef,
   fileInputRef,
   threadTextareaRef,
   savedIds,
@@ -4186,7 +4185,6 @@ function ThreadPanel({
   onAddSelection: (selection: ProjectReferenceSelectionRequestDto) => void;
   uploading: boolean;
   submitting: boolean;
-  imageInputRef: RefObject<HTMLInputElement>;
   fileInputRef: RefObject<HTMLInputElement>;
   /** #1064：线程 composer 焦点（ChatPage 持有，预填导航后移焦）。 */
   threadTextareaRef: RefObject<HTMLTextAreaElement>;
@@ -4543,12 +4541,8 @@ function ThreadPanel({
           )}
           {attachments.length > 0 && <AttachmentStrip attachments={attachments} onRemove={onRemoveAttachment} />}
           <div className="flex items-center justify-between px-2 pb-2">
-            <div className="flex items-center gap-1">
-              <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
-              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
-              <button onClick={() => imageInputRef.current?.click()} disabled={uploading || submitting} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传图片">
-                <Image size={16} />
-              </button>
+            <div className="flex items-center">
+              <input data-smoke="thread-file-input" ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
               <button onClick={() => fileInputRef.current?.click()} disabled={uploading || submitting} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传附件">
                 <Paperclip size={16} />
               </button>
