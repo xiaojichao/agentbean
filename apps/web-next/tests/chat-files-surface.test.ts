@@ -32,7 +32,7 @@ describe('chat files surface', () => {
 
   test('普通文件组件保留复用；无项目投影的频道与私聊挂载它', () => {
     expect(source).toContain('hasProjectFilesSurface');
-    expect(source).toMatch(/!isDm && hasProjectFilesSurface \? \(\s+<ProjectFilesBoard/);
+    expect(source).toMatch(/hasProjectFilesSurface \? \(\s+<ProjectFilesBoard/);
     expect(source).toMatch(/<ProjectFilesBoard[\s\S]+?\) : \(\s+<ConversationFiles/);
     expect(filesSurface).toContain('按文件角色筛选');
     expect(filesSurface).toContain('directories.map');
@@ -83,7 +83,7 @@ describe('chat files surface', () => {
     expect(source).toContain('|| outputPackages.length > 0');
     expect(source).toContain('|| outputPackagePendings.length > 0');
     expect(source).toContain('|| (projectArtifactLibrary?.collections.length ?? 0) > 0');
-    expect(source).toMatch(/!isDm && hasProjectFilesSurface \? \(\s+<ProjectFilesBoard/);
+    expect(source).toMatch(/hasProjectFilesSurface \? \(\s+<ProjectFilesBoard/);
     // stages 容空:overview 缺失时传空数组,等待上游卡自然不出现。
     expect(source).toMatch(/stages=\{channelProjectOverview\?\.stages\.map\(/);
     // 提升入口在无 overview 时关闭(canPromote=false),不误开。
@@ -101,12 +101,12 @@ describe('chat files surface', () => {
     expect(source).not.toContain('promotableArtifacts={channelFiles.map');
   });
 
-  test('私聊与无项目投影频道使用普通文件视图；有投影时用逻辑产物板', () => {
-    expect(source).toMatch(/!isDm && hasProjectFilesSurface \? \(\s+<ProjectFilesBoard/);
+  test('所有频道（含 #all 与私聊）同一 gate：有项目数据面用逻辑产物板，否则回落附件文件页', () => {
+    expect(source).toMatch(/hasProjectFilesSurface \? \(\s+<ProjectFilesBoard/);
     expect(source).toMatch(/<ProjectFilesBoard[\s\S]+?\) : \(\s+<ConversationFiles/);
-    expect(source).toContain('const isActiveDm = dms.some((dm) => dm.id === activeChannel);');
-    expect(source).toContain('const useAttachmentFiles = isActiveDm');
-    expect(source).toContain('filesProjectSurfaceReady && !hasProjectFilesSurface');
+    // 私聊不再短路附件加载，统一按「无项目数据面」回落。
+    expect(source).not.toContain('const useAttachmentFiles = isActiveDm');
+    expect(source).toContain('const useAttachmentFiles = filesProjectSurfaceReady && !hasProjectFilesSurface');
   });
 
   test('文件库对齐原型：不渲染频道文档/文档包顶栏，也不再挂 documentReferenceSection', () => {

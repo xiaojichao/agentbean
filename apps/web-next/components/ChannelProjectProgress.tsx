@@ -14,9 +14,8 @@ import type {
   ChannelTaskWorkspaceV1,
 } from '@agentbean/contracts';
 
-import { channelTaskResponsibilityFocusFilterValue } from '@/components/ChannelTaskCard';
 import { TaskCardReviewEntryPanel, type TaskCardReviewProjection } from '@/components/TaskCardReviewEntryPanel';
-import { channelTaskEntrySubview } from '@/lib/channel-task-workspace-route';
+import { channelTaskEntrySubview, channelTaskResponsibilityFocusFilterValue } from '@/lib/channel-task-workspace-route';
 import { reviewStateLabel } from '@/lib/delivery-labels';
 import { taskStatusText } from '@/lib/task-status';
 

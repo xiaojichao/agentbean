@@ -8013,9 +8013,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const access = await ensureUserCanViewChannel(repositories, projectInput);
       if (!access.ok) return access;
       const { channel } = access;
-      if (channel.kind !== 'channel') {
-        return makeFailure('VALIDATION_ERROR', 'Project stages require a regular channel');
-      }
       if (!Number.isSafeInteger(projectInput.expectedRevision) || projectInput.expectedRevision < 0) {
         return makeFailure('VALIDATION_ERROR', 'expectedRevision must be a non-negative integer');
       }
@@ -8434,9 +8431,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const access = await ensureUserCanViewChannel(repositories, projectInput);
       if (!access.ok) return access;
       const { channel } = access;
-      if (channel.kind !== 'channel') {
-        return makeFailure('VALIDATION_ERROR', 'Project artifacts require a regular channel');
-      }
       const idempotencyKey = typeof projectInput.idempotencyKey === 'string'
         ? projectInput.idempotencyKey.trim()
         : '';
@@ -8726,9 +8720,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const access = await ensureUserCanViewChannel(repositories, projectInput);
       if (!access.ok) return access;
       const { channel } = access;
-      if (channel.kind !== 'channel') {
-        return makeFailure('VALIDATION_ERROR', 'Project artifact reviews require a regular channel');
-      }
       const idempotencyKey = typeof projectInput.idempotencyKey === 'string'
         ? projectInput.idempotencyKey.trim()
         : '';
@@ -8904,9 +8895,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const access = await ensureUserCanViewChannel(repositories, projectInput);
       if (!access.ok) return access;
       const { channel } = access;
-      if (channel.kind !== 'channel') {
-        return makeFailure('VALIDATION_ERROR', 'Project artifact finalization requires a regular channel');
-      }
       const idempotencyKey = typeof projectInput.idempotencyKey === 'string'
         ? projectInput.idempotencyKey.trim()
         : '';
@@ -17094,9 +17082,6 @@ async function prepareProjectStageEdgeMutation<N extends Record<string, unknown>
   const access = await ensureUserCanViewChannel(repositories, input);
   if (!access.ok) return settle(access as ProjectStageEdgeMutationAck);
   const { channel } = access;
-  if (channel.kind !== 'channel') {
-    return settle(makeFailure('VALIDATION_ERROR', 'Project stages require a regular channel'));
-  }
   if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
     return settle(makeFailure('VALIDATION_ERROR', 'expectedRevision must be a positive integer'));
   }
@@ -19232,7 +19217,6 @@ async function ensureUserCanViewProjectWorkspace(
   if (!(await repositories.teams.isMember(input.teamId, input.userId))) return makeFailure('FORBIDDEN', 'User is not a team member');
   const channel = await repositories.channels.getById(input.channelId);
   if (!channel || channel.teamId !== input.teamId) return makeFailure('NOT_FOUND', 'Channel not found');
-  if (channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
   if (channel.visibility === 'private' && !channel.humanMemberIds.includes(input.userId)) return makeFailure('FORBIDDEN', 'User cannot view channel');
   return makeSuccess({ channel });
 }
@@ -19242,7 +19226,7 @@ async function ensureUserCanViewProjectWorkspace(
  * 人类可见性校验（含私有频道 human membership）；owner 不是目标 Team 成员时
  * （跨 Team 可见 Agent 合法执行），人类在目标 Team 没有可见性立场，频道访问由
  * 调用点的 Agent 授权（visibleTeamIds + channel agentMemberIds + device 绑定）
- * 承担，这里只校验频道存在、归属目标 Team 且不是 DM/all 内置频道。
+ * 承担，这里只校验频道存在且归属目标 Team。
  */
 async function ensureSnapshotChannelAccess(
   repositories: ServerNextRepositories,
@@ -19253,7 +19237,6 @@ async function ensureSnapshotChannelAccess(
   }
   const channel = await repositories.channels.getById(input.channelId);
   if (!channel || channel.teamId !== input.teamId) return makeFailure('NOT_FOUND', 'Channel not found');
-  if (channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
   return makeSuccess({ channel });
 }
 
@@ -19278,7 +19261,6 @@ async function ensureWorkspacePublishChannelAccess(
   if (!actor.ok) return makeFailure('FORBIDDEN', 'User is not a team member');
   const channel = await repositories.channels.getById(input.channelId);
   if (!channel || channel.teamId !== input.teamId) return makeFailure('NOT_FOUND', 'Channel not found');
-  if (channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
   return makeSuccess({ channel });
 }
 

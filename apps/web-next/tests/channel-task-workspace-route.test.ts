@@ -3,22 +3,13 @@ import type { ChannelTaskWorkspaceEntryV1 } from '@agentbean/contracts';
 
 import {
   channelTaskEntrySubview,
+  channelTaskHasProjectFacts,
+  channelTaskResponsibilityFocusFilterValue,
   channelTasksHistoryMode,
-  channelTasksRouteParams,
   matchingChannelTaskStageId,
-  parseChannelTasksSubview,
-  resolveChannelTasksSubview,
 } from '../lib/channel-task-workspace-route';
 
 describe('频道 Tasks 路由与 Server 事实分流', () => {
-  test('有阶段或受管任务时默认项目推进，完全没有项目事实时默认普通任务', () => {
-    expect(resolveChannelTasksSubview(undefined, true)).toBe('project');
-    expect(resolveChannelTasksSubview(undefined, false)).toBe('plain');
-    expect(resolveChannelTasksSubview(undefined, false, true)).toBe('project');
-    expect(resolveChannelTasksSubview('plain', true)).toBe('plain');
-    expect(parseChannelTasksSubview('unknown')).toBeUndefined();
-  });
-
   test('仅按 Server governance/stage 投影分流，不使用负责人、标签或状态猜测', () => {
     const plain = entry({ mode: 'plain', withStage: false });
     const managed = entry({ mode: 'managed', withStage: false });
@@ -32,25 +23,7 @@ describe('频道 Tasks 路由与 Server 事实分流', () => {
     expect(channelTaskEntrySubview(staged)).toBe('project');
   });
 
-  test('URL 同时保留 Tasks 子视图、stage 与 canonical task，切到普通任务会清理项目选中态', () => {
-    const selected = channelTasksRouteParams(new URLSearchParams('message=message-1'), {
-      view: 'project',
-      stageId: 'stage-1',
-      taskId: 'task-1',
-    });
-    expect(selected.get('chatTab')).toBe('tasks');
-    expect(selected.get('tasksView')).toBe('project');
-    expect(selected.get('stage')).toBe('stage-1');
-    expect(selected.get('task')).toBe('task:task-1');
-    expect(selected.has('message')).toBe(false);
-
-    const plain = channelTasksRouteParams(selected, { view: 'plain' });
-    expect(plain.get('tasksView')).toBe('plain');
-    expect(plain.has('stage')).toBe(false);
-    expect(plain.has('task')).toBe(false);
-  });
-
-  test('默认视图规范化不污染历史，用户主动切换和打开任务写入浏览历史', () => {
+  test('打开任务写入浏览历史', () => {
     expect(channelTasksHistoryMode('resolve_default')).toBe('replace');
     expect(channelTasksHistoryMode('select_subview')).toBe('push');
     expect(channelTasksHistoryMode('open_task')).toBe('push');
@@ -64,6 +37,46 @@ describe('频道 Tasks 路由与 Server 事实分流', () => {
     expect(matchingChannelTaskStageId(staged, 'stage-other')).toBeNull();
     expect(matchingChannelTaskStageId(plain, 'stage-1')).toBeNull();
     expect(matchingChannelTaskStageId(undefined, 'stage-1')).toBeNull();
+  });
+
+  test('责任焦点筛选值来自 Server responsibilityFocus 投影，缺省回落 unassigned', () => {
+    const plainEntry = entry({ mode: 'plain', withStage: false });
+    const agentEntry: ChannelTaskWorkspaceEntryV1 = {
+      ...plainEntry,
+      responsibilityFocus: { kind: 'agent', agentId: 'agent-1', detail: '执行中' },
+    };
+    const reviewWaitEntry: ChannelTaskWorkspaceEntryV1 = {
+      ...plainEntry,
+      responsibilityFocus: { kind: 'review_wait', detail: '等待审核' },
+    };
+
+    expect(channelTaskResponsibilityFocusFilterValue(undefined)).toBe('unassigned');
+    expect(channelTaskResponsibilityFocusFilterValue(plainEntry)).toBe('unassigned');
+    expect(channelTaskResponsibilityFocusFilterValue(agentEntry)).toBe('agent-1');
+    expect(channelTaskResponsibilityFocusFilterValue(reviewWaitEntry)).toBe('review_wait');
+  });
+
+  test('普通 Task 只有 Server 已投影责任、交付或审核事实才算项目事实', () => {
+    const plainEntry = entry({ mode: 'plain', withStage: false });
+
+    expect(channelTaskHasProjectFacts(undefined)).toBe(false);
+    expect(channelTaskHasProjectFacts(plainEntry)).toBe(false);
+    // assignee、tag 和 status 不是项目事实。
+    expect(plainEntry.task.assigneeId).toBe('agent-legacy');
+    expect(channelTaskHasProjectFacts(entry({ mode: 'managed', withStage: false }))).toBe(true);
+    expect(channelTaskHasProjectFacts(entry({ mode: 'plain', withStage: true }))).toBe(true);
+    expect(channelTaskHasProjectFacts({
+      ...plainEntry,
+      responsibilityFocus: { kind: 'agent', agentId: 'agent-1', detail: '执行中' },
+    })).toBe(true);
+    expect(channelTaskHasProjectFacts({
+      ...plainEntry,
+      delivery: { ...plainEntry.delivery, packageCount: 1 },
+    })).toBe(true);
+    expect(channelTaskHasProjectFacts({
+      ...plainEntry,
+      review: { reviewerIds: ['user-1'] },
+    })).toBe(true);
   });
 });
 
