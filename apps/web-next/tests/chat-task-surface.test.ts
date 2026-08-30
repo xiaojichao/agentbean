@@ -171,6 +171,7 @@ describe('chat task surface', () => {
     expect(panel).not.toContain('projectEvents().createStage(');
     expect(panel).not.toContain('projectEvents().createInitialStage(');
     expect(panel).not.toContain('createStageEdge');
+    expect(panel).not.toContain('projectEvents().deleteStageEdge(');
     expect(panel).not.toContain('配置首个项目阶段');
     // overview 投影刷新链保留（喂 ChannelProjectProgress）。
     expect(panel).toContain('acceptChannelProjectOverview');

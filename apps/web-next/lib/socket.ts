@@ -1004,14 +1004,6 @@ export function taskRemediationEvents(socket: Socket = getWebSocket()) {
   };
 }
 
-export interface ProjectMutationResult {
-  ok: boolean;
-  overview?: ChannelProjectOverviewDto;
-  replayed?: boolean;
-  error?: string;
-  message?: string;
-}
-
 export interface ProjectEvents {
   overview(channelId: string): Promise<{ ok: boolean; overview?: ChannelProjectOverviewDto | null; error?: string; message?: string }>;
   /** #966 读取 Project Channel Workspace 当前或指定 revision 的文件清单 + provenance。 */

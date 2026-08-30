@@ -55,15 +55,17 @@
 | 版本与审核状态使用文字标签 | 通过 | stage workspace / files board labels |
 | 审核动作键盘可操作、焦点与失败反馈 | 通过 | stage mutation dialog；部分 a11y 为非阻塞 polish |
 | 归档后历史可读、mutation fail closed | 通过 | archive-gate-closeout / archive-fail-closed；settings 只读；#1179 claim/Invocation 收口回归 |
-| loading / not_ready / 无阶段 / 无权限 / 错误分态 | 本地通过 | `ChannelProjectProgress` 状态机测试；无阶段状态展示已有普通任务数量与“配置首个项目阶段”显式入口 |
+| loading / not_ready / 无阶段 / 无权限 / 错误分态 | 本地通过 | `ChannelProjectProgress` 状态机测试；#1257 起无阶段状态渲染空泳道工作台（手动配置入口已按设计文档剔除） |
 
 ## #1179 设置面与生产收口
 
+> #1257 起：「配置首个项目阶段」入口与 `ChannelProjectOverview` 设置弹窗已按设计文档（2026-07-17，阶段由 Server 写入事实）剔除；下表设置面相关行为仅作历史记录。
+
 | 验收项 | 状态 | 证据 |
 | --- | --- | --- |
-| 默认推进面不再展示创建阶段、编辑边、底层引用 ID 表单 | 通过 | `channel-project-progress.test.tsx`；browser smoke 断言 |
-| 设置入口支持阶段、负责人、审核者、验收标准、边与必需输入 | 通过 | `ChannelProjectOverview` + createInitialStage / createStage / edge 表单；socket-sqlite 双阶段创建 |
-| 设置保存后运行视图以新 overview 更新；旧响应不覆盖新 revision | 通过 | `acceptChannelProjectOverview` + 关闭设置刷新 |
+| 默认推进面不再展示创建阶段、编辑边、底层引用 ID 表单 | 通过 | `channel-project-progress.test.tsx`；browser smoke 断言；#1257 起推进面无任何设置入口（负向防回潮断言） |
+| ~~设置入口支持阶段、负责人、审核者、验收标准、边与必需输入~~ | #1257 已剔除 | 写路径由 Server 命令承载（`createInitialStage`/`createStage`/edge），browser smoke 以 socket emitAck 种数据覆盖 |
+| ~~设置保存后运行视图以新 overview 更新~~ | #1257 已剔除 | `acceptChannelProjectOverview` 投影合并链保留（`channel-project-overview-accept.test.ts`） |
 | 归档 preflight 列出 pending delivery/review、非终态 Task、claim/Invocation | 通过 | archive-gate-closeout（含 #1179 claim/Invocation 用例） |
 | 高层场景与负向场景 | 部分通过 | 主路径：Tasks 审核 smoke + Thread handoff + Files 投影；新增无阶段普通频道真实页面 seam。完整「未触发→Offer→执行→改稿→最终化」及生产既有频道仍需发布后复验 |
 | Tasks / Files / Thread 事实一致 | 通过 | 既有 #1174/#1177/#1178 证据；本切片不改 Files IA |
@@ -83,9 +85,7 @@ npm --workspace apps/web-next exec vitest run \
   tests/channel-task-card.test.tsx \
   tests/channel-task-workspace-route.test.ts \
   tests/channel-project-overview-accept.test.ts \
-  tests/channel-project-overview.test.tsx \
   tests/channel-project-progress.test.tsx \
-  tests/channel-project-socket-sqlite.test.tsx \
   tests/chat-task-surface.test.ts
 npm run build:web-next
 
