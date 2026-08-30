@@ -115,7 +115,7 @@ export function AgentTopBar({ agent, device }: { agent: AgentSnapshot; device?: 
   };
 
   return (
-    <div className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-neutral-200 bg-white px-5">
+    <div className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-neutral-200 bg-white px-5">
       <div className="flex min-w-0 items-center gap-3">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-amber-50">
           <Bot size={22} className="text-amber-600" />

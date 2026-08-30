@@ -6348,7 +6348,7 @@ function ActivityView({
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <div className="flex h-16 items-center justify-between border-b border-neutral-200 px-6">
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 px-6">
         <div>
           <h2 className="text-lg font-semibold">活动</h2>
           <p className="text-xs text-neutral-400">{allMessages.length} 条活动 · {unreadCount} 条未读</p>
@@ -6434,7 +6434,7 @@ function SavedView({ savedMessages, onUnsave, onJump, humanProfiles }: { savedMe
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <div className="flex h-16 flex-col justify-center border-b border-neutral-200 px-6">
+      <div className="flex h-14 shrink-0 flex-col justify-center border-b border-neutral-200 px-6">
         <h2 className="text-lg font-semibold">收藏</h2>
         <p className="text-xs text-neutral-400">{filtered.length} 条收藏</p>
       </div>
@@ -6506,7 +6506,7 @@ function PinnedView({ pinnedMessages, onUnpin, onJump, humanProfiles }: { pinned
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <div className="flex h-16 flex-col justify-center border-b border-neutral-200 px-6">
+      <div className="flex h-14 shrink-0 flex-col justify-center border-b border-neutral-200 px-6">
         <h2 className="text-lg font-semibold">固定</h2>
         <p className="text-xs text-neutral-400">{filtered.length} 条固定消息</p>
       </div>
