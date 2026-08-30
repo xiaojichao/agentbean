@@ -3270,7 +3270,7 @@ function ChannelEditDialog({
   onDelete,
   isDefaultChannel,
 }: {
-  channel: { id: string; name: string; description?: string | null; visibility?: string };
+  channel: { id: string; name: string; title?: string | null; visibility?: string };
   teamId: string;
   onClose: () => void;
   onSaved: () => void;
@@ -3279,7 +3279,7 @@ function ChannelEditDialog({
   isDefaultChannel: boolean;
 }) {
   const [name, setName] = useState(channel.name);
-  const [description, setDescription] = useState(channel.description ?? '');
+  const [description, setDescription] = useState(channel.title ?? '');
   const [visibility, setVisibility] = useState<'public' | 'private'>(channel.visibility === 'private' ? 'private' : 'public');
   const [saving, setSaving] = useState(false);
   const [confirmAction, setConfirmAction] = useState<'archive' | 'delete' | null>(null);
@@ -3294,7 +3294,7 @@ function ChannelEditDialog({
       teamId,
       channelId: channel.id,
       name: isDefaultChannel ? undefined : name.trim(),
-      description: description.trim() || null,
+      title: description.trim() || null,
       visibility: isDefaultChannel ? undefined : visibility,
     });
     setSaving(false);

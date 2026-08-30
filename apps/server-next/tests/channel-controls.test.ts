@@ -88,6 +88,42 @@ describe('server-next second-slice channel controls', () => {
     });
   });
 
+  test('persists channel description (title) on create and update', async () => {
+    const { app } = createApp(['user-1', 'team-1', 'channel-all', 'channel-ops']);
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+
+    // 创建时携带描述：前端新建频道表单的描述输入框走 title 通道。
+    await expect(
+      app.createChannel({
+        userId: 'user-1',
+        teamId: 'team-1',
+        name: 'ops',
+        title: '运维例行公告',
+        visibility: 'public',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'channel-ops', title: '运维例行公告' },
+    });
+
+    // 编辑描述：updateChannel 的 title 变更必须持久化并在回读中可见。
+    await expect(
+      app.updateChannel({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-ops',
+        title: '新的描述',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      channel: { id: 'channel-ops', title: '新的描述' },
+    });
+    await expect(app.listChannels({ teamId: 'team-1', userId: 'user-1' })).resolves.toMatchObject({
+      ok: true,
+      channels: expect.arrayContaining([expect.objectContaining({ id: 'channel-ops', title: '新的描述' })]),
+    });
+  });
+
   test('keeps all channel management limited to creator title updates', async () => {
     const { app } = createApp(['user-1', 'team-1', 'channel-all']);
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
