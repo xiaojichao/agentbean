@@ -1942,13 +1942,14 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   await page.waitForFunction(
     `(() => {
       return document.querySelector('[data-smoke="channel-project-progress"]') !== null
-        && document.querySelector('[data-smoke="channel-project-settings-entry"]') !== null
         && ['active', 'review', 'complete'].every((lane) =>
           document.querySelector('[data-smoke="channel-project-lane-' + lane + '"]') !== null)
-        && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null;
+        && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null
+        && !Array.from(document.querySelectorAll('button')).some((button) =>
+          ['配置首个项目阶段', '项目设置', '查看项目设置', '项目设置 / 阶段配置'].includes((button.textContent ?? '').trim()));
     })()
     `,
-    'non-default channel renders the unified project workbench with empty lanes and the settings entry',
+    'non-default channel renders the unified project workbench with empty lanes and no manual stage config entry',
     timeoutMs,
   );
 
@@ -2057,43 +2058,21 @@ async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, webS
     timeoutMs,
   );
 
-  // #1179：项目设置独立于默认推进面；打开后可见配置面，推进面本身不混排创建阶段/依赖表单。
-  // 工具栏设置入口（「配置首个项目阶段」/归档态「查看项目设置」）承载打开动作。
+  // #1179：推进面不混排任何配置表单；设计文档（2026-07-17）语义是阶段由 Server 写入事实，
+  // UI 不提供手动配置入口（「配置首个项目阶段」及设置弹窗已剔除）。
   await page.waitForFunction(
     `
     (() => {
       const surface = document.querySelector('[data-smoke="channel-project-progress"]');
       if (!surface) return false;
       const text = surface.textContent ?? '';
-      const settingsButton = surface.querySelector('[data-smoke="channel-project-settings-entry"]');
       return !text.includes('阶段依赖')
         && !text.includes('添加依赖')
-        && Boolean(settingsButton)
+        && !text.includes('配置首个项目阶段')
         && document.body.querySelector('[data-smoke="channel-project-settings-dialog"]') === null;
     })()
     `,
-    'project surface keeps config forms out of the runtime view',
-    timeoutMs,
-  );
-  const openedSettings = await page.evaluateJson(`
-    (() => {
-      const button = document.querySelector('[data-smoke="channel-project-settings-entry"]');
-      if (!button) return false;
-      button.click();
-      return true;
-    })()
-  `);
-  if (!openedSettings) throw new Error('Could not open channel project settings from the project surface');
-  await page.waitForFunction(
-    `document.querySelector('[data-smoke="channel-project-settings-dialog"]') !== null
-      && document.querySelector('[data-smoke="channel-project-settings"]') !== null`,
-    'project settings dialog renders the configuration surface',
-    timeoutMs,
-  );
-  await page.click('[data-smoke="channel-project-settings-close"]');
-  await page.waitForFunction(
-    `document.querySelector('[data-smoke="channel-project-settings-dialog"]') === null`,
-    'project settings dialog closes and returns to the runtime view',
+    'project surface keeps all config forms and the manual stage entry out of the runtime view',
     timeoutMs,
   );
 

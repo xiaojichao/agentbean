@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActiveMemoryAttributionDto, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ConsistencyTokenV1, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiConfigurationReadinessDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type OutputPackageDto, type OutputPackagePendingDeliveryDto, type OutputPackageProjectionResultV1, type OutputPackageSummaryDto, type PackageMemberAvailableActionsDto, type PackageReviewAction, type PackageReviewDto, type ProjectArtifactCollectionDto, type ProjectArtifactFinalizationDto, type ProjectArtifactLibraryDto, type ProjectArtifactReviewDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type SetProjectArtifactFinalVersionInput, type StageDeliveryReviewWorkspaceV1, type SubmitProjectArtifactReviewInput, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type TaskDeliveryOverviewV1, type ChannelTaskWorkspaceV1, type UpdatePiProviderCardInput, type ProjectChannelWorkspaceDto, type ArtifactRevisionConflictDto, type ArtifactVersionRevisionSaveResultDto, type PackageReviewRevisionSaveV1 } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActiveMemoryAttributionDto, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ConsistencyTokenV1, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiConfigurationReadinessDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type OutputPackageDto, type OutputPackagePendingDeliveryDto, type OutputPackageProjectionResultV1, type OutputPackageSummaryDto, type PackageMemberAvailableActionsDto, type PackageReviewAction, type PackageReviewDto, type ProjectArtifactCollectionDto, type ProjectArtifactFinalizationDto, type ProjectArtifactLibraryDto, type ProjectArtifactReviewDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type SetProjectArtifactFinalVersionInput, type StageDeliveryReviewWorkspaceV1, type SubmitProjectArtifactReviewInput, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type TaskDeliveryOverviewV1, type ChannelTaskWorkspaceV1, type UpdatePiProviderCardInput, type ProjectChannelWorkspaceDto, type ArtifactRevisionConflictDto, type ArtifactVersionRevisionSaveResultDto, type PackageReviewRevisionSaveV1 } from '@agentbean/contracts';
 
 /** #1061 三个 package review 命令的 socket payload(userId/teamId 由 Server 注入)。 */
 export type PackageReviewCommandSocketPayload = {
@@ -1018,10 +1018,6 @@ export interface ProjectEvents {
   workspace(channelId: string, revisionId?: string): Promise<{ ok: boolean; workspace?: ProjectChannelWorkspaceDto | null; error?: string; message?: string }>;
   /** #966 原子发布：以基线 revision 为依据整体创建下一 workspace revision。 */
   publishWorkspace(payload: { channelId: string; baselineRevisionId: string; files: Array<{ path: string; artifactId: string }> }): Promise<{ ok: boolean; workspace?: ProjectChannelWorkspaceDto | null; error?: string; message?: string; details?: Record<string, unknown> }>;
-  createInitialStage(payload: Omit<CreateInitialProjectStageInput, 'userId' | 'teamId'>): Promise<ProjectMutationResult>;
-  createStage(payload: Omit<CreateProjectStageInput, 'userId' | 'teamId'>): Promise<ProjectMutationResult>;
-  createStageEdge(payload: Omit<CreateProjectStageEdgeInput, 'userId' | 'teamId'>): Promise<ProjectMutationResult>;
-  deleteStageEdge(payload: Omit<DeleteProjectStageEdgeInput, 'userId' | 'teamId'>): Promise<ProjectMutationResult>;
   onUpdated(channelId: string, handler: (overview: ChannelProjectOverviewDto | null) => void): () => void;
   /** #823 按逻辑产物读取当前版、历史、来源与 lineage。 */
   artifactCollections(channelId: string): Promise<{
@@ -1207,18 +1203,6 @@ export function projectEvents(socket: Socket = getWebSocket()): ProjectEvents {
     },
     publishWorkspace(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.project.publishWorkspace, payload);
-    },
-    createInitialStage(payload) {
-      return emitWithTimeout(socket, WEB_EVENTS.project.createInitialStage, payload);
-    },
-    createStage(payload) {
-      return emitWithTimeout(socket, WEB_EVENTS.project.createStage, payload);
-    },
-    createStageEdge(payload) {
-      return emitWithTimeout(socket, WEB_EVENTS.project.createStageEdge, payload);
-    },
-    deleteStageEdge(payload) {
-      return emitWithTimeout(socket, WEB_EVENTS.project.deleteStageEdge, payload);
     },
     onUpdated(channelId, handler) {
       const listener = (payload: { channelId?: string; overview?: ChannelProjectOverviewDto | null }) => {

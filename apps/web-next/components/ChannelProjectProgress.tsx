@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Clock3,
   PackageCheck,
-  Settings2,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type {
@@ -60,7 +59,6 @@ export function ChannelProjectProgress({
   onBackToThread,
   onReviewDeliveryFiles,
   onViewDeliveryFiles,
-  onOpenSettings,
 }: {
   overview: ChannelProjectOverviewDto | null;
   workspace: ChannelTaskWorkspaceV1 | null;
@@ -77,7 +75,6 @@ export function ChannelProjectProgress({
   onReviewDeliveryFiles: (packageMeta: TaskCardReviewProjection, versionId: string | undefined) => void;
   /** 原型已结束卡「查看交付与 final」：定位 Files 逻辑产物视图。 */
   onViewDeliveryFiles: (taskId: string) => void;
-  onOpenSettings: () => void;
 }) {
   const [creatorFilter, setCreatorFilter] = useState('all');
   const [focusFilter, setFocusFilter] = useState('all');
@@ -135,7 +132,7 @@ export function ChannelProjectProgress({
   return (
     <section className="min-h-0 flex-1 overflow-auto bg-[#fcfcfb]" data-smoke="channel-project-progress">
       <div className="sticky top-0 z-10 border-b border-neutral-200 bg-white/95 px-4 py-3 backdrop-blur">
-        {/* 三列布局：左归档徽章 / 中筛选下拉（绝对居中）/ 右项目设置入口——空数据频道也渲染完整工作台框架。 */}
+        {/* 三列布局：左归档徽章 / 中筛选下拉（绝对居中）/ 右占位列——空数据频道也渲染完整工作台框架。 */}
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
           <div>
             {archived || overview?.archived ? (
@@ -177,19 +174,7 @@ export function ChannelProjectProgress({
               ])}
             </select>
           </div>
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              data-smoke="channel-project-settings-entry"
-              className="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-neutral-900 px-3 text-xs font-semibold text-white hover:bg-neutral-800"
-            >
-              <Settings2 size={13} />
-              {archived || overview?.archived
-                ? '查看项目设置'
-                : stages.length > 0 ? '项目设置' : '配置首个项目阶段'}
-            </button>
-          </div>
+          <div className="flex justify-end" />
         </div>
       </div>
 

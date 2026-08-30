@@ -35,12 +35,6 @@ import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
 import { StageDeliveryReviewWorkspace, type StageHandoffAction } from '@/components/StageDeliveryReviewWorkspace';
 import type { TaskCardReviewProjection } from '@/components/TaskCardReviewEntryPanel';
 import {
-  ChannelProjectOverview,
-  type InitialProjectStageDraft,
-  type ProjectStageDraft,
-  type ProjectStageEdgeDraft,
-} from '@/components/ChannelProjectOverview';
-import {
   ChannelProjectProgress,
   type ChannelProjectProgressState,
 } from '@/components/ChannelProjectProgress';
@@ -3641,8 +3635,6 @@ function ConversationTasks({
 }) {
   const [projectOverview, setProjectOverview] = useState<ChannelProjectOverviewDto | null>();
   const [projectOverviewError, setProjectOverviewError] = useState<{ kind: 'no_permission' | 'error'; message: string } | null>(null);
-  const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
-  const [showProjectSettings, setShowProjectSettings] = useState(false);
   const projectTaskVersion = tasks
     .map((task) => `${task.id}:${task.status}:${task.updatedAt}`)
     .sort()
@@ -3653,35 +3645,11 @@ function ConversationTasks({
     setProjectOverviewError(null);
   }, []);
 
-  const refreshProjectOverview = useCallback(async () => {
-    try {
-      const [overviewResult, artifactResult] = await Promise.all([
-        projectEvents().overview(channelId),
-        projectEvents().artifactCollections(channelId),
-      ]);
-      if (overviewResult.ok) {
-        applyProjectOverview(overviewResult.overview ?? null);
-      } else {
-        const code = overviewResult.error ?? '';
-        setProjectOverviewError({
-          kind: code === 'FORBIDDEN' || code === 'UNAUTHORIZED' ? 'no_permission' : 'error',
-          message: overviewResult.message ?? overviewResult.error ?? '项目推进加载失败，请稍后重试',
-        });
-      }
-      if (artifactResult.ok) setProjectArtifactLibrary(artifactResult.library ?? null);
-    } catch {
-      setProjectOverviewError({ kind: 'error', message: '项目推进加载失败，请稍后重试' });
-    }
-  }, [applyProjectOverview, channelId]);
-
   useEffect(() => {
     let active = true;
     setProjectOverview(undefined);
     setProjectOverviewError(null);
-    void Promise.all([
-      projectEvents().overview(channelId),
-      projectEvents().artifactCollections(channelId),
-    ]).then(([overviewResult, artifactResult]) => {
+    void projectEvents().overview(channelId).then((overviewResult) => {
       if (!active) return;
       if (overviewResult.ok) {
         applyProjectOverview(overviewResult.overview ?? null);
@@ -3692,7 +3660,6 @@ function ConversationTasks({
           message: overviewResult.message ?? overviewResult.error ?? '项目推进加载失败，请稍后重试',
         });
       }
-      if (artifactResult.ok) setProjectArtifactLibrary(artifactResult.library ?? null);
     }).catch(() => {
       if (!active) return;
       setProjectOverviewError({ kind: 'error', message: '项目推进加载失败，请稍后重试' });
@@ -3703,94 +3670,10 @@ function ConversationTasks({
   useEffect(() => projectEvents().onUpdated(channelId, (nextOverview) => {
     applyProjectOverview(nextOverview);
   }), [applyProjectOverview, channelId]);
-  useEffect(
-    () => projectEvents().onArtifactsUpdated(channelId, setProjectArtifactLibrary),
-    [channelId],
-  );
 
   const hasProjectStages = (projectOverview?.stages.length ?? 0) > 0;
   const workspaceReadOnly = archived || Boolean(projectOverview?.archived);
 
-  const createInitialProjectStage = async (draft: InitialProjectStageDraft): Promise<string | null> => {
-    const idempotencyKey = typeof globalThis.crypto?.randomUUID === 'function'
-      ? globalThis.crypto.randomUUID()
-      : `project-stage-${Date.now()}`;
-    const result = await projectEvents().createInitialStage({
-      channelId,
-      expectedRevision: 0,
-      idempotencyKey,
-      ...draft,
-    });
-    if (!result.ok || !result.overview) {
-      return result.message ?? '创建项目阶段失败，请刷新后重试';
-    }
-    applyProjectOverview(result.overview);
-    return null;
-  };
-
-  const nextIdempotencyKey = (prefix: string): string => (
-    typeof globalThis.crypto?.randomUUID === 'function'
-      ? globalThis.crypto.randomUUID()
-      : `${prefix}-${Date.now()}`
-  );
-
-  const createProjectStage = async (draft: ProjectStageDraft): Promise<string | null> => {
-    if (!projectOverview) return '阶段已变化，请刷新后重试';
-    const result = await projectEvents().createStage({
-      channelId,
-      expectedRevision: projectOverview.profile.revision,
-      idempotencyKey: nextIdempotencyKey('project-stage'),
-      stage: draft,
-    });
-    if (!result.ok || !result.overview) {
-      return result.message ?? '创建项目阶段失败，请刷新后重试';
-    }
-    applyProjectOverview(result.overview);
-    return null;
-  };
-
-  const createProjectStageEdge = async (draft: ProjectStageEdgeDraft): Promise<string | null> => {
-    const stages = projectOverview?.stages ?? [];
-    const upstream = stages.find((stage) => stage.id === draft.upstreamStageId);
-    const downstream = stages.find((stage) => stage.id === draft.downstreamStageId);
-    if (!projectOverview || !upstream || !downstream) return '阶段已变化，请刷新后重试';
-    const result = await projectEvents().createStageEdge({
-      channelId,
-      expectedRevision: projectOverview.profile.revision,
-      idempotencyKey: nextIdempotencyKey('project-stage-edge'),
-      upstreamStageId: draft.upstreamStageId,
-      downstreamStageId: draft.downstreamStageId,
-      semantics: draft.semantics,
-      requiredInputs: draft.requiredInputs,
-      expectedUpstreamTaskRevision: upstream.taskRevision,
-      expectedDownstreamTaskRevision: downstream.taskRevision,
-    });
-    if (!result.ok || !result.overview) {
-      return result.message ?? '配置阶段依赖失败，请刷新后重试';
-    }
-    applyProjectOverview(result.overview);
-    return null;
-  };
-
-  const deleteProjectStageEdge = async (edgeId: string): Promise<string | null> => {
-    if (!projectOverview) return '阶段已变化，请刷新后重试';
-    const result = await projectEvents().deleteStageEdge({
-      channelId,
-      expectedRevision: projectOverview.profile.revision,
-      idempotencyKey: nextIdempotencyKey('project-stage-edge-delete'),
-      edgeId,
-    });
-    if (!result.ok || !result.overview) {
-      return result.message ?? '删除阶段依赖失败，请刷新后重试';
-    }
-    applyProjectOverview(result.overview);
-    return null;
-  };
-
-  const closeProjectSettings = () => {
-    setShowProjectSettings(false);
-    void refreshProjectOverview();
-  };
 
   const projectProgressState: ChannelProjectProgressState = loadError?.kind
     ?? projectOverviewError?.kind
@@ -3816,59 +3699,8 @@ function ConversationTasks({
         onBackToThread={onBackToThread}
         onReviewDeliveryFiles={onReviewDeliveryFiles}
         onViewDeliveryFiles={onViewDeliveryFiles}
-        onOpenSettings={() => setShowProjectSettings(true)}
       />
 
-      {showProjectSettings ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
-          role="dialog"
-          aria-modal="true"
-          aria-label="项目设置 / 阶段配置"
-          data-smoke="channel-project-settings-dialog"
-        >
-          <div className="flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
-            <div className="flex h-12 shrink-0 items-center border-b border-neutral-200 px-4">
-              <div>
-                <div className="text-sm font-semibold text-neutral-900">项目设置 / 阶段配置</div>
-                <div className="text-[11px] text-neutral-500">配置能力与运行工作区分离；阶段事实仍由 Server 持久化。</div>
-              </div>
-              <button
-                type="button"
-                onClick={closeProjectSettings}
-                className="ml-auto flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100"
-                aria-label="关闭项目设置"
-                data-smoke="channel-project-settings-close"
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <div className="min-h-0 overflow-y-auto">
-              {projectOverview === undefined ? (
-                <div className="p-6 text-center text-sm text-neutral-500">正在加载项目设置…</div>
-              ) : (
-                <ChannelProjectOverview
-                  overview={projectOverview}
-                  tasks={tasks.map((task) => ({ id: task.id, title: task.title }))}
-                  participants={participants}
-                  currentUserId={currentUserId}
-                  artifactLibrary={projectArtifactLibrary}
-                  onCreate={workspaceReadOnly ? undefined : createInitialProjectStage}
-                  onCreateStage={workspaceReadOnly ? undefined : createProjectStage}
-                  onCreateEdge={workspaceReadOnly ? undefined : createProjectStageEdge}
-                  onDeleteEdge={workspaceReadOnly ? undefined : deleteProjectStageEdge}
-                />
-              )}
-              {projectOverviewError ? (
-                <div className="p-6 text-center text-sm text-red-600">{projectOverviewError.message}</div>
-              ) : null}
-              {workspaceReadOnly && projectOverview === null ? (
-                <div className="p-6 text-center text-sm text-neutral-500">频道已归档，不能创建项目阶段。</div>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

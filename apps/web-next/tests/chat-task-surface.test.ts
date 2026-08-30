@@ -155,7 +155,7 @@ describe('chat task surface', () => {
     expect(source).not.toContain('channel-tasks-view-plain');
   });
 
-  test('#1179 项目阶段配置只在独立设置面，并用 revision 保护与 createStage 追加阶段', () => {
+  test('#1179 推进面无任何手动阶段配置入口（设计文档：阶段由 Server 写入事实），overview 投影链保留', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
     const start = source.indexOf('function ConversationTasks');
     const end = source.indexOf('function TaskDetailPanel', start);
@@ -163,20 +163,19 @@ describe('chat task surface', () => {
     expect(end).toBeGreaterThan(start);
     const panel = source.slice(start, end);
 
-    expect(panel).toContain('showProjectSettings');
-    expect(panel).toContain('data-smoke="channel-project-settings-dialog"');
+    // 设计文档（2026-07-17 project-task-file-management）无「配置首个项目阶段」概念：
+    // 阶段由 Server 写入事实——UI 无设置弹窗、无前端 stage 写命令（防回潮）。
+    expect(panel).not.toContain('showProjectSettings');
+    expect(panel).not.toContain('channel-project-settings-dialog');
+    expect(panel).not.toMatch(/<ChannelProjectOverview[\s>/]/);
+    expect(panel).not.toContain('projectEvents().createStage(');
+    expect(panel).not.toContain('projectEvents().createInitialStage(');
+    expect(panel).not.toContain('createStageEdge');
+    expect(panel).not.toContain('配置首个项目阶段');
+    // overview 投影刷新链保留（喂 ChannelProjectProgress）。
     expect(panel).toContain('acceptChannelProjectOverview');
-    expect(panel).toContain('onCreateStage={workspaceReadOnly ? undefined : createProjectStage}');
-    expect(panel).toContain("projectEvents().createStage({");
-    expect(panel).toContain('closeProjectSettings');
-    expect(panel).toContain('void refreshProjectOverview()');
-
-    const progressStart = panel.indexOf('<ChannelProjectProgress');
-    const progressEnd = panel.indexOf('onOpenSettings', progressStart);
-    const progressBranch = panel.slice(progressStart, progressEnd);
-    expect(progressBranch).not.toContain('<ChannelProjectOverview');
-    expect(progressBranch).not.toContain('onCreateEdge');
-    expect(progressBranch).not.toContain('createInitialProjectStage');
+    expect(panel).toContain('projectEvents().overview(channelId)');
+    expect(panel).toContain('onUpdated(channelId');
   });
 
   test('频道级子视图统一：所有频道（含 #all 与私聊）一律渲染项目工作台', () => {
