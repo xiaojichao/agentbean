@@ -1050,4 +1050,23 @@ describe('ProjectFilesBoard 无项目画像回退(#1134 gate 放宽)', () => {
     });
     expect(document.querySelectorAll('[data-smoke="file-version-row"]').length).toBe(0);
   });
+
+  test('全空（packages/pending/library/stages 皆空）→ 空文件库板形态：工具栏渲染、左栏暂无文件组、右栏暂无文件行', () => {
+    render(<ProjectFilesBoard
+      channelId="channel-1"
+      packages={[]}
+      pendingDeliveries={[]}
+      library={null}
+      stages={[]}
+      agentNames={agentNames}
+      dataRevision={0}
+      onAddReference={() => {}}
+      loadPromotableArtifacts={async () => []}
+    />);
+    expect(document.querySelector('[data-smoke="files-toolbar-search"]')).toBeTruthy();
+    expect(document.querySelector('[data-smoke="file-group-rail"]')).toBeTruthy();
+    expect(screen.getByText('暂无文件组')).toBeTruthy();
+    expect(screen.getByText('暂无文件行')).toBeTruthy();
+    expect(document.querySelectorAll('[data-smoke="file-version-row"]').length).toBe(0);
+  });
 });

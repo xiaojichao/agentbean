@@ -146,7 +146,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(cliSource).not.toContain('await runAgentBeanNextBrowserSmoke({');
   });
 
-  test('频道 Tasks browser smoke 覆盖无阶段启动引导、普通任务紧凑列表与跨子视图详情清理', () => {
+  test('频道 Tasks browser smoke 覆盖统一项目工作台（空泳道）、深链回落与设置入口', () => {
     const source = readFileSync(new URL('../../../scripts/smoke-agentbean-next-browser.mjs', import.meta.url), 'utf8');
     const start = source.indexOf('export async function exerciseWebUiChannelNoProjectFactsSmoke');
     const end = source.indexOf('async function exerciseWebUiChannelTaskSubviewSmoke', start);
@@ -154,11 +154,11 @@ describe('AgentBean Next browser smoke script', () => {
 
     expect(start).toBeGreaterThan(-1);
     expect(smoke).toContain('plain-task-workbench-');
-    expect(smoke).toContain('channel-project-setup-prompt');
+    expect(smoke).toContain('channel-project-progress');
     expect(smoke).toContain('channel-plain-task-workspace');
     // 频道级子视图统一（产品决策 2026-08-30）：所有频道（含 #all/私聊）一律锁项目工作台。
-    expect(smoke).toContain('non-default channel locks the Tasks tab to the project workbench subview');
-    expect(smoke).toContain('default #all channel locks the Tasks tab to the unified project workbench (setup prompt or managed lanes)');
+    expect(smoke).toContain('non-default channel renders the unified project workbench with empty lanes and the settings entry');
+    expect(smoke).toContain('default #all channel locks the Tasks tab to the unified project workbench (empty or managed lanes)');
     expect(smoke).toContain('task-only deep link falls back to the unified project workbench without the retired detail panel');
     expect(smoke).toContain("!new URLSearchParams(window.location.search).has('task')");
     expect(smoke).toContain("document.querySelector('[data-smoke=\"chat-task-detail\"]') === null");
@@ -1486,9 +1486,8 @@ describe('AgentBean Next browser smoke script', () => {
         calls.push(['evaluateJson', expression]);
         return {
           filename: 'browser-smoke-artifact.md',
-          attachmentSurfaceVisible: true,
-          logicalBoardVisible: false,
-          ordinaryEntryVisible: true,
+          attachmentSurfaceVisible: false,
+          logicalBoardVisible: true,
         };
       },
     };
@@ -1499,9 +1498,8 @@ describe('AgentBean Next browser smoke script', () => {
       timeoutMs: 1000,
     })).resolves.toMatchObject({
       filename: 'browser-smoke-artifact.md',
-      attachmentSurfaceVisible: true,
-      logicalBoardVisible: false,
-      ordinaryEntryVisible: true,
+      attachmentSurfaceVisible: false,
+      logicalBoardVisible: true,
     });
     expect(calls).toContainEqual(['click', '[data-smoke="channel-files-tab"]']);
     expect(calls.filter((call) => call[0] === 'waitForFunction')).toHaveLength(1);
@@ -1509,9 +1507,9 @@ describe('AgentBean Next browser smoke script', () => {
       expression: string;
       description: string;
     };
-    expect(waitCall.expression).toContain('channel-files-view');
-    expect(waitCall.expression).toContain('channel-file-entry');
-    expect(waitCall.description).toContain('attachment files surface');
+    expect(waitCall.expression).toContain('project-files-board');
+    expect(waitCall.expression).toContain('files-project-surface-loading');
+    expect(waitCall.description).toContain('unified logical board');
     expect(calls.filter((call) => call[0] === 'evaluateJson')).toHaveLength(1);
   });
 
@@ -1543,9 +1541,8 @@ describe('AgentBean Next browser smoke script', () => {
         }
         return {
           filename: 'webui-channel-files-artifact-smoke.md',
-          attachmentSurfaceVisible: true,
-          logicalBoardVisible: false,
-          ordinaryEntryVisible: true,
+          attachmentSurfaceVisible: false,
+          logicalBoardVisible: true,
         };
       },
     };
@@ -1556,9 +1553,8 @@ describe('AgentBean Next browser smoke script', () => {
       timeoutMs: 1000,
     })).resolves.toMatchObject({
       filename: 'webui-channel-files-artifact-smoke.md',
-      attachmentSurfaceVisible: true,
-      logicalBoardVisible: false,
-      ordinaryEntryVisible: true,
+      attachmentSurfaceVisible: false,
+      logicalBoardVisible: true,
       uploadReadable: true,
     });
     expect(calls[0]?.[0]).toBe('setFileInputFiles');

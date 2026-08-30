@@ -158,7 +158,7 @@ describe('chat task surface', () => {
   test('#1179 项目阶段配置只在独立设置面，并用 revision 保护与 createStage 追加阶段', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
     const start = source.indexOf('function ConversationTasks');
-    const end = source.indexOf('function ConversationFiles', start);
+    const end = source.indexOf('function TaskDetailPanel', start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const panel = source.slice(start, end);

@@ -86,10 +86,6 @@ export function ChannelProjectProgress({
     () => workspace?.entries.filter((entry) => channelTaskEntrySubview(entry) === 'project') ?? [],
     [workspace],
   );
-  const ordinaryTaskCount = useMemo(
-    () => workspace?.entries.filter((entry) => channelTaskEntrySubview(entry) === 'plain').length ?? 0,
-    [workspace],
-  );
 
   if (state !== 'ready') {
     return <ProjectProgressState state={state} errorMessage={errorMessage} />;
@@ -138,18 +134,20 @@ export function ChannelProjectProgress({
 
   return (
     <section className="min-h-0 flex-1 overflow-auto bg-[#fcfcfb]" data-smoke="channel-project-progress">
-      {stages.length > 0 || projectEntries.length > 0 ? (
-        <div className="sticky top-0 z-10 border-b border-neutral-200 bg-white/95 px-4 py-3 backdrop-blur">
-          <div className="flex flex-wrap items-center gap-3">
+      <div className="sticky top-0 z-10 border-b border-neutral-200 bg-white/95 px-4 py-3 backdrop-blur">
+        {/* 三列布局：左归档徽章 / 中筛选下拉（绝对居中）/ 右项目设置入口——空数据频道也渲染完整工作台框架。 */}
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+          <div>
             {archived || overview?.archived ? (
               <span className="rounded bg-neutral-200 px-2 py-1 text-xs font-medium text-neutral-600">已归档 · 只读</span>
             ) : null}
-            <div className="ml-auto flex flex-wrap items-center gap-2">
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center justify-center gap-2">
             <select
               aria-label="项目任务创建者"
               value={creatorFilter}
               onChange={(event) => setCreatorFilter(event.target.value)}
-              className={filterClass}
+              className={`${filterClass} max-w-44 truncate`}
             >
               <option value="all">全部创建者</option>
               {participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
@@ -158,7 +156,7 @@ export function ChannelProjectProgress({
               aria-label="项目任务责任焦点"
               value={focusFilter}
               onChange={(event) => setFocusFilter(event.target.value)}
-              className={filterClass}
+              className={`${filterClass} max-w-44 truncate`}
             >
               <option value="all">全部责任焦点</option>
               <option value="unassigned">尚未产生责任</option>
@@ -169,7 +167,7 @@ export function ChannelProjectProgress({
               aria-label="项目任务审核人"
               value={reviewerFilter}
               onChange={(event) => setReviewerFilter(event.target.value)}
-              className={filterClass}
+              className={`${filterClass} max-w-44 truncate`}
             >
               <option value="all">全部审核事实</option>
               {currentUserId ? <option value="pending-me">待我审核</option> : null}
@@ -178,18 +176,24 @@ export function ChannelProjectProgress({
                 <option key={`actual:${participant.id}`} value={`actual:${participant.id}`}>实际：{participant.name}</option>,
               ])}
             </select>
-            </div>
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              data-smoke="channel-project-settings-entry"
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-neutral-900 px-3 text-xs font-semibold text-white hover:bg-neutral-800"
+            >
+              <Settings2 size={13} />
+              {archived || overview?.archived
+                ? '查看项目设置'
+                : stages.length > 0 ? '项目设置' : '配置首个项目阶段'}
+            </button>
           </div>
         </div>
-      ) : null}
+      </div>
 
-      {stages.length === 0 && projectEntries.length === 0 ? (
-        <ChannelProjectSetupPrompt
-          ordinaryTaskCount={ordinaryTaskCount}
-          archived={archived || Boolean(overview?.archived)}
-          onOpenSettings={onOpenSettings}
-        />
-      ) : !hasVisibleEntries ? (
+      {!hasVisibleEntries && (stages.length > 0 || projectEntries.length > 0) ? (
         <div className="m-4 border border-dashed border-neutral-300 bg-white px-6 py-12 text-center text-sm text-neutral-500">
           当前筛选下没有项目任务
         </div>
@@ -232,55 +236,6 @@ export function ChannelProjectProgress({
           })}
         </div>
       )}
-    </section>
-  );
-}
-
-export function ChannelProjectSetupPrompt({
-  ordinaryTaskCount,
-  archived,
-  onOpenSettings,
-  compact = false,
-}: {
-  ordinaryTaskCount: number;
-  archived: boolean;
-  onOpenSettings: () => void;
-  compact?: boolean;
-}) {
-  return (
-    <section
-      className={compact
-        ? 'mx-4 mt-4 flex shrink-0 flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3'
-        : 'm-4 rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-white px-6 py-8'}
-      data-smoke="channel-project-setup-prompt"
-    >
-      <div className={compact ? 'min-w-0 flex-1' : ''}>
-        <div className={compact ? '' : 'mx-auto max-w-2xl text-center'}>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700">频道即项目空间</div>
-          <h2 className="mt-1 text-base font-semibold text-neutral-900">把频道工作组织成阶段推进</h2>
-          <p className={`text-xs leading-5 text-neutral-600 ${compact ? 'mt-0.5' : 'mt-2'}`}>
-            {ordinaryTaskCount > 0
-              ? `已有 ${ordinaryTaskCount} 个普通任务；配置首个阶段时可明确绑定任务、负责人、审核人与验收标准。`
-              : '配置首个阶段，明确任务、负责人、审核人与验收标准。'}
-            不会根据负责人、标签或状态自动改写历史任务。
-          </p>
-        </div>
-        {!compact ? (
-          <div className="mx-auto mt-6 grid max-w-3xl gap-3 text-left md:grid-cols-3">
-            <SetupStep number="1" title="绑定阶段任务" detail="从现有普通任务中显式选择，不猜测历史语义。" />
-            <SetupStep number="2" title="约定验收责任" detail="设置阶段负责人、建议审核人与验收标准。" />
-            <SetupStep number="3" title="从讨论串触发执行" detail="@智能体 后由 Server 回填责任、交付与审核事实。" />
-          </div>
-        ) : null}
-      </div>
-      <button
-        type="button"
-        onClick={onOpenSettings}
-        className={`${compact ? 'inline-flex' : 'mx-auto mt-6 flex w-fit'} h-9 items-center gap-1.5 rounded-md bg-neutral-900 px-4 text-xs font-semibold text-white hover:bg-neutral-800`}
-      >
-        <Settings2 size={14} />
-        {archived ? '查看项目设置' : '配置首个项目阶段'}
-      </button>
     </section>
   );
 }
@@ -505,18 +460,6 @@ function ProjectLaneIcon({ lane }: { lane: ProjectLaneId }) {
   if (lane === 'review') return <PackageCheck size={15} className="text-amber-600" />;
   if (lane === 'complete') return <CheckCircle2 size={15} className="text-emerald-600" />;
   return <Clock3 size={15} className="text-violet-600" />;
-}
-
-function SetupStep({ number, title, detail }: { number: string; title: string; detail: string }) {
-  return (
-    <div className="rounded-lg border border-neutral-200 bg-white p-3 shadow-sm">
-      <div className="flex items-center gap-2">
-        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-300 text-[10px] font-bold text-neutral-900">{number}</span>
-        <h3 className="text-xs font-semibold text-neutral-900">{title}</h3>
-      </div>
-      <p className="mt-2 text-[11px] leading-4 text-neutral-500">{detail}</p>
-    </div>
-  );
 }
 
 function projectLane(

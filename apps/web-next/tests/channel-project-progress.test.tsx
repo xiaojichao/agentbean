@@ -312,15 +312,17 @@ describe('频道项目推进工作区', () => {
     expect(screen.getByText('读取失败')).toBeTruthy();
   });
 
-  test('无项目事实时用已有普通任务数量引导显式配置首个阶段', () => {
+  test('无项目事实时渲染空泳道工作台框架（居中筛选下拉+设置入口）', () => {
     const onOpenSettings = vi.fn();
     renderProgress({ overview: null, workspace: plainWorkspace(), onOpenSettings });
 
-    expect(screen.getByText('把频道工作组织成阶段推进')).toBeTruthy();
-    expect(screen.getByText(/已有 2 个普通任务/)).toBeTruthy();
-    expect(screen.getByText('绑定阶段任务')).toBeTruthy();
-    expect(screen.getByText('约定验收责任')).toBeTruthy();
-    expect(screen.getByText('从讨论串触发执行')).toBeTruthy();
+    expect(screen.getByLabelText('项目任务创建者')).toBeTruthy();
+    expect(screen.getByLabelText('项目任务责任焦点')).toBeTruthy();
+    expect(screen.getByLabelText('项目任务审核人')).toBeTruthy();
+    expect(screen.getByText('暂无进行中的阶段')).toBeTruthy();
+    expect(screen.getByText('暂无待审核交付')).toBeTruthy();
+    expect(screen.getByText('暂无已结束阶段')).toBeTruthy();
+    expect(screen.queryByText('把频道工作组织成阶段推进')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '配置首个项目阶段' }));
     expect(onOpenSettings).toHaveBeenCalledOnce();
   });
@@ -399,11 +401,12 @@ describe('频道项目推进工作区', () => {
     expect(callbacks.onViewDeliveryFiles).toHaveBeenCalledWith('task-1');
   });
 
-  test('归档频道只提供查看设置入口，不暴露运行态写操作', () => {
+  test('归档频道提供查看设置入口（只读），不暴露运行态写操作', () => {
     renderProgress({ overview: { ...overview(), archived: true }, archived: true });
     expect(screen.getByText('已归档 · 只读')).toBeTruthy();
-    // 微调对齐原型：header 只保留筛选下拉；项目设置按钮移除（归档徽章保留为只读状态提示）。
-    expect(screen.queryByRole('button', { name: '查看项目设置' })).toBeNull();
+    // 工具栏设置入口在归档态切换为「查看项目设置」；不出现运行态写操作文案。
+    expect(screen.getByRole('button', { name: '查看项目设置' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '配置首个项目阶段' })).toBeNull();
     expect(screen.queryByRole('button', { name: '项目设置 / 阶段配置' })).toBeNull();
   });
 
