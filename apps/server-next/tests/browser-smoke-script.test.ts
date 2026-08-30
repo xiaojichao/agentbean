@@ -155,16 +155,11 @@ describe('AgentBean Next browser smoke script', () => {
     expect(start).toBeGreaterThan(-1);
     expect(smoke).toContain('plain-task-workbench-');
     expect(smoke).toContain('channel-project-setup-prompt');
-    expect(smoke).toContain('channel-plain-task-list');
     expect(smoke).toContain('channel-plain-task-workspace');
-    expect(smoke).toContain("[title=\"列表\"]");
-    expect(smoke).toContain('task-card-facts');
-    // 原型对齐（#1225 收口）：task-only 详情已退役——守卫锚定新契约（点击不开侧边栏、深链回落）。
-    expect(smoke).toContain('ordinary channel Task click no longer opens the retired task-only detail');
-    expect(smoke).toContain('task-only deep link falls back to the locked ordinary Tasks surface without the retired detail panel');
-    // 频道级子视图锁定：非默认频道锁项目工作台；#all 锁普通任务且无项目设置入口。
+    // 频道级子视图统一（产品决策 2026-08-30）：所有频道（含 #all/私聊）一律锁项目工作台。
     expect(smoke).toContain('non-default channel locks the Tasks tab to the project workbench subview');
-    expect(smoke).toContain('default #all channel locks the Tasks tab to the ordinary subview without project settings');
+    expect(smoke).toContain('default #all channel locks the Tasks tab to the unified project workbench (setup prompt or managed lanes)');
+    expect(smoke).toContain('task-only deep link falls back to the unified project workbench without the retired detail panel');
     expect(smoke).toContain("!new URLSearchParams(window.location.search).has('task')");
     expect(smoke).toContain("document.querySelector('[data-smoke=\"chat-task-detail\"]') === null");
   });

@@ -132,35 +132,33 @@ describe('chat task surface', () => {
     expect(source).toContain('channelMembers={taskParticipants}');
   });
 
-  test('普通任务按负责人筛选，只在已有 Server 事实时渲染项目摘要', () => {
+  test('普通任务工作台已移除；任务详情只在已有 Server 事实时展示交付视图', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
 
-    expect(source).toContain("(task.assigneeId ?? 'unassigned') !== assigneeFilter");
-    expect(source).toContain('全部负责人');
-    expect(source).toContain('负责人 / 已有关联事实');
-    expect(source).toContain('channelTaskHasProjectFacts(entry)');
-    expect(source.match(/<ChannelTaskFactSummary/g)?.length).toBeGreaterThanOrEqual(1);
+    // plain 工作台（筛选/看板/列表/新建表单）全站不再渲染。
+    expect(source).not.toContain('channel-plain-task-workspace');
+    expect(source).not.toContain('新建普通任务');
+    expect(source).not.toContain('未进入阶段流程的任务');
+    expect(source).not.toContain('useState<TaskViewMode>');
+    // Server 事实判定仍服务任务详情侧栏。
+    expect(source).toContain('channelTaskHasProjectFacts(workspaceEntry)');
   });
 
-  test('普通任务是辅助状态视图且默认使用紧凑列表，项目工作台承载阶段审核主路径', () => {
+  test('项目工作台是任务 tab 唯一视图，无子视图切换 UI', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
 
-    expect(source).toContain("useState<TaskViewMode>('list')");
+    expect(source).toContain('<ChannelProjectProgress');
     // 微调对齐原型：子视图 tablist 整行移除（频道级锁定后无切换 UI）。
     expect(source).not.toContain('频道任务子视图');
     expect(source).not.toContain('阶段推进 · 交付审核 · final');
-    // 微调：plain 视图不再渲染辅助视图标签与项目责任说明。
-    expect(source).not.toContain('辅助视图：普通任务状态 + 负责人');
-    expect(source).toContain('未进入阶段流程的任务');
-    expect(source).not.toContain('项目责任、审核和 final 以项目工作台的 Server 投影为准');
-    expect(source).toContain('overflow-x-auto rounded-lg');
-    expect(source).toContain('min-w-[880px] w-full');
+    expect(source).not.toContain('channel-tasks-view-project');
+    expect(source).not.toContain('channel-tasks-view-plain');
   });
 
   test('#1179 项目阶段配置只在独立设置面，并用 revision 保护与 createStage 追加阶段', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
     const start = source.indexOf('function ConversationTasks');
-    const end = source.indexOf('function TaskFilterMenu', start);
+    const end = source.indexOf('function ConversationFiles', start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const panel = source.slice(start, end);
@@ -173,26 +171,23 @@ describe('chat task surface', () => {
     expect(panel).toContain('closeProjectSettings');
     expect(panel).toContain('void refreshProjectOverview()');
 
-    const progressStart = panel.indexOf('subview === \'project\'');
-    const progressEnd = panel.indexOf('loadError ?', progressStart);
+    const progressStart = panel.indexOf('<ChannelProjectProgress');
+    const progressEnd = panel.indexOf('onOpenSettings', progressStart);
     const progressBranch = panel.slice(progressStart, progressEnd);
-    expect(progressBranch).toContain('<ChannelProjectProgress');
     expect(progressBranch).not.toContain('<ChannelProjectOverview');
     expect(progressBranch).not.toContain('onCreateEdge');
     expect(progressBranch).not.toContain('createInitialProjectStage');
   });
 
-  test('频道级子视图锁定：#all/私聊只渲染普通任务，其余频道只渲染项目工作台', () => {
+  test('频道级子视图统一：所有频道（含 #all 与私聊）一律渲染项目工作台', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
-    // 锁定派生：isDm 或默认频道 #all → plain；其余频道 → project。
-    const lockStart = source.indexOf('const lockedTasksSubview');
-    expect(lockStart).toBeGreaterThan(-1);
-    const lockBlock = source.slice(lockStart, source.indexOf(';', lockStart) + 1);
-    expect(lockBlock).toContain("isDm || isDefaultPublicChannel ? 'plain' : 'project'");
-    // 锁定优先于 URL tasksView 参数与默认解析。
-    expect(source).toContain('const subview = lockedSubview ?? (requestedSubview');
-    expect(source).toContain('if (lockedSubview || projectOverview === undefined');
-    // 微调对齐原型：tablist 整行移除——锁定视图无切换 UI，也无项目设置入口。
+    // 锁定派生已收敛为常量：不再区分 isDm / 默认频道。
+    expect(source).not.toContain('lockedTasksSubview');
+    expect(source).not.toContain("isDefaultPublicChannel ? 'plain'");
+    expect(source).not.toContain('tasksViewParam');
+    // 渲染无条件分支：项目工作台是唯一路径。
+    expect(source).not.toContain("subview === 'project'");
+    expect(source).not.toContain('channel-plain-task-workspace');
     expect(source).not.toContain('channel-tasks-view-project');
     expect(source).not.toContain('channel-tasks-view-plain');
   });

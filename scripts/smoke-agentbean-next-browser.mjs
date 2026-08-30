@@ -1927,7 +1927,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   suffix,
   timeoutMs,
 }) {
-  // 频道级子视图锁定（新版规则）：非默认频道只显示项目工作台；#all/私聊只显示普通任务。
+  // 频道级子视图统一（产品决策 2026-08-30）：所有频道（含 #all/私聊）一律只显示项目工作台。
   const channelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
     userId: session.user.id,
     teamId: session.team.id,
@@ -1961,7 +1961,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
     timeoutMs,
   );
 
-  // #all（默认频道）：锁定普通任务视图。
+  // #all（默认频道）：与普通频道一致锁定项目工作台；已有普通任务时 setup prompt 提示显式绑定。
   await page.navigate(new URL(`/${teamPath}/chat`, root).toString());
   const clickedAll = await page.evaluateJson(`
     (() => {
@@ -2006,59 +2006,37 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
     })()
   `);
   if (!openedTasksTab) throw new Error('Could not open the Tasks tab in #all');
+  // 注意：webui 流程里 Phase 2 DAG 段会用 session 默认频道（#all）发 asTask 消息留下受管任务，
+  // 此处 #all 可能渲染泳道而非 setup prompt——两种形态都锁定统一项目工作台。
   await page.waitForFunction(
     `
     (() => {
-      const titles = ${JSON.stringify(titles)};
-      const taskList = document.querySelector('[data-smoke="channel-plain-task-list"]');
-      return document.querySelector('[data-smoke="channel-plain-task-workspace"]') !== null
-        && document.querySelector('[data-smoke="channel-project-progress"], [data-smoke="channel-project-setup-prompt"]') === null
-        && document.querySelector('[data-smoke="channel-plain-task-workspace"]') !== null
-        && document.querySelector('[title="列表"]')?.className.includes('bg-amber-300') === true
-        && !Array.from(document.querySelectorAll('button')).some((button) => (button.textContent ?? '').trim().includes('项目设置'))
-        && document.querySelector('[data-smoke="task-card-facts"]') === null
-        && taskList !== null
-        && titles.every((title) => taskList.textContent?.includes(title));
+      const prompt = document.querySelector('[data-smoke="channel-project-setup-prompt"]');
+      const progress = document.querySelector('[data-smoke="channel-project-progress"]');
+      return (prompt !== null || progress !== null)
+        && (prompt === null || /已有 \d+ 个普通任务/.test(prompt.textContent ?? ''))
+        && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null
+        && !Array.from(document.querySelectorAll('button')).some((button) => (button.textContent ?? '').trim().includes('新建普通任务'));
     })()
     `,
-    'default #all channel locks the Tasks tab to the ordinary subview without project settings',
+    'default #all channel locks the Tasks tab to the unified project workbench (setup prompt or managed lanes)',
     timeoutMs,
   );
 
-  // 原型对齐（#1225 收口）：无绑定消息的普通任务点击不再打开 task-only 详情侧边栏。
-  const openedTask = await page.evaluateJson(`
-    (() => {
-      const title = ${JSON.stringify(titles[0])};
-      const taskList = document.querySelector('[data-smoke="channel-plain-task-list"]');
-      const button = Array.from(taskList?.querySelectorAll('button') ?? [])
-        .find((candidate) => candidate.textContent?.trim() === title);
-      if (!(button instanceof HTMLElement)) return false;
-      button.click();
-      return true;
-    })()
-  `);
-  if (!openedTask) throw new Error(`Could not click ordinary channel Task "${titles[0]}"`);
-  await page.waitForFunction(
-    `document.querySelector('[data-smoke="chat-task-detail"]') === null
-      && !new URLSearchParams(window.location.search).has('task')`,
-    'ordinary channel Task click no longer opens the retired task-only detail',
-    timeoutMs,
-  );
-
-  // task=task:<taskId> 深链回落：清参数、不渲染侧边栏、留在任务页。
+  // task=task:<taskId> 深链回落：清参数、不渲染侧边栏、留在任务页（统一项目工作台）。
   await page.navigate(new URL(`/${teamPath}/channel/${allChannelId}?chatTab=tasks&task=task:${firstTaskId}`, root).toString());
   await page.waitForFunction(
     `!new URLSearchParams(window.location.search).has('task')
       && document.querySelector('[data-smoke="chat-task-detail"]') === null
-      && document.querySelector('[data-smoke="channel-plain-task-workspace"]') !== null`,
-    'task-only deep link falls back to the locked ordinary Tasks surface without the retired detail panel',
+      && document.querySelector('[data-smoke="channel-project-progress"], [data-smoke="channel-project-setup-prompt"]') !== null`,
+    'task-only deep link falls back to the unified project workbench without the retired detail panel',
     timeoutMs,
   );
 }
 
 async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, webSocket, session, suffix, timeoutMs }) {
-  // 频道级锁定：公共频道只渲染项目工作台；旧 plain/project 切换与前进后退能力随锁定退役。
-  // 注意不能用 session 默认频道（#all 锁普通任务）；自建公共频道验证锁定。
+  // 频道级锁定：所有频道统一只渲染项目工作台；旧 plain/project 切换与前进后退能力随锁定退役。
+  // 自建公共频道验证锁定行为（与默认 #all 频道同款断言见 no-project 段）。
   const channelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
     userId: session.user.id,
     teamId: session.team.id,

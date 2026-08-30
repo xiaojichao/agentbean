@@ -36,11 +36,6 @@ import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
 import { StageDeliveryReviewWorkspace, type StageHandoffAction } from '@/components/StageDeliveryReviewWorkspace';
 import type { TaskCardReviewProjection } from '@/components/TaskCardReviewEntryPanel';
 import {
-  ChannelTaskCard,
-  ChannelTaskFactSummary,
-  channelTaskHasProjectFacts,
-} from '@/components/ChannelTaskCard';
-import {
   ChannelProjectOverview,
   type InitialProjectStageDraft,
   type ProjectStageDraft,
@@ -91,17 +86,12 @@ import {
   type TaskStatus,
 } from '@/lib/task-status';
 import {
-  channelTaskEntrySubview,
+  channelTaskHasProjectFacts,
   channelTasksHistoryMode,
-  channelTasksRouteParams,
   matchingChannelTaskStageId,
-  parseChannelTasksSubview,
-  resolveChannelTasksSubview,
-  type ChannelTasksSubview,
 } from '@/lib/channel-task-workspace-route';
 
 type ChatTab = 'chat' | 'tasks' | 'files';
-type TaskViewMode = 'board' | 'list';
 type SidebarSortMode = 'manual' | 'recent' | 'az';
 type ProfileTarget = { kind: 'human' | 'agent'; id: string };
 type MentionProfileMember = { id: string; name: string; kind: ProfileTarget['kind'] };
@@ -361,7 +351,6 @@ export default function ChatPage() {
   const messageParam = searchParams.get('message');
   const profileParam = searchParams.get('profile');
   const taskParam = searchParams.get('task');
-  const tasksViewParam = parseChannelTasksSubview(searchParams.get('tasksView'));
   const selectedStageId = searchParams.get('stage');
   const routeChannelId = typeof params.channelId === 'string' ? params.channelId : null;
   const routeDmId = typeof params.dmId === 'string' ? params.dmId : null;
@@ -476,15 +465,7 @@ export default function ChatPage() {
   const [channelTaskWorkspace, setChannelTaskWorkspace] = useState<ChannelTaskWorkspaceV1 | null>(null);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [tasksLoadError, setTasksLoadError] = useState<{ kind: 'not_ready' | 'no_permission' | 'error'; message: string } | null>(null);
-  const [taskView, setTaskView] = useState<TaskViewMode>('list');
-  const [taskCreatorFilter, setTaskCreatorFilter] = useState<string>('all');
-  const [taskAssigneeFilter, setTaskAssigneeFilter] = useState<string>('all');
-  const [showCreatorFilter, setShowCreatorFilter] = useState(false);
-  const [showAssigneeFilter, setShowAssigneeFilter] = useState(false);
-  const [showCreateTask, setShowCreateTask] = useState(false);
   const [stoppingChannelAgents, setStoppingChannelAgents] = useState(false);
-  const [dragTaskId, setDragTaskId] = useState<string | null>(null);
-  const [collapsedTaskColumns, setCollapsedTaskColumns] = useState<Set<TaskStatus>>(() => new Set(TASK_COLUMNS.filter((col) => col.collapsedByDefault).map((col) => col.id)));
   const [chatTaskMenuTarget, setChatTaskMenuTarget] = useState<ChatTaskMenuTarget>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
@@ -718,7 +699,7 @@ export default function ChatPage() {
     || outputPackagePendings.length > 0
     || (projectArtifactLibrary?.collections.length ?? 0) > 0;
 
-  // 私聊始终用附件文件页；普通公共频道在无项目投影时回落附件浏览。
+  // 所有频道（含 #all 与私聊）同一 gate：无项目数据面时回落附件浏览。
   useEffect(() => {
     channelFilesRequestRevisionRef.current += 1;
     setChannelFiles([]);
@@ -726,14 +707,11 @@ export default function ChatPage() {
     setChannelFileDirectories([]);
     setChannelFilesLoading(false);
     if (tab !== 'files' || !activeChannel || conn !== 'open') return;
-    const isActiveDm = dms.some((dm) => dm.id === activeChannel);
-    const useAttachmentFiles = isActiveDm
-      || (filesProjectSurfaceReady && !hasProjectFilesSurface);
+    const useAttachmentFiles = filesProjectSurfaceReady && !hasProjectFilesSurface;
     if (useAttachmentFiles) void loadChannelFiles(true);
   }, [
     activeChannel,
     conn,
-    dms,
     tab,
     channelFilesPath,
     channelFilesQuery,
@@ -1415,10 +1393,6 @@ export default function ChatPage() {
   }, [activeChannel, openArtifactRevision]);
   const isDm = !!activeDm;
   const isDefaultPublicChannel = !isDm && activeChannelObj?.name === 'all';
-  // 频道级子视图锁定：#all 与私聊只显示普通任务；其余频道只显示项目工作台。
-  const lockedTasksSubview: ChannelTasksSubview | null = !activeChannel
-    ? null
-    : isDm || isDefaultPublicChannel ? 'plain' : 'project';
   const canManageActiveChannel = Boolean(
     activeChannelObj &&
     currentUser &&
@@ -1478,24 +1452,6 @@ export default function ChatPage() {
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
   };
 
-  const navigateChannelTasksRoute = useCallback((
-    nextParams: URLSearchParams,
-    historyMode: 'push' | 'replace',
-  ) => {
-    const query = nextParams.toString();
-    const href = `${window.location.pathname}${query ? `?${query}` : ''}`;
-    if (historyMode === 'push') router.push(href, { scroll: false });
-    else router.replace(href, { scroll: false });
-  }, [router]);
-
-  const resolveDefaultTasksSubview = useCallback((view: ChannelTasksSubview) => {
-    if (tasksViewParam) return;
-    const next = new URLSearchParams(searchParams.toString());
-    next.set('chatTab', 'tasks');
-    next.set('tasksView', view);
-    navigateChannelTasksRoute(next, channelTasksHistoryMode('resolve_default'));
-  }, [navigateChannelTasksRoute, searchParams, tasksViewParam]);
-
   const handleArchiveChannel = async (channelId: string, confirmationToken?: string) => {
     const res = await channelEvents().archive(channelId, currentTeamId, confirmationToken);
     if (confirmationToken) {
@@ -1544,7 +1500,7 @@ export default function ChatPage() {
       params.delete('message');
       // #1178 AC1：task-only 阶段详情深链（task=task:<taskId>）与 thread 共存——
       // 刷新/返回后 task/stage/thread 关联同时恢复；消息型 task 深链与 thread 互斥
-      // （taskParam 回灌会清 threadRootId），仍清除。stage/chatTab/tasksView 不动。
+      // （taskParam 回灌会清 threadRootId），仍清除。stage/chatTab 不动。
       if (!params.get('task')?.startsWith('task:')) params.delete('task');
     } else {
       params.delete('thread');
@@ -1749,9 +1705,6 @@ export default function ChatPage() {
   }, [activeChannel, chatTabParam, taskParam, searchParams, router]);
 
   useEffect(() => {
-    setTaskCreatorFilter('all');
-    setTaskAssigneeFilter('all');
-    setShowCreateTask(false);
     if (!taskParam) {
       setTaskDetailMessageId(null);
     }
@@ -3026,58 +2979,27 @@ export default function ChatPage() {
             <ConversationTasks
               tasks={tasks}
               workspace={channelTaskWorkspace}
-              taskNumbers={taskNumbers}
               loading={tasksLoading}
               loadError={tasksLoadError}
-              requestedSubview={tasksViewParam}
-              lockedSubview={lockedTasksSubview}
               selectedStageId={selectedStageId}
               archived={Boolean(activeChannelObj?.archivedAt)}
-              view={taskView}
-              creatorFilter={taskCreatorFilter}
-              assigneeFilter={taskAssigneeFilter}
               participants={taskParticipants}
               currentUserId={currentUser?.id}
               channelId={activeChannel}
-              dragTaskId={dragTaskId}
-              collapsedColumns={collapsedTaskColumns}
-              showCreatorFilter={showCreatorFilter}
-              showAssigneeFilter={showAssigneeFilter}
-              showCreate={showCreateTask}
-              onViewChange={setTaskView}
-              onCreatorFilterChange={setTaskCreatorFilter}
-              onAssigneeFilterChange={setTaskAssigneeFilter}
-              onToggleCreatorFilter={() => setShowCreatorFilter((v) => !v)}
-              onToggleAssigneeFilter={() => setShowAssigneeFilter((v) => !v)}
-              onCloseFilters={() => { setShowCreatorFilter(false); setShowAssigneeFilter(false); }}
-              onToggleCreate={() => setShowCreateTask((v) => !v)}
-              onCloseCreate={() => setShowCreateTask(false)}
-              onCreate={() => { void loadTasks(); }}
-              onDelete={(taskId) => setTasks((prev) => prev.filter((task) => task.id !== taskId))}
-              onDragStart={setDragTaskId}
-              onDragEnd={() => setDragTaskId(null)}
-              onToggleColumn={(status) => setCollapsedTaskColumns((prev) => {
-                const next = new Set(prev);
-                if (next.has(status)) next.delete(status); else next.add(status);
-                return next;
-              })}
-              onTaskUpdate={(updated) => setTasks((prev) => prev.map((task) => task.id === updated.id ? updated : task))}
-              onOpenTaskDetail={openTaskDetailById}
               onBackToThread={backToThreadFromTaskCard}
               onReviewDeliveryFiles={openReviewFilesFromProjection}
               onViewDeliveryFiles={viewDeliveryFilesFromTaskCard}
-              onResolveDefaultSubview={resolveDefaultTasksSubview}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-neutral-400">选择一个频道或私聊查看任务</div>
           )
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
-            {activeChannel && !isDm && !filesProjectSurfaceReady ? (
+            {activeChannel && !filesProjectSurfaceReady ? (
               <div className="flex flex-1 items-center justify-center text-sm text-neutral-400" data-smoke="files-project-surface-loading">
                 加载文件库…
               </div>
-            ) : activeChannel && !isDm && hasProjectFilesSurface ? (
+            ) : activeChannel && hasProjectFilesSurface ? (
               <ProjectFilesBoard
                 channelId={activeChannel}
                 packages={outputPackages}
@@ -3833,93 +3755,33 @@ function MemberGroup({
 function ConversationTasks({
   tasks,
   workspace,
-  taskNumbers,
   loading,
   loadError,
-  requestedSubview,
-  lockedSubview,
   selectedStageId,
   archived,
-  view,
-  creatorFilter,
-  assigneeFilter,
   participants,
   currentUserId,
   channelId,
-  dragTaskId,
-  collapsedColumns,
-  showCreatorFilter,
-  showAssigneeFilter,
-  showCreate,
-  onViewChange,
-  onCreatorFilterChange,
-  onAssigneeFilterChange,
-  onToggleCreatorFilter,
-  onToggleAssigneeFilter,
-  onCloseFilters,
-  onToggleCreate,
-  onCloseCreate,
-  onCreate,
-  onDelete,
-  onDragStart,
-  onDragEnd,
-  onToggleColumn,
-  onTaskUpdate,
-  onOpenTaskDetail,
   onBackToThread,
   onReviewDeliveryFiles,
   onViewDeliveryFiles,
-  onResolveDefaultSubview,
 }: {
   tasks: TaskItem[];
   workspace: ChannelTaskWorkspaceV1 | null;
-  taskNumbers: Map<string, number>;
   loading: boolean;
   loadError: { kind: 'not_ready' | 'no_permission' | 'error'; message: string } | null;
-  requestedSubview?: ChannelTasksSubview;
-  /** 频道级锁定子视图：#all/私聊→plain，其余频道→project；锁定时优先于 URL 参数。 */
-  lockedSubview?: ChannelTasksSubview | null;
   selectedStageId: string | null;
   archived: boolean;
-  view: TaskViewMode;
-  creatorFilter: string;
-  assigneeFilter: string;
   participants: { id: string; name: string; kind: 'human' | 'agent' }[];
   currentUserId?: string;
   channelId: string;
-  dragTaskId: string | null;
-  collapsedColumns: Set<TaskStatus>;
-  showCreatorFilter: boolean;
-  showAssigneeFilter: boolean;
-  showCreate: boolean;
-  onViewChange: (view: TaskViewMode) => void;
-  onCreatorFilterChange: (id: string) => void;
-  onAssigneeFilterChange: (id: string) => void;
-  onToggleCreatorFilter: () => void;
-  onToggleAssigneeFilter: () => void;
-  onCloseFilters: () => void;
-  onToggleCreate: () => void;
-  onCloseCreate: () => void;
-  onCreate: (task: TaskItem) => void;
-  onDelete: (taskId: string) => void;
-  onDragStart: (taskId: string) => void;
-  onDragEnd: () => void;
-  onToggleColumn: (status: TaskStatus) => void;
-  onTaskUpdate: (task: TaskItem) => void;
-  /** 原型收敛:看板/列表点击任务标题打开详情(含无关联消息的 task-only)。 */
-  onOpenTaskDetail: (taskId: string) => void;
   /** 原型 review-panel「回到讨论串继续」：只定位，不改状态。 */
   onBackToThread: (threadRootMessageId: string | undefined, taskId: string) => void;
   /** 原型进行中卡「交给智能体处理」：定位讨论串并预填 @。 */
   onReviewDeliveryFiles: (projection: TaskCardReviewProjection, versionId: string | undefined) => void;
   /** 原型已结束卡「查看交付与 final」：定位 Files 逻辑产物视图。 */
   onViewDeliveryFiles: (taskId: string) => void;
-  /** 审核动作提交成功后刷新频道任务工作区投影。 */
-  onResolveDefaultSubview: (view: ChannelTasksSubview) => void;
 }) {
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [saving, setSaving] = useState(false);
   const [projectOverview, setProjectOverview] = useState<ChannelProjectOverviewDto | null>();
   const [projectOverviewError, setProjectOverviewError] = useState<{ kind: 'no_permission' | 'error'; message: string } | null>(null);
   const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
@@ -3990,88 +3852,7 @@ function ConversationTasks({
   );
 
   const hasProjectStages = (projectOverview?.stages.length ?? 0) > 0;
-  const hasManagedEntries = workspace?.entries.some(
-    (entry) => channelTaskEntrySubview(entry) === 'project',
-  ) ?? false;
   const workspaceReadOnly = archived || Boolean(projectOverview?.archived);
-  const subview = lockedSubview ?? (requestedSubview
-    ?? ((loading && !workspace) || loadError || projectOverviewError
-      ? 'project'
-      : resolveChannelTasksSubview(undefined, hasProjectStages, hasManagedEntries)));
-  useEffect(() => {
-    if (lockedSubview || projectOverview === undefined || projectOverviewError || requestedSubview || (loading && !workspace)) return;
-    onResolveDefaultSubview(resolveChannelTasksSubview(
-      undefined,
-      (projectOverview?.stages.length ?? 0) > 0,
-      workspace?.entries.some((entry) => channelTaskEntrySubview(entry) === 'project') ?? false,
-    ));
-  }, [lockedSubview, loading, onResolveDefaultSubview, projectOverview, projectOverviewError, requestedSubview, workspace]);
-
-  const workspaceEntries = new Map(workspace?.entries.map((entry) => [entry.task.id, workspaceReadOnly
-    ? {
-      ...entry,
-      governance: {
-        ...entry.governance,
-        allowDirectStatusMutation: false,
-        allowDirectAssigneeMutation: false,
-        allowDirectDelete: false,
-      },
-    }
-    : entry] as const) ?? []);
-  const filteredTasks = tasks.filter((task) => {
-    const entry = workspaceEntries.get(task.id);
-    if (!entry || channelTaskEntrySubview(entry) !== 'plain') return false;
-    if (creatorFilter !== 'all' && task.creatorId !== creatorFilter) return false;
-    if (
-      assigneeFilter !== 'all'
-      && (task.assigneeId ?? 'unassigned') !== assigneeFilter
-    ) return false;
-    return true;
-  });
-  const reviewerLabelForEntry = (entry: ChannelTaskWorkspaceEntryV1): string => {
-    const reviewerIds = entry.review.latest
-      ? [entry.review.latest.reviewedBy]
-      : entry.review.reviewerIds;
-    return reviewerIds.length > 0
-      ? reviewerIds.map((id) => participantName(id, participants, currentUserId)).join('、')
-      : '未绑定';
-  };
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim()) return;
-    setSaving(true);
-    try {
-      const res = await taskEvents().create({
-        title: title.trim(),
-        description: description.trim() || undefined,
-        status: 'todo',
-        channelId,
-        tags: ['聊天'],
-      });
-      if (res.ok && res.task) {
-        onCreate(res.task as TaskItem);
-        setTitle('');
-        setDescription('');
-        onCloseCreate();
-      }
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const moveTask = async (task: TaskItem, status: TaskStatus) => {
-    const maxSort = tasks.filter((item) => item.status === status && item.id !== task.id).reduce((max, item) => Math.max(max, item.sortOrder), 0);
-    const optimistic = { ...task, status, sortOrder: maxSort + 1, updatedAt: Date.now() };
-    onTaskUpdate(optimistic);
-    const res = await taskEvents().update({ id: task.id, status, sortOrder: maxSort + 1 });
-    if (res.ok && res.task) onTaskUpdate(res.task as TaskItem);
-  };
-
-  const deleteTask = async (taskId: string) => {
-    onDelete(taskId);
-    await taskEvents().delete(taskId);
-  };
 
   const createInitialProjectStage = async (draft: InitialProjectStageDraft): Promise<string | null> => {
     const idempotencyKey = typeof globalThis.crypto?.randomUUID === 'function'
@@ -4154,12 +3935,6 @@ function ConversationTasks({
     void refreshProjectOverview();
   };
 
-  const creatorLabel = creatorFilter === 'all' ? '创建者' : participantName(creatorFilter, participants, currentUserId);
-  const assigneeLabel = assigneeFilter === 'all'
-    ? '负责人'
-    : assigneeFilter === 'unassigned'
-      ? '未分配'
-      : participantName(assigneeFilter, participants, currentUserId);
   const projectProgressState: ChannelProjectProgressState = loadError?.kind
     ?? projectOverviewError?.kind
     ?? (projectOverview === undefined || (loading && !workspace)
@@ -4171,234 +3946,21 @@ function ConversationTasks({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
-      {subview === 'project' ? (
-        <ChannelProjectProgress
-          overview={projectOverview ?? null}
-          workspace={workspace}
-          channelId={channelId}
-          participants={participants}
-          currentUserId={currentUserId}
-          selectedStageId={selectedStageId}
-          state={projectProgressState}
-          errorMessage={projectProgressErrorMessage}
-          archived={workspaceReadOnly}
-          onBackToThread={onBackToThread}
-          onReviewDeliveryFiles={onReviewDeliveryFiles}
-          onViewDeliveryFiles={onViewDeliveryFiles}
-          onOpenSettings={() => setShowProjectSettings(true)}
-        />
-      ) : loadError ? (
-        <div className="flex min-h-0 flex-1 items-center justify-center bg-neutral-50 p-6" data-smoke={`channel-plain-${loadError.kind}`}>
-          <div className="border border-neutral-200 bg-white px-6 py-5 text-sm text-neutral-600">
-            {loadError.kind === 'no_permission' ? '你没有查看该频道任务的权限' : loadError.message}
-          </div>
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col bg-[#f7f6f2]" data-smoke="channel-plain-task-workspace">
-      <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-y border-neutral-200 bg-white px-4 py-2">
-        <div className="relative">
-          <button onClick={() => { onToggleCreatorFilter(); if (showAssigneeFilter) onToggleAssigneeFilter(); }} className="flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-600 hover:bg-neutral-50">
-            <User size={13} />
-            <span>{creatorLabel}</span>
-            <ChevronDown size={13} />
-          </button>
-          {showCreatorFilter && (
-            <TaskFilterMenu
-              title="创建者"
-              value={creatorFilter}
-              options={[{ id: 'all', name: '全部创建者' }, ...participants]}
-              onSelect={(id) => { onCreatorFilterChange(id); onCloseFilters(); }}
-            />
-          )}
-        </div>
-        <div className="relative">
-          <button onClick={() => { onToggleAssigneeFilter(); if (showCreatorFilter) onToggleCreatorFilter(); }} className="flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-600 hover:bg-neutral-50">
-            <User size={13} />
-            <span>{assigneeLabel}</span>
-            <ChevronDown size={13} />
-          </button>
-          {showAssigneeFilter && (
-            <TaskFilterMenu
-              title="负责人"
-              value={assigneeFilter}
-              options={[
-                { id: 'all', name: '全部负责人' },
-                { id: 'unassigned', name: '未分配' },
-                ...participants,
-              ]}
-              onSelect={(id) => { onAssigneeFilterChange(id); onCloseFilters(); }}
-            />
-          )}
-        </div>
-        {workspaceReadOnly ? <span className="text-xs font-medium text-neutral-500">频道已归档 · 普通任务只读</span> : null}
-        <div className="flex-1" />
-        <div className="flex overflow-hidden rounded-md border border-neutral-300">
-          <button onClick={() => onViewChange('board')} className={`flex h-8 items-center gap-1 border-r border-neutral-300 px-2.5 text-xs font-medium ${view === 'board' ? 'bg-amber-300 text-neutral-900' : 'bg-white text-neutral-500 hover:bg-neutral-50'}`} title="看板">
-            <LayoutGrid size={13} />
-            看板
-          </button>
-          <button onClick={() => onViewChange('list')} className={`flex h-8 items-center gap-1 px-2.5 text-xs font-medium ${view === 'list' ? 'bg-amber-300 text-neutral-900' : 'bg-white text-neutral-500 hover:bg-neutral-50'}`} title="列表">
-            <List size={13} />
-            列表
-          </button>
-        </div>
-        {!workspaceReadOnly ? (
-          <button onClick={onToggleCreate} className="flex h-8 items-center gap-1 rounded-md bg-pink-500 px-3 text-xs font-semibold text-white hover:bg-pink-600">
-            <Plus size={13} />
-            新建普通任务
-          </button>
-        ) : null}
-      </div>
-
-      {showCreate && !workspaceReadOnly && (
-        <form onSubmit={handleCreate} className="grid shrink-0 grid-cols-[minmax(180px,1.2fr)_minmax(180px,1.5fr)_auto] items-end gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-3">
-          <label className="min-w-0">
-            <span className="mb-1 block text-xs font-medium text-neutral-500">标题</span>
-            <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus placeholder="任务标题" className="h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-neutral-500" />
-          </label>
-          <label className="min-w-0">
-            <span className="mb-1 block text-xs font-medium text-neutral-500">描述</span>
-            <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="补充说明" className="h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-neutral-500" />
-          </label>
-          <div className="flex items-center gap-2">
-            <button type="submit" disabled={!title.trim() || saving} className="h-9 rounded-md bg-neutral-900 px-3 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50">{saving ? '创建中...' : '创建'}</button>
-            <button type="button" onClick={onCloseCreate} className="flex h-9 w-9 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-200" title="取消"><X size={15} /></button>
-          </div>
-        </form>
-      )}
-
-      {view === 'board' ? (
-        <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-4">
-          {TASK_COLUMNS.map((column) => {
-            const colTasks = filteredTasks.filter((task) => task.status === column.id);
-            const collapsed = collapsedColumns.has(column.id);
-            return (
-              <section key={column.id} className="flex w-72 shrink-0 flex-col rounded-lg border border-neutral-200 bg-white/70">
-                <button onClick={() => onToggleColumn(column.id)} className="flex h-10 items-center gap-2 border-b border-neutral-200 bg-white px-3 text-left">
-                  <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${column.badge}`}>{column.label}</span>
-                  <span className="text-[11px] text-neutral-400">{colTasks.length}</span>
-                  <ChevronDown size={14} className={`ml-auto text-neutral-400 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
-                </button>
-                {!collapsed && (
-                  <div
-                    className="min-h-32 flex-1 space-y-2 overflow-y-auto p-2"
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={() => {
-                      const task = tasks.find((item) => item.id === dragTaskId);
-                      const entry = task ? workspaceEntries.get(task.id) : undefined;
-                      if (task && entry?.governance.allowDirectStatusMutation) moveTask(task, column.id);
-                      onDragEnd();
-                    }}
-                  >
-                    {colTasks.map((task) => {
-                      const entry = workspaceEntries.get(task.id);
-                      if (!entry) return null;
-                      return (
-                        <ChannelTaskCard
-                          key={task.id}
-                          entry={{
-                            ...entry,
-                            task: {
-                              ...entry.task,
-                              ...task,
-                              description: task.description ?? undefined,
-                              assigneeId: task.assigneeId ?? undefined,
-                              channelId: task.channelId ?? undefined,
-                            },
-                          }}
-                          creatorName={participantName(task.creatorId, participants, currentUserId)}
-                          assigneeName={task.assigneeId ? participantName(task.assigneeId, participants, currentUserId) : '未分配'}
-                          reviewerLabel={reviewerLabelForEntry(entry)}
-                          onDelete={() => deleteTask(task.id)}
-                          onMove={(status) => moveTask(task, status)}
-                          onDragStart={() => onDragStart(task.id)}
-                          onDragEnd={onDragEnd}
-                          onOpenDetail={() => onOpenTaskDetail(task.id)}
-                        />
-                      );
-                    })}
-                    {colTasks.length === 0 && (
-                      <div className="flex h-16 items-center justify-center border border-dashed border-neutral-300 bg-white text-xs text-neutral-400">
-                        {loading ? '加载中...' : column.empty}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </section>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <div className="mb-3 flex items-end justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-neutral-900">未进入阶段流程的任务</h2>
-            </div>
-            <span className="text-xs text-neutral-400">{filteredTasks.length} 个任务</span>
-          </div>
-          <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white shadow-sm" data-smoke="channel-plain-task-list">
-          <table className="min-w-[880px] w-full text-sm [&_td]:px-3 [&_th]:px-3">
-            <thead>
-              <tr className="border-b border-neutral-200 text-left text-xs text-neutral-500">
-                <th className="pb-2 pr-4 font-medium">编号</th>
-                <th className="pb-2 pr-4 font-medium">标题</th>
-                <th className="pb-2 pr-4 font-medium">状态</th>
-                <th className="pb-2 pr-4 font-medium">创建者</th>
-                <th className="pb-2 pr-4 font-medium">负责人 / 已有关联事实</th>
-                <th className="pb-2 font-medium">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredTasks.map((task) => {
-                const entry = workspaceEntries.get(task.id);
-                if (!entry) return null;
-                return <tr key={task.id} className="border-b border-neutral-100">
-                  <td className="py-2 pr-4 text-xs text-neutral-400">#{taskNumbers.get(task.id) ?? '任务'}</td>
-                  <td className="max-w-lg py-2 pr-4">
-                    <button type="button" onClick={() => onOpenTaskDetail(task.id)} className="text-left font-medium text-neutral-900 hover:text-amber-700 hover:underline">{task.title}</button>
-                    {task.description && <div className="mt-0.5 truncate text-xs text-neutral-500">{task.description}</div>}
-                  </td>
-                  <td className="py-2 pr-4">
-                    {entry.governance.allowDirectStatusMutation ? (
-                      <select value={task.status} onChange={(e) => moveTask(task, e.target.value as TaskStatus)} className="h-7 rounded-md border border-neutral-200 bg-white px-2 text-xs">
-                        {TASK_COLUMNS.map((column) => <option key={column.id} value={column.id}>{column.label}</option>)}
-                      </select>
-                    ) : <span className="text-xs text-neutral-500">{taskStatusText(task.status)} · 流程推进</span>}
-                  </td>
-                  <td className="py-2 pr-4 text-xs text-neutral-600">{participantName(task.creatorId, participants, currentUserId)}</td>
-                  <td className="min-w-64 py-2 pr-4">
-                    {channelTaskHasProjectFacts(entry) ? (
-                      <ChannelTaskFactSummary entry={entry} reviewerLabel={reviewerLabelForEntry(entry)} />
-                    ) : (
-                      <div className="text-xs text-neutral-600" data-smoke="task-list-plain-assignee">
-                        负责人：{task.assigneeId ? participantName(task.assigneeId, participants, currentUserId) : '未分配'}
-                      </div>
-                    )}
-                  </td>
-                  <td className="py-2">
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => onOpenTaskDetail(task.id)} className="flex h-7 items-center rounded border border-neutral-200 px-2 text-xs text-neutral-600 hover:border-neutral-900 hover:text-neutral-900" title="打开任务详情">
-                        详情
-                      </button>
-                      {entry.governance.allowDirectDelete ? (
-                        <button onClick={() => deleteTask(task.id)} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-red-50 hover:text-red-500" title="删除任务">
-                          <Trash2 size={14} />
-                        </button>
-                      ) : null}
-                    </div>
-                  </td>
-                </tr>;
-              })}
-              {filteredTasks.length === 0 && (
-                <tr><td colSpan={6} className="py-10 text-center text-sm text-neutral-400">{loading ? '加载中...' : '暂无任务'}</td></tr>
-              )}
-            </tbody>
-          </table>
-          </div>
-        </div>
-      )}
-        </div>
-      )}
+      <ChannelProjectProgress
+        overview={projectOverview ?? null}
+        workspace={workspace}
+        channelId={channelId}
+        participants={participants}
+        currentUserId={currentUserId}
+        selectedStageId={selectedStageId}
+        state={projectProgressState}
+        errorMessage={projectProgressErrorMessage}
+        archived={workspaceReadOnly}
+        onBackToThread={onBackToThread}
+        onReviewDeliveryFiles={onReviewDeliveryFiles}
+        onViewDeliveryFiles={onViewDeliveryFiles}
+        onOpenSettings={() => setShowProjectSettings(true)}
+      />
 
       {showProjectSettings ? (
         <div
@@ -4450,19 +4012,6 @@ function ConversationTasks({
           </div>
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function TaskFilterMenu({ title, value, options, onSelect }: { title: string; value: string; options: { id: string; name: string }[]; onSelect: (id: string) => void }) {
-  return (
-    <div className="absolute left-0 top-9 z-20 w-48 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
-      <div className="px-3 py-1 text-[10px] font-semibold text-neutral-400">{title}</div>
-      {options.map((option) => (
-        <button key={option.id} onClick={() => onSelect(option.id)} className={`flex w-full items-center px-3 py-1.5 text-left text-sm hover:bg-neutral-50 ${value === option.id ? 'font-medium text-neutral-900' : 'text-neutral-600'}`}>
-          <span className="truncate">{option.name}</span>
-        </button>
-      ))}
     </div>
   );
 }
