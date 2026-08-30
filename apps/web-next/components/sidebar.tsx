@@ -94,9 +94,9 @@ export function Sidebar() {
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
 
   return (
-    <aside className="relative z-20 flex w-16 shrink-0 flex-col border-r border-neutral-900/20 bg-[#F4D24F]" data-smoke="app-sidebar">
+    <aside className="relative z-20 flex w-16 shrink-0 flex-col rounded-bl-none border-r border-neutral-200 bg-[#F7F7F5] text-neutral-700" data-smoke="app-sidebar">
       {/* Team switcher */}
-      <div className="relative flex h-16 items-center justify-center border-b border-neutral-900/20 px-2">
+      <div className="relative flex h-14 shrink-0 items-center justify-center border-b border-neutral-200 px-2">
           <button
             onClick={(event) => {
               event.stopPropagation();
@@ -104,7 +104,7 @@ export function Sidebar() {
               setShowNotifications(false);
               setShowHelp(false);
             }}
-            className="flex h-10 w-10 items-center justify-center border-2 border-neutral-900 bg-neutral-900 text-sm font-bold text-[#F4D24F] shadow-[2px_2px_0_0_#171717] transition-transform hover:-translate-y-0.5"
+            className="flex h-10 w-10 items-center justify-center rounded-lg border border-neutral-300 bg-white text-sm font-semibold text-neutral-700 shadow-sm transition-colors hover:border-neutral-400 hover:bg-neutral-50"
             aria-label={`切换团队，当前团队：${currentTeam?.name ?? '当前团队'}`}
             title={currentTeam?.name ?? '切换团队'}
             aria-expanded={showTeams}
@@ -114,7 +114,7 @@ export function Sidebar() {
           </button>
           {showTeams && (
             <div
-              className="absolute left-full top-2 z-50 ml-2 w-64 overflow-hidden border-2 border-neutral-900 bg-white shadow-[4px_4px_0_0_#171717]"
+              className="absolute left-full top-2 z-50 ml-2 w-64 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-lg"
               onClick={(e) => e.stopPropagation()}
               data-smoke="team-switcher-menu"
             >
@@ -126,9 +126,9 @@ export function Sidebar() {
                     <button
                       key={n.id}
                       onClick={() => handleSwitch(n.id)}
-                      className="flex w-full items-center gap-2 px-2 py-2 text-left text-xs transition-colors hover:bg-amber-50"
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition-colors hover:bg-neutral-50"
                     >
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center bg-neutral-900 font-bold text-[#F4D24F]">{n.name.trim().charAt(0).toUpperCase() || '团'}</span>
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-neutral-100 font-semibold text-neutral-700">{n.name.trim().charAt(0).toUpperCase() || '团'}</span>
                       <span className="min-w-0 flex-1">
                         <span className={`block truncate ${n.id === currentTeamId ? 'font-semibold text-neutral-900' : 'text-neutral-700'}`}>{n.name}</span>
                         <span className="block truncate text-[10px] text-neutral-400">/{n.path}</span>
@@ -149,10 +149,10 @@ export function Sidebar() {
                   setShowTeams(false);
                   setShowCreateDialog(true);
                 }}
-                className="flex w-full items-center gap-2 border-t-2 border-neutral-900 px-3 py-2.5 text-xs font-semibold text-neutral-800 hover:bg-[#F4D24F]"
+                className="flex w-full items-center gap-2 border-t border-neutral-200 px-3 py-2.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
               >
                 <Plus size={14} />
-                切换或创建团队
+                创建团队
               </button>
             </div>
           )}
@@ -169,7 +169,7 @@ export function Sidebar() {
       </nav>
 
       {/* Bottom utilities */}
-      <div className="relative flex flex-col items-center gap-1 border-t border-neutral-900/20 px-2 py-3">
+      <div className="relative flex flex-col items-center gap-1 px-2 py-3">
         <RailButton
           icon={<Bell size={19} />}
           label="提醒"
@@ -183,8 +183,8 @@ export function Sidebar() {
           }}
         />
         {showNotifications && (
-          <div className="absolute bottom-24 left-full z-50 ml-2 w-72 border-2 border-neutral-900 bg-white shadow-[4px_4px_0_0_#171717]" onClick={(event) => event.stopPropagation()} data-smoke="notifications-menu">
-            <div className="border-b-2 border-neutral-900 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">提醒</div>
+          <div className="absolute bottom-24 left-full z-50 ml-2 w-72 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-lg" onClick={(event) => event.stopPropagation()} data-smoke="notifications-menu">
+            <div className="border-b border-neutral-200 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">提醒</div>
             {isAdmin && piReadiness?.status === 'attention_required' ? (
               <Link href={`/${np}/dashboard/pi`} className="flex items-center gap-2 px-3 py-3 text-sm font-medium text-amber-900 hover:bg-amber-50" data-smoke="pi-configuration-readiness-alert">
                 <Bell size={15} />
@@ -207,14 +207,14 @@ export function Sidebar() {
           }}
         />
         {showHelp && (
-          <div className="absolute bottom-12 left-full z-50 ml-2 w-72 border-2 border-neutral-900 bg-white shadow-[4px_4px_0_0_#171717]" onClick={(event) => event.stopPropagation()} data-smoke="help-resources-menu">
-            <div className="border-b-2 border-neutral-900 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">帮助和资源</div>
-            <a href="https://github.com/xiaojichao/agentbean#readme" target="_blank" rel="noreferrer" className="flex items-center gap-2 px-3 py-2.5 text-sm text-neutral-700 hover:bg-amber-50">
+          <div className="absolute bottom-12 left-full z-50 ml-2 w-72 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-lg" onClick={(event) => event.stopPropagation()} data-smoke="help-resources-menu">
+            <div className="border-b border-neutral-200 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">帮助和资源</div>
+            <a href="https://github.com/xiaojichao/agentbean#readme" target="_blank" rel="noreferrer" className="flex items-center gap-2 px-3 py-2.5 text-sm text-neutral-700 hover:bg-neutral-50">
               <BookOpen size={15} />
               AgentBean 文档
               <ExternalLink size={12} className="ml-auto text-neutral-400" />
             </a>
-            <a href="https://github.com/xiaojichao/agentbean/issues" target="_blank" rel="noreferrer" className="flex items-center gap-2 px-3 py-2.5 text-sm text-neutral-700 hover:bg-amber-50">
+            <a href="https://github.com/xiaojichao/agentbean/issues" target="_blank" rel="noreferrer" className="flex items-center gap-2 px-3 py-2.5 text-sm text-neutral-700 hover:bg-neutral-50">
               <CircleHelp size={15} />
               提交反馈
               <ExternalLink size={12} className="ml-auto text-neutral-400" />
@@ -252,8 +252,8 @@ function NavItem({ href, icon, label, active }: { href: string; icon: React.Reac
       href={href}
       title={label}
       aria-label={label}
-      className={`group relative flex h-10 w-10 items-center justify-center border-2 text-sm transition-colors ${
-        active ? 'border-neutral-900 bg-white text-neutral-900 shadow-[2px_2px_0_0_#171717]' : 'border-transparent text-neutral-900 hover:border-neutral-900/30 hover:bg-white/40'
+      className={`group relative flex h-10 w-10 items-center justify-center rounded-lg border text-sm transition-colors ${
+        active ? 'border-neutral-200 bg-white text-neutral-900 shadow-sm' : 'border-transparent text-neutral-500 hover:bg-neutral-200/70 hover:text-neutral-900'
       }`}
     >
       {icon}
@@ -283,12 +283,12 @@ function RailButton({
       title={label}
       aria-label={label}
       aria-expanded={active}
-      className={`group relative flex h-10 w-10 items-center justify-center border-2 transition-colors ${
-        active ? 'border-neutral-900 bg-white text-neutral-900 shadow-[2px_2px_0_0_#171717]' : 'border-transparent text-neutral-900 hover:border-neutral-900/30 hover:bg-white/40'
+      className={`group relative flex h-10 w-10 items-center justify-center rounded-lg border transition-colors ${
+        active ? 'border-neutral-200 bg-white text-neutral-900 shadow-sm' : 'border-transparent text-neutral-500 hover:bg-neutral-200/70 hover:text-neutral-900'
       }`}
     >
       {icon}
-      {badge && <span className="absolute right-1 top-1 h-2 w-2 rounded-full border border-neutral-900 bg-pink-500" aria-label="有新提醒" />}
+      {badge && <span className="absolute right-1 top-1 h-2 w-2 rounded-full border border-white bg-pink-500" aria-label="有新提醒" />}
       <RailTooltip label={label} />
     </button>
   );

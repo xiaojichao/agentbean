@@ -46,7 +46,12 @@ describe('chat task surface', () => {
     expect(activityPageSource).toContain('<ChatPage />');
     expect(chatSource).toContain('className="flex min-w-0 flex-1 overflow-hidden"');
     expect(sidebarSource).toContain('切换团队，当前团队：');
-    expect(sidebarSource).toContain('切换或创建团队');
+    expect(sidebarSource).toContain('创建团队');
+    expect(sidebarSource).not.toContain('切换或创建团队');
+    expect(sidebarSource).toContain('h-14 shrink-0 items-center justify-center border-b border-neutral-200');
+    expect(sidebarSource).toContain('bg-[#F7F7F5]');
+    expect(sidebarSource).toContain('rounded-bl-none');
+    expect(sidebarSource).not.toContain('gap-1 border-t border-neutral-900/20');
     expect(sidebarSource).toContain('data-smoke="notifications-menu"');
     expect(sidebarSource).toContain('data-smoke="help-resources-menu"');
     expect(settingsSource).toContain('data-smoke="settings-admin-console-link"');
