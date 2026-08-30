@@ -602,7 +602,7 @@ export interface ChannelEvents {
   join(teamId: string, channelId: string, limit?: number): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
   subscribe(teamId: string): void;
   create(payload: { teamId: string; name: string; title?: string; visibility: 'public' | 'private'; humanMemberIds?: string[]; agentMemberIds?: string[] }): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
-  update(payload: { teamId?: string; channelId: string; name?: string; description?: string | null; visibility?: 'public' | 'private' }): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
+  update(payload: { teamId?: string; channelId: string; name?: string; title?: string | null; visibility?: 'public' | 'private' }): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   members(channelId: string, teamId?: string): Promise<{ ok: boolean; humans?: { userId: string; role: string; username: string }[]; agents?: import('./schema').AgentSnapshot[]; error?: string }>;
   addAgent(channelId: string, agentId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   addMember(channelId: string, userId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;

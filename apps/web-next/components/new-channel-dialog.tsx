@@ -13,6 +13,7 @@ export function NewChannelDialog({ onClose, teamId, teamPath }: { onClose: () =>
   const np = teamPath ?? currentTeamPath;
   const channelTeamId = teamId ?? currentTeamId;
   const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
   const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set());
@@ -51,6 +52,7 @@ export function NewChannelDialog({ onClose, teamId, teamPath }: { onClose: () =>
     channelEvents().create({
       teamId: channelTeamId,
       name: name.trim(),
+      title: description.trim() || undefined,
       agentMemberIds: [...selectedAgents],
       humanMemberIds: [...selectedUsers],
       visibility,
@@ -77,6 +79,15 @@ export function NewChannelDialog({ onClose, teamId, teamPath }: { onClose: () =>
           value={name}
           onChange={(e) => setName(e.target.value)}
           data-smoke="channel-create-name"
+        />
+
+        <textarea
+          className="w-full resize-none border border-neutral-300 rounded-md px-3 py-2 text-sm"
+          placeholder="这个频道用于什么？"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={2}
+          data-smoke="channel-create-description"
         />
 
         {/* Visibility */}
