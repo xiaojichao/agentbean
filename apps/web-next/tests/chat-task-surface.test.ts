@@ -4,6 +4,7 @@ import { describe, expect, test } from 'vitest';
 const chatSource = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
 const appShellSource = readFileSync(new URL('../components/app-shell.tsx', import.meta.url), 'utf8');
 const sidebarSource = readFileSync(new URL('../components/sidebar.tsx', import.meta.url), 'utf8');
+const settingsSource = readFileSync(new URL('../app/[teamPath]/settings/page.tsx', import.meta.url), 'utf8');
 const searchPageSource = readFileSync(new URL('../app/[teamPath]/search/page.tsx', import.meta.url), 'utf8');
 const activityPageSource = readFileSync(new URL('../app/[teamPath]/activity/page.tsx', import.meta.url), 'utf8');
 
@@ -48,6 +49,8 @@ describe('chat task surface', () => {
     expect(sidebarSource).toContain('切换或创建团队');
     expect(sidebarSource).toContain('data-smoke="notifications-menu"');
     expect(sidebarSource).toContain('data-smoke="help-resources-menu"');
+    expect(settingsSource).toContain('data-smoke="settings-admin-console-link"');
+    expect(settingsSource).toContain('href={`/${teamPath}/dashboard`}');
   });
 
   test('普通任务从整枚徽标打开完整状态菜单，受管任务只保留取消与关闭', () => {
