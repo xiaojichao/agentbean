@@ -4113,9 +4113,9 @@ export async function exerciseWebUiSettingsBusinessSmoke({
       const input = document.querySelector('[data-smoke="settings-team-name-input"]');
       const button = document.querySelector('[data-smoke="settings-team-name-save"]');
       const message = document.querySelector('[data-smoke="settings-team-name-message"]');
-      return document.body.textContent.includes(${JSON.stringify(teamName)})
-        && input?.value === ${JSON.stringify(teamName)}
-        && (message?.textContent.includes('保存成功') || Boolean(button?.disabled));
+      return input?.value === ${JSON.stringify(teamName)}
+        && message?.textContent.includes('保存成功')
+        && Boolean(button?.disabled);
     })()
     `,
     `settings team name "${teamName}" to save`,
