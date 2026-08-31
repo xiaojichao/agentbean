@@ -35,6 +35,57 @@ export type DispatchReasonCode =
 export const EXECUTION_LIMIT_REASON_TEXT = '已达执行上限，系统已停止等待';
 export const USER_CANCELLED_REASON_TEXT = '执行已被取消';
 
+export const DISPATCH_AGENT_MESSAGE_INVALID = 'DISPATCH_AGENT_MESSAGE_INVALID';
+
+/**
+ * daemon → server 的首条用户可见执行动态。
+ *
+ * 这是 Agent 在同一次执行中主动产生的正文，不是 daemon/server 合成的状态文案。
+ * 首个版本刻意限制为每次 dispatch 一条（sequence=1）；没有上报时 Web 继续显示
+ * Server-owned dispatch 状态。
+ */
+export interface DispatchAgentMessageV1 {
+  readonly schemaVersion: 1;
+  readonly dispatchId: ID;
+  readonly agentId: ID;
+  readonly updateId: string;
+  readonly sequence: 1;
+  readonly kind: 'plan' | 'progress';
+  readonly body: string;
+  readonly sentAt?: UnixMs;
+}
+
+export function parseDispatchAgentMessageV1(value: unknown): DispatchAgentMessageV1 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(DISPATCH_AGENT_MESSAGE_INVALID);
+  }
+  const input = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    'schemaVersion', 'dispatchId', 'agentId', 'updateId', 'sequence', 'kind', 'body', 'sentAt',
+  ]);
+  if (Object.keys(input).some((key) => !allowedKeys.has(key))
+    || input.schemaVersion !== 1
+    || typeof input.dispatchId !== 'string' || input.dispatchId.length === 0
+    || typeof input.agentId !== 'string' || input.agentId.length === 0
+    || typeof input.updateId !== 'string' || input.updateId.length === 0 || input.updateId.length > 200
+    || input.sequence !== 1
+    || (input.kind !== 'plan' && input.kind !== 'progress')
+    || typeof input.body !== 'string' || input.body.trim().length === 0 || input.body.length > 1200
+    || (input.sentAt !== undefined && (!Number.isFinite(input.sentAt) || Number(input.sentAt) < 0))) {
+    throw new Error(DISPATCH_AGENT_MESSAGE_INVALID);
+  }
+  return {
+    schemaVersion: 1,
+    dispatchId: input.dispatchId,
+    agentId: input.agentId,
+    updateId: input.updateId,
+    sequence: 1,
+    kind: input.kind,
+    body: input.body.trim(),
+    ...(input.sentAt !== undefined ? { sentAt: Number(input.sentAt) } : {}),
+  };
+}
+
 export interface DispatchAttachmentDto {
   id: ID;
   name: string;

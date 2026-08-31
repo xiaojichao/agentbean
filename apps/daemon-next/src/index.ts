@@ -1,7 +1,7 @@
 import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { AGENT_EVENTS, parseDeviceWorkspaceSnapshot, USER_CANCELLED_REASON_TEXT, type AgentArtifactSourceRootConfigDto, type AgentCategory, type AgentDescriptorDto, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DeviceWorkspaceSnapshotDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRevisionCommittedPayload, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, parseDeviceWorkspaceSnapshot, USER_CANCELLED_REASON_TEXT, type AgentArtifactSourceRootConfigDto, type AgentCategory, type AgentDescriptorDto, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DeviceWorkspaceSnapshotDto, type DispatchAgentMessageV1, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRevisionCommittedPayload, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
 import {
@@ -243,6 +243,7 @@ import { prepareDispatchRuntimeMemory } from './memory/runtime-memory-context.js
 import { listLocalMemoryGovernanceSummaries } from './memory/local-memory-governance.js';
 import { createLocalMemoryStore, type LocalMemoryStore } from './memory/local-memory-store.js';
 import { observeDispatchOutcome, type ObserveDispatchOutcomeInput } from './memory/outcome-observer.js';
+import { createDispatchAgentMessageReporter } from './dispatch-agent-message-reporter.js';
 
 export interface DaemonProtocolSocket {
   readonly connected: boolean;
@@ -309,7 +310,14 @@ export interface DaemonDispatchResult {
   projectDocumentInputSetResult?: ProjectDocumentInputSetResultProposalV1;
 }
 
-export type StubExecutor = (request: DispatchRequestPayload) => Promise<string | DaemonDispatchResult>;
+export interface DispatchExecutionContext {
+  reportAgentMessage(message: Pick<DispatchAgentMessageV1, 'sequence' | 'kind' | 'body'>): Promise<void> | void;
+}
+
+export type StubExecutor = (
+  request: DispatchRequestPayload,
+  context?: DispatchExecutionContext,
+) => Promise<string | DaemonDispatchResult>;
 
 export interface DaemonDeviceConfig {
   teamId: string;
@@ -1127,7 +1135,18 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             request,
             profileId: device.profileId,
           });
-          const result = normalizeDispatchResult(await runExecutorWithHeartbeat(socket, request.id, request.agentId, () => executor(request)));
+          const result = normalizeDispatchResult(await runExecutorWithHeartbeat(
+            socket,
+            request.id,
+            request.agentId,
+            () => executor(request, {
+              reportAgentMessage: createDispatchAgentMessageReporter({
+                socket,
+                dispatchId: request.id,
+                agentId: request.agentId,
+              }),
+            }),
+          ));
           // 取消在执行中会 abort 子进程并得到 stopped；该结果必须上报。
           // 仅当取消发生在已有真实成败之后、且结果不是 stopped 时，才丢弃迟到回报。
           if (cancelledDispatchIds.delete(request.id) && result.outcome !== 'stopped') {

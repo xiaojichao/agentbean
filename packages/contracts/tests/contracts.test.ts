@@ -12,6 +12,7 @@ import {
   makeFailure,
   makeSuccess,
   normalizeArtifactMimeType,
+  parseDispatchAgentMessageV1,
   parseDeviceWorkspaceSnapshot,
   supportsArtifactPreviewDerivativeMimeType,
   type Ack,
@@ -466,6 +467,38 @@ describe('first-slice contract result shape', () => {
     expect(AGENT_EVENTS.deviceInvite.credentials).toBe('device-invite:credentials');
     expect(AGENT_EVENTS.dispatch.request).toBe('dispatch:request');
     expect(AGENT_EVENTS.dispatch.progress).toBe('dispatch:progress');
+    expect(AGENT_EVENTS.dispatch.message).toBe('dispatch:message');
+  });
+
+  test('validates the first Agent-authored dispatch message envelope', () => {
+    expect(parseDispatchAgentMessageV1({
+      schemaVersion: 1,
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      updateId: 'dispatch-1:agent-message:1',
+      sequence: 1,
+      kind: 'plan',
+      body: '我会先盘点可用技能，再整理为 Markdown 文件。',
+    })).toMatchObject({ sequence: 1, kind: 'plan' });
+    expect(() => parseDispatchAgentMessageV1({
+      schemaVersion: 1,
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      updateId: 'dispatch-1:agent-message:2',
+      sequence: 2,
+      kind: 'plan',
+      body: 'second update',
+    })).toThrow('DISPATCH_AGENT_MESSAGE_INVALID');
+    expect(() => parseDispatchAgentMessageV1({
+      schemaVersion: 1,
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      updateId: 'dispatch-1:agent-message:1',
+      sequence: 1,
+      kind: 'plan',
+      body: 'ok',
+      unexpected: true,
+    })).toThrow('DISPATCH_AGENT_MESSAGE_INVALID');
   });
 
   test('exposes only Team terminology for collaboration-space events', () => {

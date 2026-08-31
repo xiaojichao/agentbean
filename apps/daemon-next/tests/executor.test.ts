@@ -200,6 +200,50 @@ describe('daemon-next command executor', () => {
     expect(logContent.length).toBeLessThanOrEqual(2 * 1024 * 1024 + 256);
   });
 
+  test('forwards one Agent-authored activity message from the managed JSONL file before completion', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'activity-agent.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        'import { appendFileSync } from "node:fs";',
+        'const path = process.env.AGENTBEAN_ACTIVITY_FILE;',
+        'if (!path) throw new Error("missing activity file");',
+        'appendFileSync(path, "not-json\\n" + JSON.stringify({ schemaVersion: 1, kind: "plan", body: "我会先盘点技能，再整理为 Markdown 文件。" }) + "\\n" + JSON.stringify({ schemaVersion: 1, kind: "progress", body: "不应发送第二条" }) + "\\n");',
+        'setTimeout(() => process.stdout.write("最终结果"), 150);',
+      ].join('\n'),
+    );
+    const messages: Array<{ sequence: 1; kind: 'plan' | 'progress'; body: string }> = [];
+    const executor = createCommandExecutor({ clock: createClock([1500, 1600]) });
+
+    const output = await executor({
+      id: 'dispatch-activity',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-activity',
+      prompt: '总结技能并输出 Markdown 文件',
+      customAgent: {
+        adapterKind: 'gemini',
+        command: process.execPath,
+        args: [scriptPath],
+        cwd,
+      },
+    }, {
+      reportAgentMessage(message) {
+        messages.push(message);
+      },
+    });
+
+    expect(messages).toEqual([{
+      sequence: 1,
+      kind: 'plan',
+      body: '我会先盘点技能，再整理为 Markdown 文件。',
+    }]);
+    expect(output).toMatchObject({ body: '最终结果', outcome: 'succeeded' });
+  });
+
   test('falls back to a deterministic stub reply when no custom command is present', async () => {
     const executor = createCommandExecutor({ fallbackPrefix: 'daemon-next:' });
 

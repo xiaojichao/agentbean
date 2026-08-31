@@ -7,6 +7,7 @@ import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, emitWithTimeout
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { messageSpeakerName } from '@/lib/display-names';
 import { buildFailedDispatchHintInput, formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
+import { pendingDispatchStatusText } from '@/lib/dispatch-activity';
 import {
   ProjectDocumentInputSetResultSummary,
   projectDocumentInputSetResultFromMeta,
@@ -45,7 +46,7 @@ function agentFailureDisplayBody(body: string): string {
   return formatChannelDispatchFailureHint({ status: 'failed', detail: body });
 }
 
-export function ChannelMessage({ msg }: { msg: ChatMessage }) {
+export function ChannelMessage({ msg, hasAgentUpdate = false }: { msg: ChatMessage; hasAgentUpdate?: boolean }) {
   const agent = useAgentBeanStore((s) => msg.senderId ? s.agents[msg.senderId] : undefined);
   const agents = msg.senderId && agent ? { [msg.senderId]: agent } : {};
   const speaker = msg.senderKind === 'agent'
@@ -126,10 +127,12 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
     if (!dispatch) return null;
     if (dispatch === 'succeeded') return null;
     if (dispatch === 'running' || dispatch === 'queued' || dispatch === 'sent' || dispatch === 'accepted') {
+      if (hasAgentUpdate) return null;
+      const statusText = pendingDispatchStatusText({ status: dispatch, body: msg.body });
       return (
         <div className="mt-2 flex items-center gap-2 text-xs text-neutral-500">
           <Loader2 size={12} className="animate-spin text-blue-500" />
-          <span>agent 正在处理…</span>
+          <span>{statusText}</span>
           <button
             type="button"
             onClick={cancelDispatch}
