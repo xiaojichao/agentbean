@@ -1610,8 +1610,10 @@ describe('server-next socket handlers', () => {
       registerDiscoveredAgents: vi.fn(async (payload) => makeSuccess({ payload })),
       escalateAgentOrchestration: vi.fn(async (payload) => makeSuccess({ payload })),
       acceptDispatch: vi.fn(async (payload) => makeSuccess({ payload })),
+      receiveDispatchAgentMessage: vi.fn(async (payload) => makeSuccess({ payload })),
       receiveDispatchResult: vi.fn(async (payload) => makeSuccess({ payload })),
       receiveDispatchError: vi.fn(async (payload) => makeSuccess({ payload })),
+      receiveDispatchProgress: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
     registerAgentSocketHandlers(socket, app);
@@ -1624,6 +1626,7 @@ describe('server-next socket handlers', () => {
       AGENT_EVENTS.agent.reportCustomSkills,
       AGENT_EVENTS.promotion.escalate,
       AGENT_EVENTS.dispatch.accepted,
+      AGENT_EVENTS.dispatch.message,
       AGENT_EVENTS.dispatch.result,
       AGENT_EVENTS.dispatch.error,
       AGENT_EVENTS.dispatch.progress,
@@ -1665,6 +1668,16 @@ describe('server-next socket handlers', () => {
         },
       ],
     });
+    const agentMessage = {
+      schemaVersion: 1,
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      updateId: 'dispatch-1:agent-message:1',
+      sequence: 1,
+      kind: 'plan',
+      body: '我会先读取请求，再整理结果。',
+    };
+    await socket.trigger(AGENT_EVENTS.dispatch.message, agentMessage);
     await expect(socket.trigger(AGENT_EVENTS.dispatch.error, { dispatchId: 'dispatch-1' })).resolves.toEqual({
       ok: true,
       payload: { dispatchId: 'dispatch-1' },
@@ -1699,6 +1712,7 @@ describe('server-next socket handlers', () => {
         },
       ],
     });
+    expect(app.receiveDispatchAgentMessage).toHaveBeenCalledWith(agentMessage);
     expect(app.receiveDispatchError).toHaveBeenCalledWith({ dispatchId: 'dispatch-1' });
   });
 

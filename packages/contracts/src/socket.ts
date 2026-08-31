@@ -404,6 +404,7 @@ export const AGENT_EVENTS = {
     result: 'dispatch:result',
     error: 'dispatch:error',
     progress: 'dispatch:progress',
+    message: 'dispatch:message',
   },
   managementWorker: {
     register: 'management-worker:register',

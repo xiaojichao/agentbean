@@ -1815,14 +1815,7 @@ function resultMessage(result: unknown): { channelId: string; teamId?: string } 
 
 function resultMessages(result: unknown): Array<{ channelId: string; teamId?: string }> {
   const primary = resultMessage(result);
-  if (!result || typeof result !== 'object') {
-    return primary ? [primary] : [];
-  }
-  const acknowledgement = (result as { acknowledgementMessage?: { channelId?: unknown } }).acknowledgementMessage;
-  return [
-    ...(primary ? [primary] : []),
-    ...(typeof acknowledgement?.channelId === 'string' ? [acknowledgement as { channelId: string; teamId?: string }] : []),
-  ];
+  return primary ? [primary] : [];
 }
 
 function resultMessageTeamId(result: unknown): string | null {

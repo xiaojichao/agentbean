@@ -19,6 +19,7 @@ import { archivePreflightItemLabel } from '@/lib/archive-labels';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
 import { buildFailedDispatchHintInput, formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
+import { isDispatchAgentMessage, pendingDispatchStatusText } from '@/lib/dispatch-activity';
 import { activeMentionDraft, extractMentions, replaceActiveMention, resolveMentionByName, structuredMentionPattern } from '@/lib/mention';
 import { activityConversationIds, buildThreadMessageIndex, inboxActivityMessages, isTopLevelAgentReply, loadActiveChannelHistory, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, recentActivityHistory, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
@@ -2721,6 +2722,11 @@ export default function ChatPage() {
                             : []}
                           taskNumber={task ? taskNumbers.get(task.id) : undefined}
                           taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
+                          hasAgentUpdate={Boolean(
+                            msg.dispatchId
+                            && visibleMessages.some((message) =>
+                              isDispatchAgentMessage(message, msg.dispatchId)),
+                          )}
                           taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'main' && chatTaskMenuTarget.messageId === msg.id : false}
                           selected={selectedMessageId === msg.id}
                           saved={savedIds.has(msg.id)}
@@ -4343,6 +4349,11 @@ function ThreadPanel({
       <ChatBubble
         key={msg.id}
         msg={msg}
+        hasAgentUpdate={Boolean(
+          msg.dispatchId
+          && replies.some((reply) =>
+            isDispatchAgentMessage(reply, msg.dispatchId)),
+        )}
         task={task}
         taskStatusOptions={task
           ? chatTaskStatusOptions(task, taskWorkspaceEntries.find((entry) => entry.task.id === task.id))
@@ -4770,6 +4781,7 @@ function ChatBubble({
   taskStatusOptions = [],
   taskNumber,
   taskAssigneeName,
+  hasAgentUpdate = false,
   taskMenuOpen = false,
   selected = false,
   saved,
@@ -4814,6 +4826,7 @@ function ChatBubble({
   taskStatusOptions?: readonly TaskStatus[];
   taskNumber?: number;
   taskAssigneeName?: string;
+  hasAgentUpdate?: boolean;
   taskMenuOpen?: boolean;
   selected?: boolean;
   saved: boolean;
@@ -4972,10 +4985,16 @@ function ChatBubble({
   const renderDispatchStatus = () => {
     if (!dispatch || dispatch === 'succeeded') return null;
     if (dispatch === 'queued' || dispatch === 'sent' || dispatch === 'accepted' || dispatch === 'running') {
+      if (hasAgentUpdate) return null;
+      const statusText = pendingDispatchStatusText({
+        status: dispatch,
+        body: msg.body,
+        agentName: taskAssigneeName,
+      });
       return (
         <div className="mt-2 flex items-center gap-2 text-xs text-neutral-500">
           <Loader2 size={12} className="animate-spin text-blue-500" />
-          <span>agent 正在处理...</span>
+          <span>{statusText}</span>
           {msg.dispatchId && (
             <button
               type="button"

@@ -224,7 +224,6 @@ describe('server-next Socket.IO namespaces', () => {
         'task-1',
         'dispatch-1',
         'request-1',
-        'message-2',
         'reply-1',
       ]),
     });
@@ -300,7 +299,6 @@ describe('server-next Socket.IO namespaces', () => {
       message: { id: 'message-1', senderKind: 'human' },
       task: { id: 'task-1', status: 'in_progress' },
       dispatches: [{ id: 'dispatch-1', requestId: 'request-1' }],
-      acknowledgementMessage: { id: 'message-2', senderKind: 'agent', body: '我来处理，会先看请求和附件，再把结果发在线程里。' },
     });
     await expect(
       agent.emitWithAck(AGENT_EVENTS.dispatch.result, {
@@ -317,7 +315,6 @@ describe('server-next Socket.IO namespaces', () => {
     await eventually(async () => {
       expect(channelMessages).toEqual([
         expect.objectContaining({ id: 'message-1', senderKind: 'human', body: '@Codex 总结一下今天新闻 Top20' }),
-        expect.objectContaining({ id: 'message-2', senderKind: 'agent', body: '我来处理，会先看请求和附件，再把结果发在线程里。' }),
         expect.objectContaining({ id: 'reply-1', senderKind: 'agent', body: 'done' }),
       ]);
     });

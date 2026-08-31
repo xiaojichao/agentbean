@@ -55,6 +55,53 @@ describe('daemon-next protocol client', () => {
     });
   });
 
+  test('forwards an Agent-authored activity message before the terminal dispatch result', async () => {
+    const socket = new FakeAgentSocket();
+    const executor: StubExecutor = async (_request, context) => {
+      await context?.reportAgentMessage({
+        sequence: 1,
+        kind: 'plan',
+        body: '我会先盘点技能，再整理为 Markdown 文件。',
+      });
+      return 'final';
+    };
+    const client = createDaemonProtocolClient({
+      socket,
+      executor,
+      device: { teamId: 'team-1', ownerId: 'user-1' },
+      runtimes: [],
+      agents: [],
+    });
+    await client.start();
+
+    await socket.trigger(AGENT_EVENTS.dispatch.request, {
+      id: 'dispatch-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: '总结技能',
+    });
+
+    const messageIndex = socket.emitted.findIndex(([event]) => event === AGENT_EVENTS.dispatch.message);
+    const resultIndex = socket.emitted.findIndex(([event]) => event === AGENT_EVENTS.dispatch.result);
+    expect(messageIndex).toBeGreaterThanOrEqual(0);
+    expect(resultIndex).toBeGreaterThan(messageIndex);
+    expect(socket.emitted[messageIndex]).toEqual([
+      AGENT_EVENTS.dispatch.message,
+      expect.objectContaining({
+        schemaVersion: 1,
+        dispatchId: 'dispatch-1',
+        agentId: 'agent-1',
+        updateId: 'dispatch-1:agent-message:1',
+        sequence: 1,
+        kind: 'plan',
+        body: '我会先盘点技能，再整理为 Markdown 文件。',
+      }),
+    ]);
+  });
+
   test('beginDrain rejects new dispatch and waits for active execution plus outbox delivery', async () => {
     const socket = new FakeAgentSocket();
     let finishExecution: (() => void) | undefined;
@@ -156,10 +203,13 @@ describe('daemon-next protocol client', () => {
 
     expect(sleep).toHaveBeenCalledWith(250);
     expect(executor).toHaveBeenCalledTimes(1);
-    expect(executor).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'dispatch-1',
-      prompt: 'first\n\nsecond\n\nthird',
-    }));
+    expect(executor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'dispatch-1',
+        prompt: 'first\n\nsecond\n\nthird',
+      }),
+      expect.objectContaining({ reportAgentMessage: expect.any(Function) }),
+    );
     expect(socket.emitted.filter(([event]) => event === AGENT_EVENTS.dispatch.accepted)).toEqual([
       [AGENT_EVENTS.dispatch.accepted, { dispatchId: 'dispatch-1', agentId: 'agent-1' }],
       [AGENT_EVENTS.dispatch.accepted, { dispatchId: 'dispatch-1', agentId: 'agent-1' }],
