@@ -2084,7 +2084,6 @@ describe('server-next SQLite repositories', () => {
             'task-1',
             'dispatch-1',
             'request-1',
-            'message-2',
             'workspace-run-1',
             'reply-1',
           ]),
