@@ -14,6 +14,7 @@ import {
   normalizeArtifactMimeType,
   parseDispatchAgentMessageV1,
   parseDeviceWorkspaceSnapshot,
+  safeParseDispatchAgentMessageV1,
   supportsArtifactPreviewDerivativeMimeType,
   type Ack,
   type AgentDto,
@@ -499,6 +500,16 @@ describe('first-slice contract result shape', () => {
       body: 'ok',
       unexpected: true,
     })).toThrow('DISPATCH_AGENT_MESSAGE_INVALID');
+    expect(safeParseDispatchAgentMessageV1({
+      schemaVersion: 1,
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      updateId: 'dispatch-1:agent-message:1',
+      sequence: 1,
+      kind: 'progress',
+      body: '正在整理结果。',
+    })).toMatchObject({ ok: true, value: { kind: 'progress' } });
+    expect(safeParseDispatchAgentMessageV1({ schemaVersion: 2 })).toEqual({ ok: false });
   });
 
   test('exposes only Team terminology for collaboration-space events', () => {

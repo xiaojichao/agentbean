@@ -89,7 +89,7 @@ import {
 import type { ArtifactRevisionConflictDto } from '../../../../packages/contracts/src/index.js';
 import { parseArtifactRevisionCommandInputV1 } from '../../../../packages/contracts/src/index.js';
 import {
-  parseDispatchAgentMessageV1,
+  safeParseDispatchAgentMessageV1,
   type DispatchAgentMessageV1,
 } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest, evaluateWorkspaceStagingSizeLimits, evaluateWorkspaceStagingUpload, evaluateWorkspaceStagingCommitReadiness, evaluateWorkspaceStagingExpiry, normalizeWorkspacePublishId, isCompatibleWorkspaceStagingBegin, DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_RETENTION_MS, deriveActivityAudience, mapLifecycleCommandToActivityFact, mapRemediationCommandToActivityFact } from '../../../../packages/domain/src/index.js';
@@ -11211,12 +11211,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async receiveDispatchAgentMessage(rawInput) {
-      let input: DispatchAgentMessageV1;
-      try {
-        input = parseDispatchAgentMessageV1(rawInput);
-      } catch {
+      const parsed = safeParseDispatchAgentMessageV1(rawInput);
+      if (!parsed.ok) {
         return makeFailure('VALIDATION_ERROR', 'Invalid dispatch agent message');
       }
+      const input: DispatchAgentMessageV1 = parsed.value;
       const dispatch = await repositories.dispatches.getById(input.dispatchId);
       if (!dispatch) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');

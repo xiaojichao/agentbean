@@ -86,6 +86,16 @@ export function parseDispatchAgentMessageV1(value: unknown): DispatchAgentMessag
   };
 }
 
+export function safeParseDispatchAgentMessageV1(value: unknown):
+  | { readonly ok: true; readonly value: DispatchAgentMessageV1 }
+  | { readonly ok: false } {
+  try {
+    return { ok: true, value: parseDispatchAgentMessageV1(value) };
+  } catch {
+    return { ok: false };
+  }
+}
+
 export interface DispatchAttachmentDto {
   id: ID;
   name: string;

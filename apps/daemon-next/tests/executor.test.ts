@@ -209,7 +209,7 @@ describe('daemon-next command executor', () => {
         'import { appendFileSync } from "node:fs";',
         'const path = process.env.AGENTBEAN_ACTIVITY_FILE;',
         'if (!path) throw new Error("missing activity file");',
-        'appendFileSync(path, "not-json\\n" + JSON.stringify({ schemaVersion: 1, kind: "plan", body: "我会先盘点技能，再整理为 Markdown 文件。" }) + "\\n" + JSON.stringify({ schemaVersion: 1, kind: "progress", body: "不应发送第二条" }) + "\\n");',
+        'appendFileSync(path, "not-json\\n" + JSON.stringify({ schemaVersion: 1, kind: "plan", body: "不应接受未知字段", unexpected: true }) + "\\n" + JSON.stringify({ schemaVersion: 1, kind: "plan", body: "我会先盘点技能，再整理为 Markdown 文件。" }) + "\\n" + JSON.stringify({ schemaVersion: 1, kind: "progress", body: "不应发送第二条" }) + "\\n");',
         'setTimeout(() => process.stdout.write("最终结果"), 150);',
       ].join('\n'),
     );
@@ -241,6 +241,45 @@ describe('daemon-next command executor', () => {
       kind: 'plan',
       body: '我会先盘点技能，再整理为 Markdown 文件。',
     }]);
+    expect(output).toMatchObject({ body: '最终结果', outcome: 'succeeded' });
+  });
+
+  test('accepts a final activity JSON line without a trailing newline and ignores report failures', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'activity-agent-no-newline.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        'import { appendFileSync } from "node:fs";',
+        'appendFileSync(process.env.AGENTBEAN_ACTIVITY_FILE, JSON.stringify({ schemaVersion: 1, kind: "progress", body: "正在整理结果。" }));',
+        'process.stdout.write("最终结果");',
+      ].join('\n'),
+    );
+    const executor = createCommandExecutor({ clock: createClock([1700, 1800]) });
+    let reportCalls = 0;
+
+    const output = await executor({
+      id: 'dispatch-activity-no-newline',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-activity-no-newline',
+      prompt: '整理结果',
+      customAgent: {
+        adapterKind: 'gemini',
+        command: process.execPath,
+        args: [scriptPath],
+        cwd,
+      },
+    }, {
+      reportAgentMessage() {
+        reportCalls += 1;
+        throw new Error('optional reporter unavailable');
+      },
+    });
+
+    expect(reportCalls).toBe(1);
     expect(output).toMatchObject({ body: '最终结果', outcome: 'succeeded' });
   });
 

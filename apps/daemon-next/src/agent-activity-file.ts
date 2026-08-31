@@ -11,6 +11,7 @@ import { join } from 'node:path';
 
 const MAX_ACTIVITY_FILE_BYTES = 64 * 1024;
 const MAX_ACTIVITY_BODY_CHARS = 1200;
+const ACTIVITY_KEYS = new Set(['schemaVersion', 'kind', 'body']);
 
 export interface AgentActivityMessage {
   readonly sequence: 1;
@@ -55,7 +56,8 @@ export function createAgentActivityFile(input: {
     }
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const record = value as Record<string, unknown>;
-    if (record.schemaVersion !== 1
+    if (Object.keys(record).some((key) => !ACTIVITY_KEYS.has(key))
+      || record.schemaVersion !== 1
       || (record.kind !== 'plan' && record.kind !== 'progress')
       || typeof record.body !== 'string') return null;
     const body = record.body.trim();
@@ -75,15 +77,20 @@ export function createAgentActivityFile(input: {
       delivered = true;
       return;
     }
-    const completeEnd = text.lastIndexOf('\n');
+    // watchFile 期间只消费完整行；进程退出后的 close() 也接受末尾无换行的完整 JSON。
+    const completeEnd = closed ? text.length : text.lastIndexOf('\n');
     if (completeEnd < processedChars) return;
     const complete = text.slice(processedChars, completeEnd);
-    processedChars = completeEnd + 1;
+    processedChars = completeEnd < text.length ? completeEnd + 1 : completeEnd;
     for (const line of complete.split('\n')) {
       const message = parseLine(line.trim());
       if (!message) continue;
       delivered = true;
-      await input.onMessage(message);
+      try {
+        await input.onMessage(message);
+      } catch {
+        // 可选动态失败不能覆盖 Agent 的最终结果。
+      }
       return;
     }
   };

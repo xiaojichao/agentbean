@@ -70,14 +70,19 @@ export function createCommandExecutor(options: CommandExecutorOptions = {}): Stu
     if (!request.customAgent?.command) {
       return redactDeviceLocalMemory(`${fallbackPrefix}${runtimePrompt}`, request.memoryContext);
     }
-    const activity = executionContext?.reportAgentMessage
-      ? createAgentActivityFile({
+    let activity: ReturnType<typeof createAgentActivityFile> | null = null;
+    if (executionContext?.reportAgentMessage) {
+      try {
+        activity = createAgentActivityFile({
           onMessage: (message) => executionContext.reportAgentMessage!({
             ...message,
             body: redactDeviceLocalMemory(message.body, request.memoryContext),
           }),
-        })
-      : null;
+        });
+      } catch {
+        // 动态文件是可选能力；临时目录不可用时仍须执行 Agent 并回写最终结果。
+      }
+    }
     const managedOutputDir = request.customAgent?.env?.AGENTBEAN_OUTPUT_DIR;
     const activityPrompt = activity ? appendAgentActivityContext(runtimePrompt) : runtimePrompt;
     const runtimeRequest = {
@@ -100,7 +105,7 @@ export function createCommandExecutor(options: CommandExecutorOptions = {}): Stu
       );
       return sanitizeDeviceLocalMemoryResult(result, request.memoryContext);
     } finally {
-      await activity?.close();
+      await activity?.close().catch(() => undefined);
     }
   };
 }
