@@ -2737,7 +2737,7 @@ function createDefaultManagementRuntime(
   const invokeClaimedChannelCollaborationTask = async (claim: ProjectStageClaimGranted) => {
     const task = await repositories.tasks.getById(claim.taskId);
     if (!task?.tags.includes(CHANNEL_COLLABORATION_TASK_TAG)) return;
-    const claimProjection = await recordChannelCollaborationClaim({
+    await recordChannelCollaborationClaim({
       repositories,
       clock,
       ids,
@@ -2769,13 +2769,6 @@ function createDefaultManagementRuntime(
     if (!view.activeDispatchId) throw new Error('MANAGEMENT_ACTIVE_DISPATCH_MISSING');
     if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
     await dispatchEmitter(view.activeDispatchId);
-    if (claimProjection?.created) {
-      await Promise.resolve(onChannelCollaborationMessageAppended?.({
-        teamId: claimProjection.message.teamId,
-        channelId: claimProjection.message.channelId,
-        messageId: claimProjection.message.id,
-      })).catch(() => undefined);
-    }
   };
   projectStageAutoAdvance = createProjectStageAutoAdvance({
     repositories,

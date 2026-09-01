@@ -11,7 +11,12 @@ import { fileURLToPath } from 'node:url';
 const AGENT_EVENTS = {
   device: { hello: 'device:hello', runtimes: 'device:runtimes', scanRequested: 'device:scan-requested' },
   agent: { registerBatch: 'agent:register-batch' },
-  dispatch: { request: 'dispatch:request', result: 'dispatch:result', error: 'dispatch:error' },
+  dispatch: {
+    request: 'dispatch:request',
+    result: 'dispatch:result',
+    error: 'dispatch:error',
+    message: 'dispatch:message',
+  },
   managementWorker: {
     register: 'management-worker:register',
     leaseOffer: 'management-worker:lease-offer',
@@ -895,6 +900,8 @@ export async function runAgentBeanChannelCollaborationBrowserSmoke({
     });
     checks.push(
       check('channel-collaboration-three-agents', result.agentReplies.length === 3, 'Three channel Agents independently claimed and replied'),
+      check('channel-collaboration-agent-confirmations', result.agentConfirmations.length === 3,
+        'Three real Agent dispatch messages confirmed work in the root thread'),
       check('channel-collaboration-pi-summary', result.summaryVisible === true, 'PI summary rendered after all three replies'),
       check('channel-collaboration-device-isolation', result.offerAgentIds.length === 3
         && new Set(result.offerAgentIds).size === 3, 'Each Device received only its own Agent offer'),
@@ -986,6 +993,10 @@ export async function exerciseWebUiChannelCollaborationSmoke({
         session,
         suffix: `collaboration-${definition.key}-${safeSuffix}`,
         timeoutMs,
+        dispatchMessageFactory: async () => ({
+          kind: 'plan',
+          body: `${definition.name} 已认领并开始处理。`,
+        }),
         dispatchResultFactory: async () => ({ body: definition.reply }),
       });
       daemons.push(daemon);
@@ -1076,6 +1087,7 @@ export async function exerciseWebUiChannelCollaborationSmoke({
     })()`);
     if (!opened) throw new Error('Could not open the collaboration discussion thread');
     const replyBodies = definitions.map((definition) => definition.reply);
+    const confirmationBodies = definitions.map((definition) => `${definition.name} 已认领并开始处理。`);
     const summary = `PI 汇总：${definitions.length} 个频道 Agent 均已完成定向子任务，独立结果已回到本讨论串，等待你验收。`;
     try {
       await page.waitForFunction(
@@ -1085,6 +1097,7 @@ export async function exerciseWebUiChannelCollaborationSmoke({
           const bodies = Array.from(panel.querySelectorAll('[data-smoke="chat-message"]'))
             .map((message) => message.dataset.messageBody);
           return ${JSON.stringify(replyBodies)}.every((body) => bodies.includes(body))
+            && ${JSON.stringify(confirmationBodies)}.every((body) => bodies.includes(body))
             && (panel.textContent ?? '').includes(${JSON.stringify(summary)});
         })()`,
         'three independent Agent replies and the PI summary to render in the thread',
@@ -1106,7 +1119,14 @@ export async function exerciseWebUiChannelCollaborationSmoke({
       messages.item(messages.length - 1)?.scrollIntoView({ block: 'end' });
       return messages.length;
     })()`);
-    return { channelId, prompt, agentReplies: replyBodies, offerAgentIds, summaryVisible: true };
+    return {
+      channelId,
+      prompt,
+      agentReplies: replyBodies,
+      agentConfirmations: confirmationBodies,
+      offerAgentIds,
+      summaryVisible: true,
+    };
   } finally {
     for (const daemon of daemons) daemon.socket.disconnect?.();
   }
@@ -1549,7 +1569,8 @@ export async function runAgentBeanChannelCollaborationRestartBrowserSmoke({
     });
     checks.push(
       check('channel-collaboration-restart-device-reconnected', result.sameDevice, 'Device reconnected with the same durable identity'),
-      check('channel-collaboration-restart-claim-once', result.claimMessageCount === 1, 'Persisted Claim projection rendered exactly once after restart'),
+      check('channel-collaboration-restart-claim-once', result.claimMessageCount === 1,
+        'Persisted Agent dispatch confirmation rendered exactly once after restart'),
       check('channel-collaboration-restart-expiry-once', result.expiredMessageCount === 1, 'Claim expiry projection rendered exactly once after restart'),
       check('channel-collaboration-restart-reoffer-once', result.reconnectedOfferCount === 1, 'Recovered task emitted exactly one reoffer to the reconnected Device'),
       check('channel-collaboration-restart-no-false-summary', result.summaryVisible === false, 'PI success summary is not rendered for the unresolved recovered task'),
@@ -1649,6 +1670,10 @@ export async function exerciseWebUiChannelCollaborationRestartSmoke({
     session,
     suffix: daemonSuffix,
     timeoutMs,
+    dispatchMessageFactory: async () => ({
+      kind: 'plan',
+      body: `${agentName} 已认领并开始处理。`,
+    }),
     dispatchRequestHandler: async ({ request }) => ({
       ok: true,
       ignored: request.agentId === agentId,
@@ -1711,7 +1736,7 @@ export async function exerciseWebUiChannelCollaborationRestartSmoke({
     await page.setInputValue('[data-smoke="chat-message-input"]', prompt);
     await page.click('[data-smoke="chat-message-send"]');
     await promiseWithTimeout(initialClaim, timeoutMs, 'Agent to claim before Server restart');
-    const claimBody = `已认领：${agentName}：${prompt}`;
+    const claimBody = `${agentName} 已认领并开始处理。`;
     await page.waitForFunction(
       `(() => {
         const root = Array.from(document.querySelectorAll('[data-smoke="chat-message"]'))
@@ -1731,7 +1756,7 @@ export async function exerciseWebUiChannelCollaborationRestartSmoke({
     if (!threadId) throw new Error('Could not resolve restart discussion thread id');
     await page.waitForFunction(
       `document.querySelector('[data-smoke="chat-thread-panel"]')?.textContent.includes(${JSON.stringify(claimBody)}) === true`,
-      'Claim projection to render before Server restart',
+      'Agent dispatch confirmation to render before Server restart',
       timeoutMs,
     );
 
@@ -5935,6 +5960,7 @@ async function connectSmokeDaemon({
   session,
   suffix,
   timeoutMs,
+  dispatchMessageFactory,
   dispatchResultFactory,
   dispatchRequestHandler,
   onDispatchResultAck,
@@ -5956,6 +5982,21 @@ async function connectSmokeDaemon({
   socket.on(AGENT_EVENTS.dispatch.request, async (request) => {
     const pending = dispatchResultFor(request.id);
     try {
+      const dispatchMessage = await dispatchMessageFactory?.(request);
+      if (dispatchMessage) {
+        const messageAck = await emitAck(socket, AGENT_EVENTS.dispatch.message, {
+          schemaVersion: 1,
+          dispatchId: request.id,
+          agentId: request.agentId,
+          updateId: dispatchMessage.updateId ?? `browser-smoke:${request.id}:message:1`,
+          sequence: 1,
+          kind: dispatchMessage.kind ?? 'progress',
+          body: dispatchMessage.body,
+        }, timeoutMs);
+        if (messageAck?.ok !== true) {
+          throw new Error(`Smoke daemon dispatch message was rejected: ${formatAck(messageAck)}`);
+        }
+      }
       if (dispatchRequestHandler) {
         const handled = await dispatchRequestHandler({ socket, request, timeoutMs });
         pending.resolve(

@@ -182,15 +182,17 @@ export interface ChannelCollaborationClaimInput {
 }
 
 /**
- * Claim 已提交后的 Server-owned 可见投影。确定性 message id 让重放只产生一条确认，
- * 同一事务也把 root 从 todo 推进到 in_progress，避免子任务已经执行而根任务仍显示未开始。
+ * Claim 已提交后的 Server-owned 生命周期投影：把 root/run 推进到执行中。
+ *
+ * 不在这里合成 senderKind=agent 的 Message。Agent 的接单/进展正文必须通过绑定 Dispatch 的
+ * dispatch:message 由真实 Agent 上报，避免 Server 冒充 Agent 说话（#1267）。
  */
 export async function recordChannelCollaborationClaim(input: {
   readonly repositories: ServerNextRepositories;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
   readonly claim: ChannelCollaborationClaimInput;
-}): Promise<{ readonly message: MessageRecord; readonly created: boolean } | null> {
+}): Promise<boolean> {
   const { claim } = input;
   return input.repositories.taskCoordinationUnitOfWork.run(async (repositories) => {
     const [task, coordination, run] = await Promise.all([
@@ -204,38 +206,13 @@ export async function recordChannelCollaborationClaim(input: {
       || coordination.taskRevision !== claim.taskRevision
       || coordination.attempt !== claim.taskAttempt
       || !run?.rootTaskId) {
-      return null;
+      return false;
     }
     const lease = await repositories.coordination.claimLeases.getById(claim.claimLeaseId);
     if (!lease || lease.taskId !== task.id || lease.agentId !== claim.targetAgentId
       || lease.taskRevision !== task.revision || lease.taskAttempt !== coordination.attempt
       || lease.status !== 'active') {
-      return null;
-    }
-    const agent = await input.repositories.agents.getById(claim.targetAgentId);
-    const messageId = `channel-collaboration-claim:${claim.claimLeaseId}`;
-    let message = await repositories.messages.getById(messageId);
-    const created = !message;
-    if (!message) {
-      message = await repositories.messages.append({
-        id: messageId,
-        teamId: run.teamId,
-        channelId: run.channelId,
-        threadId: run.rootMessageId,
-        senderKind: 'agent',
-        senderId: claim.targetAgentId,
-        body: `已认领：${task.title}`,
-        createdAt: input.clock.now(),
-        meta: {
-          kind: 'task-claim-confirmed',
-          managementRunId: run.id,
-          taskId: task.id,
-          claimLeaseId: lease.id,
-          agentName: agent?.name ?? claim.targetAgentId,
-          replyScope: 'thread',
-          parentMessageId: run.rootMessageId,
-        },
-      });
+      return false;
     }
     const rootTask = await repositories.tasks.getById(run.rootTaskId);
     if (rootTask?.status === 'todo') {
@@ -266,7 +243,7 @@ export async function recordChannelCollaborationClaim(input: {
         updatedAt: input.clock.now(),
       });
     }
-    return { message, created };
+    return true;
   });
 }
 

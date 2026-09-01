@@ -382,12 +382,24 @@ describe('channel collaboration task', () => {
     });
     expect(alphaAccepted).toMatchObject({ kind: 'claim_granted' });
     const alphaClaim = grantedByTask.get(alphaTask.id)!;
-    const claimMessageId = `channel-collaboration-claim:${alphaClaim.claimLeaseId}`;
-    await expect(repositories.messages.getById(claimMessageId)).resolves.toMatchObject({
-      senderKind: 'agent',
-      senderId: alpha.id,
-      threadId: sent.message.id,
-      meta: { kind: 'task-claim-confirmed', taskId: alphaTask.id },
+    const alphaDispatchId = dispatchByTask.get(alphaTask.id)!;
+    const alphaClaimMessage = await app.receiveDispatchAgentMessage({
+      schemaVersion: 1,
+      dispatchId: alphaDispatchId,
+      agentId: alpha.id,
+      updateId: `claim-${alphaClaim.claimLeaseId}`,
+      sequence: 1,
+      kind: 'plan',
+      body: '我是 Alpha，已认领并开始处理。',
+    });
+    expect(alphaClaimMessage).toMatchObject({
+      ok: true,
+      message: {
+        senderKind: 'agent',
+        senderId: alpha.id,
+        threadId: sent.message.id,
+        meta: { kind: 'dispatch-agent-message', dispatchId: alphaDispatchId },
+      },
     });
     await expect(repositories.tasks.getById(sent.collaborationTask.rootTaskId)).resolves.toMatchObject({
       status: 'in_progress',
@@ -395,7 +407,6 @@ describe('channel collaboration task', () => {
     await expect(repositories.management.runs.getById(sent.collaborationTask.managementRunId!))
       .resolves.toMatchObject({ status: 'running' });
 
-    const alphaDispatchId = dispatchByTask.get(alphaTask.id)!;
     const alphaCompleted = await app.receiveDispatchResult({
       dispatchId: alphaDispatchId,
       agentId: alpha.id,
@@ -454,13 +465,13 @@ describe('channel collaboration task', () => {
       limit: 20,
     });
     expect(thread.map((message) => message.meta?.kind)).toEqual(expect.arrayContaining([
-      'task-claim-confirmed',
+      'dispatch-agent-message',
       'channel-collaboration-summary',
     ]));
     const visible = await app.listChannelMessages({ channelId: channel.channel.id, limit: 20 });
     if (!visible.ok) throw new Error(visible.error);
     expect(visible.messages.map((message) => message.meta?.kind)).toEqual(expect.arrayContaining([
-      'task-claim-confirmed',
+      'dispatch-agent-message',
       'channel-collaboration-summary',
     ]));
   });
