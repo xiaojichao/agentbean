@@ -9,6 +9,7 @@ import {
 import type { TaskCoordinationTransactionRepositories } from './task-coordination-unit-of-work.js';
 import { appendTaskEvent } from './management/task-coordination-kernel.js';
 import { appendValidatedManagementEventInTransaction } from './management/management-kernel.js';
+import { inspectCurrentDeliveryFileReviewGate } from './management/task-lifecycle-kernel.js';
 import {
   parsePhase1ManagementEvent,
   parseTaskCoordinationManagementEvent,
@@ -179,6 +180,39 @@ export interface ChannelCollaborationClaimInput {
   readonly taskAttempt: number;
   readonly claimLeaseId: string;
   readonly targetAgentId: string;
+}
+
+export async function inspectChannelCollaborationCompletionClaim(input: {
+  readonly repositories: ServerNextRepositories;
+  readonly now: number;
+  readonly taskId: string;
+  readonly taskRevision: number;
+  readonly taskAttempt: number;
+  readonly claimLeaseId: string;
+  readonly agentId: string;
+}): Promise<'not_applicable' | 'accepted' | 'rejected'> {
+  const task = await input.repositories.tasks.getById(input.taskId);
+  if (!task?.tags.includes(CHANNEL_COLLABORATION_TASK_TAG)) return 'not_applicable';
+  const [coordination, claim, currentClaim] = await Promise.all([
+    input.repositories.taskCoordination.coordinations.getByTaskId(task.id),
+    input.repositories.taskCoordination.claimLeases.getById(input.claimLeaseId),
+    input.repositories.taskCoordination.claimLeases.getCurrent({
+      taskId: input.taskId,
+      taskRevision: input.taskRevision,
+      taskAttempt: input.taskAttempt,
+    }),
+  ]);
+  return task.status === 'in_progress'
+    && task.revision === input.taskRevision
+    && coordination?.nodeKind === 'subtask'
+    && coordination.taskRevision === input.taskRevision
+    && coordination.attempt === input.taskAttempt
+    && claim?.id === currentClaim?.id
+    && claim?.agentId === input.agentId
+    && claim.status === 'active'
+    && claim.expiresAt > input.now
+    ? 'accepted'
+    : 'rejected';
 }
 
 /**
@@ -463,6 +497,14 @@ export async function completeChannelCollaborationSubtask(input: {
       || claim.taskRevision !== task.revision || claim.taskAttempt !== coordination.attempt) {
       return { summaryMessage: null, summaryCreated: false };
     }
+    const latestClaim = await repositories.coordination.claimLeases.getLatest({
+      taskId: task.id,
+      taskRevision: task.revision,
+      taskAttempt: coordination.attempt,
+    });
+    if (latestClaim?.id !== claim.id) {
+      return { summaryMessage: null, summaryCreated: false };
+    }
     const invocation = await repositories.management.invocations.getById(completion.invocationId);
     const taskContext = invocation?.intent.taskContext;
     if (!invocation || invocation.managementRunId !== run.id
@@ -487,7 +529,9 @@ export async function completeChannelCollaborationSubtask(input: {
       idempotencyKey: deliveryKey,
     });
     if (!delivery) {
-      if (task.status !== 'in_progress') {
+      // 首次交付只接受仍由当前 Agent 持有、尚未过期的 Claim。文件审核后的幂等重入
+      // 可以使用已经冻结 Claim/Invocation authority 的既有 Delivery。
+      if (task.status !== 'in_progress' || claim.status !== 'active' || claim.expiresAt <= now) {
         return { summaryMessage: null, summaryCreated: false };
       }
       delivery = await repositories.coordination.deliveries.create({
@@ -542,13 +586,38 @@ export async function completeChannelCollaborationSubtask(input: {
           to: 'in_review',
         },
       }, now, input.ids, `${deliveryKey}:in-review`);
+    } else if (!['active', 'expired'].includes(claim.status)
+      || delivery.claimLeaseId !== claim.id
+      || delivery.invocationId !== invocation.id
+      || delivery.taskRevision !== task.revision
+      || delivery.taskAttempt !== coordination.attempt) {
+      return { summaryMessage: null, summaryCreated: false };
     }
 
     // 纯文本独立响应可以由 PI 按客观 criterion 自动验收；一旦带文件/OutputPackage，
-    // 必须保留既有文件审核门禁，停在 in_review，不能由此 projector 绕过 Human review。
+    // 必须保留既有文件审核门禁。全部必需文件通过后，人工 review 的幂等重入会再次进入
+    // 本 projector，完成子任务验收与根任务汇总。
     const deliveryArtifacts = await repositories.artifacts.listByMessage(deliveryMessage.id);
     if (deliveryArtifacts.length > 0 || deliveryMessage.meta?.outputPackageCard) {
-      return { summaryMessage: null, summaryCreated: false };
+      const packages = await repositories.outputPackages.listPackagesByChannel({
+        teamId: task.teamId,
+        channelId: run.channelId,
+        taskId: task.id,
+        limit: 1,
+      });
+      if (packages.length === 0) {
+        return { summaryMessage: null, summaryCreated: false };
+      }
+      const fileReviewGate = await inspectCurrentDeliveryFileReviewGate(repositories, {
+        teamId: task.teamId,
+        channelId: run.channelId,
+        taskId: task.id,
+        taskRevision: task.revision,
+        taskAttempt: coordination.attempt,
+      });
+      if (fileReviewGate.kind === 'rejected') {
+        return { summaryMessage: null, summaryCreated: false };
+      }
     }
 
     let acceptance = await repositories.coordination.acceptances.getCanonicalByDelivery(delivery.id);
@@ -710,6 +779,70 @@ export async function completeChannelCollaborationSubtask(input: {
       });
     }
     return { summaryMessage, summaryCreated };
+  });
+}
+
+/**
+ * 文件审核写入后的恢复入口。Package review 与 Delivery completion 是两个独立事实；
+ * 这里从已冻结的 Delivery/Invocation/Claim lineage 重建 completion，并幂等重跑审核与汇总。
+ */
+export async function resumeChannelCollaborationAfterFileReview(input: {
+  readonly repositories: ServerNextRepositories;
+  readonly clock: { now(): number };
+  readonly ids: { nextId(): string };
+  readonly taskId: string;
+}): Promise<{ readonly summaryMessage: MessageRecord | null; readonly summaryCreated: boolean }> {
+  const task = await input.repositories.tasks.getById(input.taskId);
+  const coordination = await input.repositories.taskCoordination.coordinations.getByTaskId(input.taskId);
+  if (!task?.tags.includes(CHANNEL_COLLABORATION_TASK_TAG)
+    || task.status !== 'in_review'
+    || !coordination
+    || coordination.nodeKind !== 'subtask') {
+    return { summaryMessage: null, summaryCreated: false };
+  }
+  const run = await input.repositories.management.runs.getById(coordination.managementRunId);
+  if (!run) return { summaryMessage: null, summaryCreated: false };
+  const delivery = (await input.repositories.taskCoordination.deliveries.listByTask(task.id))
+    .filter((candidate) => candidate.taskRevision === task.revision
+      && candidate.taskAttempt === coordination.attempt)
+    .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
+  if (!delivery) return { summaryMessage: null, summaryCreated: false };
+  const invocation = await input.repositories.management.invocations.getById(delivery.invocationId);
+  const taskContext = invocation?.intent.taskContext;
+  if (!invocation || !taskContext
+    || taskContext.taskId !== task.id
+    || taskContext.taskRevision !== task.revision
+    || taskContext.taskAttempt !== coordination.attempt
+    || taskContext.claimLeaseId !== delivery.claimLeaseId) {
+    return { summaryMessage: null, summaryCreated: false };
+  }
+  const dispatchIds = new Set((await input.repositories.management.dispatchAttempts.list(invocation.id))
+    .map((attempt) => attempt.dispatchId));
+  if (dispatchIds.size === 0) return { summaryMessage: null, summaryCreated: false };
+  const deliveryMessage = (await input.repositories.messages.listByThread({
+    channelId: run.channelId,
+    threadId: run.rootMessageId,
+    limit: Number.MAX_SAFE_INTEGER,
+  })).find((message) => message.senderKind === 'agent'
+    && message.senderId === invocation.intent.targetAgentId
+    && typeof message.meta?.dispatchId === 'string'
+    && dispatchIds.has(message.meta.dispatchId));
+  if (!deliveryMessage) return { summaryMessage: null, summaryCreated: false };
+  return completeChannelCollaborationSubtask({
+    repositories: input.repositories,
+    clock: input.clock,
+    ids: input.ids,
+    completion: {
+      managementRunId: run.id,
+      taskId: task.id,
+      taskRevision: task.revision,
+      taskAttempt: coordination.attempt,
+      claimLeaseId: delivery.claimLeaseId,
+      invocationId: invocation.id,
+      agentId: invocation.intent.targetAgentId,
+      deliveryMessageId: deliveryMessage.id,
+      summary: delivery.summary,
+    },
   });
 }
 

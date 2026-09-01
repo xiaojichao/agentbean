@@ -22,6 +22,7 @@ describe('channel collaboration task', () => {
     const offeredIds: string[] = [];
     const grantedClaims: string[] = [];
     const blockedMessageIds: string[] = [];
+    let failNextPublication = false;
     broker.bindTaskClaimGranted(async (claim) => {
       grantedClaims.push(claim.taskId);
     });
@@ -38,6 +39,10 @@ describe('channel collaboration task', () => {
       clock,
       ids,
       onChannelCollaborationTasksPublished: async (taskIds) => {
+        if (failNextPublication) {
+          failNextPublication = false;
+          throw new Error('transient publication failure');
+        }
         let offered = 0;
         for (const taskId of taskIds) {
           const offers = await broker.prepareOffers(taskId);
@@ -231,6 +236,27 @@ describe('channel collaboration task', () => {
       kind: 'not_accepted',
       reason: 'agent_not_qualified',
       diagnosticCode: 'TASK_CHANNEL_FORBIDDEN',
+    });
+
+    const retryCommand = {
+      ...command,
+      clientMessageId: 'collaboration-publication-retry',
+      body: '请再次分别介绍一下自己吧',
+    };
+    failNextPublication = true;
+    await expect(app.sendMessage(retryCommand)).resolves.toMatchObject({
+      ok: false,
+      error: 'INTERNAL_ERROR',
+      message: 'CHANNEL_COLLABORATION_OFFER_PUBLICATION_PENDING',
+    });
+    await expect(app.sendMessage(retryCommand)).resolves.toMatchObject({
+      ok: true,
+      collaborationTask: {
+        stableCode: 'PROMOTION_REPLAYED',
+        offerDelivery: 'partial',
+        offeredCount: 1,
+        targetCount: 2,
+      },
     });
   });
 
@@ -440,7 +466,135 @@ describe('channel collaboration task', () => {
       dispatchId: betaDispatchId,
       agentId: beta.id,
       body: '我是 Beta，负责独立核验。',
+      artifacts: [{
+        id: 'beta-delivery-artifact',
+        filename: 'beta-report.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 12,
+      }],
     })).resolves.toMatchObject({ ok: true, message: { senderId: beta.id } });
+    await expect(repositories.tasks.getById(betaTask.id)).resolves.toMatchObject({ status: 'in_review' });
+    await expect(repositories.tasks.getById(sent.collaborationTask.rootTaskId)).resolves.toMatchObject({
+      status: 'in_progress',
+    });
+    await expect(repositories.messages.getById(summaryMessageId)).resolves.toBeNull();
+
+    const profileId = 'closure-project-profile';
+    const stageId = 'closure-beta-stage';
+    await expect(repositories.channelProjects.createInitialStage({
+      expectedRevision: 0,
+      profile: {
+        id: profileId,
+        teamId,
+        channelId: channel.channel.id,
+        projectLeadId: userId,
+        defaultReviewerIds: [userId],
+        revision: 1,
+        createdBy: userId,
+        createdAt: now,
+        updatedAt: now,
+      },
+      stage: {
+        id: stageId,
+        teamId,
+        channelId: channel.channel.id,
+        taskId: betaTask.id,
+        taskRevision: betaTask.revision,
+        name: 'Beta 交付审核',
+        goal: '审核 Beta 的频道协作交付',
+        ownerId: userId,
+        reviewerIds: [userId],
+        acceptanceCriteria: ['文件审核通过'],
+        createdAt: now,
+        updatedAt: now,
+      },
+      mutation: {
+        teamId,
+        channelId: channel.channel.id,
+        idempotencyKey: 'closure-beta-stage',
+        requestFingerprint: 'closure-beta-stage',
+        profileId,
+        stageId,
+        resultRevision: 1,
+        resultOverview: {} as never,
+        createdAt: now,
+      },
+    })).resolves.toMatchObject({ kind: 'created' });
+    const [betaDelivery] = await repositories.taskCoordination.deliveries.listByTask(betaTask.id);
+    const packageId = 'closure-beta-package';
+    const collectionId = 'closure-beta-collection';
+    const versionId = 'closure-beta-version';
+    await expect(repositories.outputPackages.recordPackageFormation({
+      record: {
+        teamId,
+        packageId,
+        channelId: channel.channel.id,
+        deliveryId: betaDelivery!.id,
+        publishId: 'closure-beta-publish',
+        workspaceRevisionId: 'closure-beta-workspace-revision',
+        agentId: beta.id,
+        taskId: betaTask.id,
+        taskBinding: 'managed',
+        taskRevision: betaTask.revision,
+        taskAttempt: 1,
+        memberCount: 1,
+        status: 'recorded',
+        createdAt: now,
+      },
+      members: [{
+        sequence: 1,
+        shortLabel: 'F1',
+        role: 'deliverable',
+        requiredForFinal: true,
+        sourcePath: 'beta-report.md',
+        filename: 'beta-report.md',
+        sizeBytes: 12,
+        collection: { mode: 'create', collectionId, name: 'beta-report.md', kind: 'deliverable' },
+        version: {
+          id: versionId,
+          artifactId: 'beta-delivery-artifact',
+          stageId,
+          taskId: betaTask.id,
+          taskRevision: betaTask.revision,
+        },
+      }],
+      receipt: {
+        receiptId: 'closure-beta-package-receipt',
+        teamId,
+        commandName: 'record-agent-output-package',
+        commandSchemaVersion: 1,
+        idempotencyKey: 'record-agent-output-package:closure-beta-publish',
+        commandHash: 'closure-beta-package',
+        outcome: 'applied',
+        committedRevisions: [],
+        eventRefs: [],
+        commitTime: now,
+        resultAvailable: true,
+        createdAt: now,
+      },
+      tombstone: {
+        id: 'closure-beta-package-tombstone',
+        teamId,
+        commandName: 'record-agent-output-package',
+        idempotencyKey: 'record-agent-output-package:closure-beta-publish',
+        commandHash: 'closure-beta-package',
+        receiptId: 'closure-beta-package-receipt',
+        outcome: 'applied',
+        resultAvailable: true,
+        createdAt: now,
+      },
+    })).resolves.toMatchObject({ kind: 'created' });
+    await expect(app.submitPackageArtifactReview({
+      teamId,
+      userId,
+      channelId: channel.channel.id,
+      packageId,
+      collectionId,
+      versionId,
+      decision: 'approved',
+      comment: '文件内容符合要求',
+      idempotencyKey: 'closure-beta-review',
+    })).resolves.toMatchObject({ ok: true, review: { decision: 'approved' } });
     await expect(repositories.tasks.getById(betaTask.id)).resolves.toMatchObject({ status: 'done' });
     await expect(repositories.tasks.getById(sent.collaborationTask.rootTaskId)).resolves.toMatchObject({
       status: 'in_review',
@@ -653,10 +807,14 @@ describe('channel collaboration task', () => {
       detail: null,
     })).resolves.toMatchObject({ kind: 'claim_granted' });
 
-    await expect(app.receiveDispatchError({
+    await expect(app.receiveDispatchResult({
       dispatchId: dispatchByTask.get(betaTask.id)!,
       agentId: beta.id,
-      error: 'BETA_EXECUTION_FAILED',
+      body: 'Beta 执行超时。',
+      outcome: 'stopped',
+      reasonCode: 'EXECUTION_LIMIT',
+      reasonText: '已达执行上限',
+      workspaceRun: { status: 'cancelled', exitCode: 124, startedAt: now, completedAt: now },
     })).resolves.toMatchObject({ ok: true });
     await expect(repositories.tasks.getById(betaTask.id)).resolves.toMatchObject({ status: 'todo' });
     await expect(repositories.tasks.getById(gammaTask.id)).resolves.toMatchObject({ status: 'in_progress' });
@@ -677,11 +835,23 @@ describe('channel collaboration task', () => {
       detail: null,
     })).resolves.toMatchObject({ kind: 'claim_granted' });
     const alphaClaim = grantedByTask.get(alphaTask.id)!;
+    const expiredAlphaDispatchId = dispatchByTask.get(alphaTask.id)!;
     now += 1_000;
     const expired = await broker.expireClaims();
     expect(expired).toEqual(expect.arrayContaining([
       expect.objectContaining({ claimLeaseId: alphaClaim.claimLeaseId, taskId: alphaTask.id }),
     ]));
+    await expect(repositories.tasks.getById(alphaTask.id)).resolves.toMatchObject({ status: 'todo' });
+    await expect(app.receiveDispatchResult({
+      dispatchId: expiredAlphaDispatchId,
+      agentId: alpha.id,
+      body: '这是已过期 Claim 的迟到结果。',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+      message: 'Channel collaboration result belongs to a stale Claim',
+    });
+    await expect(repositories.taskCoordination.deliveries.listByTask(alphaTask.id)).resolves.toHaveLength(0);
     await expect(repositories.tasks.getById(alphaTask.id)).resolves.toMatchObject({ status: 'todo' });
     const firstAlphaExpiry = expired.find((claim) => claim.claimLeaseId === alphaClaim.claimLeaseId)!;
     await expect(broker.canAutoReofferExpiredChannelCollaborationClaim(firstAlphaExpiry))

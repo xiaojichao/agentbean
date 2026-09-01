@@ -158,7 +158,9 @@ import { createTaskLifecycleKernel } from './management/task-lifecycle-kernel.js
 import {
   completeChannelCollaborationSubtask,
   createChannelCollaborationPromotionHooks,
+  inspectChannelCollaborationCompletionClaim,
   recordChannelCollaborationStatus,
+  resumeChannelCollaborationAfterFileReview,
 } from './channel-collaboration-task-handler.js';
 import { resolveProjectStageExecutionGate } from './project-stage-execution-gate.js';
 import { createMemorySourceInvalidationService } from './memory-source-invalidation-service.js';
@@ -2036,6 +2038,57 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     ids,
     editingEnabled: input.channelFileRollout?.markdownEditing ?? true,
   });
+  const reconcileChannelCollaborationTaskAfterFileReview = async (taskId: string) => {
+    const projected = await resumeChannelCollaborationAfterFileReview({
+      repositories,
+      clock,
+      ids,
+      taskId,
+    });
+    if (projected.summaryCreated && projected.summaryMessage) {
+      await Promise.resolve(input.onChannelCollaborationMessageAppended?.({
+        teamId: projected.summaryMessage.teamId,
+        channelId: projected.summaryMessage.channelId,
+        messageId: projected.summaryMessage.id,
+      })).catch(() => undefined);
+    }
+  };
+  const reconcileChannelCollaborationPackageAfterFileReview = async (review: {
+    teamId: string;
+    channelId: string;
+    packageId: string;
+  }) => {
+    const projection = await repositories.outputPackages.getPackageById({
+      teamId: review.teamId,
+      packageId: review.packageId,
+    });
+    if (!projection || projection.package.channelId !== review.channelId) return;
+    await reconcileChannelCollaborationTaskAfterFileReview(projection.package.taskId);
+  };
+  const reconcileChannelCollaborationVersionAfterFileReview = async (review: {
+    teamId: string;
+    channelId: string;
+    versionId: string;
+  }) => {
+    const packageRecords = await repositories.outputPackages.listPackagesByChannel({
+      teamId: review.teamId,
+      channelId: review.channelId,
+      limit: Number.MAX_SAFE_INTEGER,
+    });
+    const taskIds = new Set<string>();
+    for (const record of packageRecords) {
+      const projection = await repositories.outputPackages.getPackageById({
+        teamId: review.teamId,
+        packageId: record.packageId,
+      });
+      if (projection?.members.some((member) => member.artifactVersionId === review.versionId)) {
+        taskIds.add(record.taskId);
+      }
+    }
+    for (const taskId of taskIds) {
+      await reconcileChannelCollaborationTaskAfterFileReview(taskId);
+    }
+  };
   // #1064：Task-linked @Agent 请求的 eligibility 解析。dev-server 注入 broker
   // resolveCandidates；缺省用简单可见性兜底（未接线测试环境；fail closed 由复验链保证）。
   const resolveTaskLinkedEligibleAgentIds = input.resolveTaskLinkedEligibleAgentIds
@@ -5944,7 +5997,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               ? 'offered'
               : offeredCount > 0 ? 'partial' : 'blocked';
           } catch {
-            offerDelivery = 'pending';
+            // Promotion 已持久化，但 Offer 尚未可靠发布。明确返回可重试失败；客户端以同一
+            // clientMessageId 重放时会投影既有 Task，并再次进入发布路径。
+            return makeFailure(
+              'INTERNAL_ERROR',
+              'CHANNEL_COLLABORATION_OFFER_PUBLICATION_PENDING',
+            );
           }
         }
         const message = {
@@ -8975,6 +9033,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!review || !projection) {
           return makeFailure('CONFLICT', 'Recorded artifact review result is no longer available');
         }
+        if (review.decision === 'approved') {
+          try {
+            await reconcileChannelCollaborationVersionAfterFileReview({
+              teamId: projectInput.teamId,
+              channelId: projectInput.channelId,
+              versionId: review.versionId,
+            });
+          } catch {
+            return makeFailure('INTERNAL_ERROR', 'Channel collaboration review reconciliation pending');
+          }
+        }
         return makeSuccess({ ...projection, review: projectArtifactReviewDto(review), replayed: true });
       }
       if (channel.archivedAt != null) {
@@ -9027,6 +9096,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
       } catch {
         // 审核事实已经持久化；推进器失败由阶段投影显示等待原因，不回滚人工决定。
+      }
+      if (result.review.decision === 'approved') {
+        try {
+          await reconcileChannelCollaborationVersionAfterFileReview({
+            teamId: projectInput.teamId,
+            channelId: projectInput.channelId,
+            versionId: result.review.versionId,
+          });
+        } catch {
+          return makeFailure('INTERNAL_ERROR', 'Channel collaboration review reconciliation pending');
+        }
       }
       return makeSuccess({
         ...projection,
@@ -9317,6 +9397,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           : {}),
         ...(reviewInput.saveRevision ? { saveRevision: reviewInput.saveRevision } : {}),
       });
+      if ((result.kind === 'applied' || result.kind === 'replayed')
+        && reviewInput.decision === 'approved') {
+        try {
+          await reconcileChannelCollaborationPackageAfterFileReview(reviewInput);
+        } catch {
+          return makeFailure('INTERNAL_ERROR', 'Channel collaboration review reconciliation pending');
+        }
+      }
       return packageReviewCommandAck(repositories, result, 'review');
     },
 
@@ -9333,6 +9421,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         comment: reviewInput.comment,
         idempotencyKey: reviewInput.idempotencyKey,
       });
+      if ((result.kind === 'applied' || result.kind === 'replayed')
+        && reviewInput.decision === 'approved') {
+        try {
+          await reconcileChannelCollaborationPackageAfterFileReview(reviewInput);
+        } catch {
+          return makeFailure('INTERNAL_ERROR', 'Channel collaboration review reconciliation pending');
+        }
+      }
       return packageBatchReviewCommandAck(result);
     },
 
@@ -9350,6 +9446,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         expectedCollectionRevision: reviewInput.expectedCollectionRevision,
         ...(reviewInput.saveRevision ? { saveRevision: reviewInput.saveRevision } : {}),
       });
+      if ((result.kind === 'applied' || result.kind === 'replayed')
+        && reviewInput.decision === 'approved') {
+        try {
+          await reconcileChannelCollaborationPackageAfterFileReview(reviewInput);
+        } catch {
+          return makeFailure('INTERNAL_ERROR', 'Channel collaboration review reconciliation pending');
+        }
+      }
       return packageReviewCommandAck(repositories, result, 'finalize');
     },
 
@@ -12143,6 +12247,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const managedHandoff = managedAttempt
         ? await repositories.management.handoffs.getByInvocationId(managedAttempt.invocationId)
         : null;
+      const channelCollaborationTaskContext = managedInvocation?.intent.taskContext;
+      if (resultSucceeded && channelCollaborationTaskContext) {
+        const claimGate = await inspectChannelCollaborationCompletionClaim({
+          repositories,
+          now,
+          taskId: channelCollaborationTaskContext.taskId,
+          taskRevision: channelCollaborationTaskContext.taskRevision,
+          taskAttempt: channelCollaborationTaskContext.taskAttempt,
+          claimLeaseId: channelCollaborationTaskContext.claimLeaseId,
+          agentId: resultInput.agentId,
+        });
+        if (claimGate === 'rejected') {
+          return makeFailure('CONFLICT', 'Channel collaboration result belongs to a stale Claim');
+        }
+      }
       if (resultInput.projectDocumentInputSetResult) {
         const validation = await validateProjectDocumentInputSetResultProposal({
           repositories,
@@ -16348,7 +16467,7 @@ async function recordManagedDispatchTerminal(
         invocationId: invocation.id,
         reasonCode: input.errorCode ?? `INVOCATION_${input.status.toUpperCase()}`,
       });
-      if (input.status === 'failed' && taskContext) {
+      if ((input.status === 'failed' || input.status === 'timed_out') && taskContext) {
         const projected = await recordChannelCollaborationStatus({
           repositories,
           clock,
