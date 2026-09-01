@@ -259,6 +259,83 @@ describe('automatic channel collaboration routing (#1270)', () => {
     expect(afterUnavailable.ok && afterUnavailable.tasks).toHaveLength(4);
   });
 
+  test('Promotion receipt replay 在发布 Offer 前复验断连，不把失败重试标记 resolved', async () => {
+    const repositories = createInMemoryRepositories();
+    let id = 0;
+    let now = 300;
+    const ids = { nextId: () => `replay-route-${++id}` };
+    const clock = { now: () => ++now };
+    const broker = createTaskClaimBroker({ repositories, ids, clock, offerTtlMs: 60_000 });
+    let failNextPublication = true;
+    let disconnectAfterSnapshot = false;
+    let runtimeDisconnectChecks = 0;
+    const app = createServerNextUseCases({
+      repositories, ids, clock,
+      isDeviceRuntimeDisconnected: () => disconnectAfterSnapshot && ++runtimeDisconnectChecks > 1,
+      onChannelCollaborationTasksPublished: async (taskIds) => {
+        if (failNextPublication) {
+          failNextPublication = false;
+          throw new Error('MESSAGE_ROUTE_TEST_PUBLICATION_FAILED');
+        }
+        let offered = 0;
+        for (const taskId of taskIds) offered += (await broker.prepareOffers(taskId)).length;
+        return { offered };
+      },
+    });
+    const registered = await app.registerUser({ username: 'replay-owner', password: 'secret', teamName: 'Replay' });
+    if (!registered.ok) throw new Error(registered.error);
+    const userId = registered.user.id;
+    const teamId = registered.user.primaryTeamId!;
+    await enableAutomaticRouting(repositories, teamId, false);
+    const channel = await app.createChannel({ userId, teamId, name: 'Replay', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+    const channelId = channel.channel.id;
+    const hello = await app.deviceHello({ teamId, ownerId: userId, machineId: 'replay-machine', hostname: 'host' });
+    if (!hello.ok) throw new Error(hello.error);
+    const discovered = await app.registerDiscoveredAgents({
+      teamId, deviceId: hello.device.id,
+      agents: [{ name: 'Replay Agent', adapterKind: 'hermes', category: 'agentos-hosted' }],
+    });
+    const agent = discovered.ok ? discovered.agents[0] : undefined;
+    if (!agent) throw new Error('agent missing');
+    await app.addChannelAgentMember({ userId, teamId, channelId, agentId: agent.id });
+    await repositories.agentExposure.manifests.create({
+      id: `manifest-${agent.id}`, teamId, agentId: agent.id, revision: 1, status: 'active',
+      capabilities: [], skills: [], constraints: [], availability: { status: 'available' },
+      validFrom: 0, validUntil: null, createdBy: userId, now: clock.now(),
+    });
+
+    const sent = await app.sendMessage({
+      userId, teamId, channelId, clientMessageId: 'replay-route', body: '各位，请分别介绍一下自己吧',
+    });
+    expect(sent.ok).toBe(true);
+    if (!sent.ok) return;
+    await waitForRouteResolution(repositories, sent.message.id);
+    const readRoute = () => repositories.channelCoordinationUnitOfWork.run((tx) =>
+      tx.routes.getByMessageId(sent.message.id));
+    await expect(readRoute()).resolves.toMatchObject({
+      status: 'deferred', diagnosticCode: 'MESSAGE_ROUTE_TEST_PUBLICATION_FAILED', linkedTaskId: null,
+    });
+    const listed = await app.listTasks({ userId, teamId, channelId });
+    if (!listed.ok) throw new Error(listed.error);
+    const replaySubtask = listed.tasks.find((task) => task.tags.includes('channel-collaboration'));
+    expect(replaySubtask).toBeDefined();
+    await expect(repositories.taskCoordination.offers.listByTask(replaySubtask!.id)).resolves.toEqual([]);
+
+    disconnectAfterSnapshot = true;
+    runtimeDisconnectChecks = 0;
+    now += 30_100;
+    await app.runCoordinationCycle({ limit: 1 });
+    await expect(readRoute()).resolves.toMatchObject({
+      status: 'deferred', diagnosticCode: 'MESSAGE_ROUTE_TARGET_UNAVAILABLE', linkedTaskId: null,
+    });
+
+    disconnectAfterSnapshot = false;
+    now += 30_100;
+    await app.runCoordinationCycle({ limit: 1 });
+    await expect(readRoute()).resolves.toMatchObject({ status: 'resolved', linkedTaskId: expect.any(String) });
+  });
+
   test('PI 为未指派简单请求选择 qualified Agent，并自动 acceptance 与 Claim', async () => {
     const repositories = createInMemoryRepositories();
     let id = 0;

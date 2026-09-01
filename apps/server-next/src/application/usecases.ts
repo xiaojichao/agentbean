@@ -2376,6 +2376,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         };
       }
       if (!projected) throw new Error('MESSAGE_ROUTE_PROMOTION_NOT_APPLIED');
+      // Exact-idempotency receipt replay 会在 Promotion hooks 之前返回；在任何 Offer 发布前
+      // 再读一次实时连接 fence，覆盖 crash/retry 后的 replay 路径。
+      revalidateTargetRuntimeConnection();
       if (projected.subtaskIds.length > 0) {
         if (!input.onChannelCollaborationTasksPublished) {
           throw new Error('MESSAGE_ROUTE_OFFER_PUBLICATION_UNAVAILABLE');
