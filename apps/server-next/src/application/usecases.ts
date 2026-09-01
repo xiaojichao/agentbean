@@ -11720,6 +11720,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                     : {}),
                   dispatchResultFingerprint: resultFingerprint,
                   ...(replayWorkspaceRunCreateId ? { workspaceRunId: replayWorkspaceRunCreateId } : {}),
+                  ...(resultInput.workspaceRun?.publishId
+                    ? { outputPackagePublishId: resultInput.workspaceRun.publishId }
+                    : {}),
                 },
               });
             } catch {
@@ -12031,6 +12034,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                           : {}),
                         ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
                         workspaceRunId: recoveryWorkspaceRunId,
+                        ...(resultInput.workspaceRun.publishId
+                          ? { outputPackagePublishId: resultInput.workspaceRun.publishId }
+                          : {}),
                       },
                     })
                   : null);
@@ -12358,6 +12364,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             : {}),
           ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
           ...(workspaceRunId ? { workspaceRunId } : {}),
+          ...(resultInput.workspaceRun?.publishId
+            ? { outputPackagePublishId: resultInput.workspaceRun.publishId }
+            : {}),
           ...(inlinePackageCard ? { outputPackageCard: inlinePackageCard } : {}),
           dispatchResultFingerprint: resultFingerprint,
         },

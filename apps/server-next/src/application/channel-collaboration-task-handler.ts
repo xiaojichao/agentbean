@@ -14,6 +14,7 @@ import {
   parsePhase1ManagementEvent,
   parseTaskCoordinationManagementEvent,
 } from './management/management-event-validator.js';
+import { findCurrentManagedOutputPackage } from './output-package-current-delivery.js';
 
 export interface ChannelCollaborationAgentCandidate {
   readonly agentId: string;
@@ -598,20 +599,23 @@ export async function completeChannelCollaborationSubtask(input: {
     // 必须保留既有文件审核门禁。全部必需文件通过后，人工 review 的幂等重入会再次进入
     // 本 projector，完成子任务验收与根任务汇总。
     const deliveryArtifacts = await repositories.artifacts.listByMessage(deliveryMessage.id);
-    if (deliveryArtifacts.length > 0 || deliveryMessage.meta?.outputPackageCard) {
-      const packages = await repositories.outputPackages.listPackagesByChannel({
+    const hasOutputPackageIntent = typeof deliveryMessage.meta?.outputPackagePublishId === 'string'
+      || Boolean(deliveryMessage.meta?.outputPackageCard);
+    if (deliveryArtifacts.length > 0 || hasOutputPackageIntent) {
+      const currentPackage = await findCurrentManagedOutputPackage(repositories.outputPackages, {
         teamId: task.teamId,
         channelId: run.channelId,
         taskId: task.id,
-        limit: 1,
+        taskRevision: task.revision,
+        taskAttempt: coordination.attempt,
       });
       // 仅内联 Artifact 的旧/轻量交付没有 OutputPackage 审核面，仍可按当前客观
-      // criterion 自动验收。只要消息已经声明 Package 卡片，就必须等权威 Package
+      // criterion 自动验收。只要消息已经声明 publish/package 意图，就必须等权威 Package
       // 投影可见，避免 reconciliation 窗口绕过逐文件审核。
-      if (packages.length === 0 && deliveryMessage.meta?.outputPackageCard) {
+      if (!currentPackage.record && hasOutputPackageIntent) {
         return { summaryMessage: null, summaryCreated: false };
       }
-      if (packages.length > 0) {
+      if (currentPackage.record) {
         const fileReviewGate = await inspectCurrentDeliveryFileReviewGate(repositories, {
           teamId: task.teamId,
           channelId: run.channelId,

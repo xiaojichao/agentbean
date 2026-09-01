@@ -959,7 +959,8 @@ export function createTaskCoordinationKernel(
           taskAttempt: coordination.attempt,
         });
         if (!currentClaim || currentClaim.id !== context.claimLeaseId
-          || currentClaim.agentId !== invocation.intent.targetAgentId) {
+          || currentClaim.agentId !== invocation.intent.targetAgentId
+          || currentClaim.status !== 'active' || currentClaim.expiresAt <= now) {
           return { disposition: 'stale' as const };
         }
         const idempotencyKey = `invocation-failure:${invocation.id}`;

@@ -468,24 +468,32 @@ describe('channel collaboration task', () => {
       detail: null,
     })).resolves.toMatchObject({ kind: 'claim_granted' });
     const betaDispatchId = dispatchByTask.get(betaTask.id)!;
-    const betaClaim = grantedByTask.get(betaTask.id)!;
-    const betaAttempt = await repositories.management.dispatchAttempts.getByDispatchId(betaDispatchId);
-    if (!betaAttempt) throw new Error('beta invocation missing');
-    const betaManagedDelivery = await repositories.taskCoordination.deliveries.create({
-      schemaVersion: 1,
-      id: 'closure-beta-managed-delivery',
-      teamId,
-      taskId: betaTask.id,
-      taskRevision: betaTask.revision,
-      taskAttempt: betaClaim.taskAttempt,
-      claimLeaseId: betaClaim.claimLeaseId,
-      invocationId: betaAttempt.invocationId,
-      summary: 'Beta 文件交付',
-      claims: [],
-      evidenceRefs: [],
-      idempotencyKey: 'closure-beta-managed-delivery',
-      createdAt: now,
+    await expect(app.receiveDispatchResult({
+      dispatchId: betaDispatchId,
+      agentId: beta.id,
+      body: '我是 Beta，负责独立核验。',
+      artifacts: [{
+        id: 'beta-delivery-artifact',
+        filename: 'beta-report.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 12,
+      }],
+      workspaceRun: {
+        publishId: 'closure-beta-publish',
+        status: 'succeeded',
+        startedAt: now,
+        completedAt: now,
+      },
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'INTERNAL_ERROR',
+      message: 'OutputPackage reconciliation pending',
     });
+    await expect(repositories.tasks.getById(betaTask.id)).resolves.toMatchObject({ status: 'in_review' });
+    await expect(repositories.tasks.getById(sent.collaborationTask.rootTaskId)).resolves.toMatchObject({
+      status: 'in_progress',
+    });
+    await expect(repositories.messages.getById(summaryMessageId)).resolves.toBeNull();
     const profileId = 'closure-project-profile';
     const stageId = 'closure-beta-stage';
     await expect(repositories.channelProjects.createInitialStage({
@@ -527,6 +535,8 @@ describe('channel collaboration task', () => {
         createdAt: now,
       },
     })).resolves.toMatchObject({ kind: 'created' });
+    const [betaDelivery] = await repositories.taskCoordination.deliveries.listByTask(betaTask.id);
+    const betaClaim = grantedByTask.get(betaTask.id)!;
     const packageId = 'closure-beta-package';
     const collectionId = 'closure-beta-collection';
     const versionId = 'closure-beta-version';
@@ -535,7 +545,7 @@ describe('channel collaboration task', () => {
         teamId,
         packageId,
         channelId: channel.channel.id,
-        deliveryId: betaManagedDelivery.id,
+        deliveryId: betaDelivery!.id,
         publishId: 'closure-beta-publish',
         workspaceRevisionId: 'closure-beta-workspace-revision',
         agentId: beta.id,
@@ -590,22 +600,6 @@ describe('channel collaboration task', () => {
         createdAt: now,
       },
     })).resolves.toMatchObject({ kind: 'created' });
-    await expect(app.receiveDispatchResult({
-      dispatchId: betaDispatchId,
-      agentId: beta.id,
-      body: '我是 Beta，负责独立核验。',
-      artifacts: [{
-        id: 'beta-delivery-artifact',
-        filename: 'beta-report.md',
-        mimeType: 'text/markdown',
-        sizeBytes: 12,
-      }],
-    })).resolves.toMatchObject({ ok: true, message: { senderId: beta.id } });
-    await expect(repositories.tasks.getById(betaTask.id)).resolves.toMatchObject({ status: 'in_review' });
-    await expect(repositories.tasks.getById(sent.collaborationTask.rootTaskId)).resolves.toMatchObject({
-      status: 'in_progress',
-    });
-    await expect(repositories.messages.getById(summaryMessageId)).resolves.toBeNull();
     await expect(app.submitPackageArtifactReview({
       teamId,
       userId,
@@ -891,6 +885,7 @@ describe('channel collaboration task', () => {
       detail: null,
     })).resolves.toMatchObject({ kind: 'claim_granted' });
     const automaticRetryClaim = grantedByTask.get(alphaTask.id)!;
+    const automaticRetryDispatchId = dispatchByTask.get(alphaTask.id)!;
     await expect(app.receiveDispatchResult({
       dispatchId: expiredAlphaDispatchId,
       agentId: alpha.id,
@@ -913,6 +908,21 @@ describe('channel collaboration task', () => {
       taskAttempt: automaticRetryClaim.taskAttempt,
     })).resolves.toMatchObject({ id: automaticRetryClaim.claimLeaseId, status: 'active' });
     now += 1_000;
+    await expect(app.receiveDispatchError({
+      dispatchId: automaticRetryDispatchId,
+      agentId: alpha.id,
+      error: 'LATE_ERROR_AFTER_LEASE_EXPIRY',
+    })).resolves.toMatchObject({ ok: true, dispatch: { status: 'failed' } });
+    await expect(repositories.tasks.getById(alphaTask.id)).resolves.toMatchObject({
+      status: 'in_progress',
+    });
+    await expect(repositories.taskCoordination.coordinations.getByTaskId(alphaTask.id))
+      .resolves.toMatchObject({ attempt: automaticRetryClaim.taskAttempt });
+    await expect(repositories.taskCoordination.claimLeases.getCurrent({
+      taskId: alphaTask.id,
+      taskRevision: alphaTask.revision,
+      taskAttempt: automaticRetryClaim.taskAttempt,
+    })).resolves.toMatchObject({ id: automaticRetryClaim.claimLeaseId, status: 'active' });
     const secondExpired = await broker.expireClaims();
     const secondAlphaExpiry = secondExpired.find((claim) =>
       claim.claimLeaseId === automaticRetryClaim.claimLeaseId)!;
