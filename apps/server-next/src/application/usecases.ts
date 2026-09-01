@@ -2241,10 +2241,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       if (!directoryResult.ok) throw new Error('MESSAGE_ROUTE_CAPABILITY_DIRECTORY_UNAVAILABLE');
       const directoryByAgent = new Map(directoryResult.directory.entries.map((entry) => [entry.agentId, entry]));
+      const targetDeviceIds: string[] = [];
       for (const targetAgentId of route.targetAgentIds) {
         const directoryEntry = directoryByAgent.get(targetAgentId);
         if (!directoryEntry) throw new Error('MESSAGE_ROUTE_TARGET_NOT_FOUND');
         if (!directoryEntry.available) throw new Error('MESSAGE_ROUTE_TARGET_UNAVAILABLE');
+        const targetAgent = await repositories.agents.getById(targetAgentId);
+        if (!targetAgent?.deviceId) throw new Error('MESSAGE_ROUTE_TARGET_UNAVAILABLE');
+        targetDeviceIds.push(targetAgent.deviceId);
       }
       if (route.intentSource === 'pi') {
         if (route.subtasks.length === 0) throw new Error('MESSAGE_ROUTE_SUBTASKS_REQUIRED');
@@ -2313,6 +2317,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               .get(route.analysis.teamId);
             if (currentRollout) {
               throw new Error('MESSAGE_ROUTE_SEMANTIC_ROLLOUT_FRESHNESS_CONFLICT');
+            }
+            if (targetDeviceIds.some((deviceId) => input.isDeviceRuntimeDisconnected?.(deviceId) === true)) {
+              throw new Error('MESSAGE_ROUTE_TARGET_UNAVAILABLE');
             }
           },
           onAppliedInTransaction: hooks.onAppliedInTransaction,

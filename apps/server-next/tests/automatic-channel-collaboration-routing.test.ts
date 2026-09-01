@@ -247,6 +247,8 @@ describe('automatic channel collaboration routing (#1270)', () => {
     const ids = { nextId: () => `direct-route-${++id}` };
     const clock = { now: () => ++now };
     const broker = createTaskClaimBroker({ repositories, ids, clock, offerTtlMs: 60_000 });
+    let disconnectOnPromotionRevalidation = false;
+    let runtimeDisconnectChecks = 0;
     const setupApp = createServerNextUseCases({ repositories, ids, clock });
     const registered = await setupApp.registerUser({ username: 'direct-owner', password: 'secret', teamName: 'Direct' });
     if (!registered.ok) throw new Error(registered.error);
@@ -265,6 +267,8 @@ describe('automatic channel collaboration routing (#1270)', () => {
     const reviewer = discovered.agents[0];
     const routedApp = createServerNextUseCases({
       repositories, ids, clock,
+      isDeviceRuntimeDisconnected: () => disconnectOnPromotionRevalidation
+        && ++runtimeDisconnectChecks > 1,
       analyzeMessageRouteWithPi: async () => ({
         routeKind: 'direct_agent', riskLevel: 'low', targetAgentIds: [reviewer.id],
         requiredCapabilityIds: ['capability:v1:code-review'],
@@ -299,6 +303,23 @@ describe('automatic channel collaboration routing (#1270)', () => {
       allowedRiskLevels: ['low'], maxActiveClaims: 1,
     });
     if (!policy.ok) throw new Error(policy.error);
+
+    disconnectOnPromotionRevalidation = true;
+    runtimeDisconnectChecks = 0;
+    const disconnectRace = await routedApp.sendMessage({
+      userId, teamId, channelId: channel.channel.id, clientMessageId: 'promotion-disconnect-race',
+      body: '请审查断连竞态方案',
+    });
+    expect(disconnectRace.ok).toBe(true);
+    if (!disconnectRace.ok) return;
+    await waitForRouteResolution(repositories, disconnectRace.message.id);
+    await expect(repositories.channelCoordinationUnitOfWork.run((tx) =>
+      tx.routes.getByMessageId(disconnectRace.message.id))).resolves.toMatchObject({
+      status: 'deferred', diagnosticCode: 'MESSAGE_ROUTE_TARGET_UNAVAILABLE', linkedTaskId: null,
+    });
+    expect((await routedApp.listTasks({ userId, teamId, channelId: channel.channel.id })))
+      .toMatchObject({ ok: true, tasks: [] });
+    disconnectOnPromotionRevalidation = false;
 
     await repositories.taskCoordinationUnitOfWork.run((tx) => tx.promotion.teamPolicy.upsert({
       schemaVersion: 1, teamId, revision: 2, enabled: false,
