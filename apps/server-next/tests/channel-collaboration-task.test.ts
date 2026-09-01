@@ -478,7 +478,7 @@ describe('channel collaboration task', () => {
     })).resolves.toMatchObject({
       ok: false,
       error: 'CONFLICT',
-      message: 'Accepted channel collaboration result cannot add an OutputPackage publish',
+      message: 'Channel collaboration result cannot add a late OutputPackage publish',
     });
     await expect(repositories.tasks.getById(betaTask.id)).resolves.toMatchObject({ status: 'todo' });
     await expect(repositories.tasks.getById(sent.collaborationTask.rootTaskId)).resolves.toMatchObject({

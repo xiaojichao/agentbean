@@ -11648,11 +11648,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             );
             const replayTaskId = replayInvocation?.intent.taskContext?.taskId;
             const replayTask = replayTaskId ? await repositories.tasks.getById(replayTaskId) : null;
-            if (replayTask?.tags.includes(CHANNEL_COLLABORATION_TASK_TAG)
-              && (replayTask.status === 'done' || replayTask.status === 'closed')) {
+            if (replayTask?.tags.includes(CHANNEL_COLLABORATION_TASK_TAG)) {
               return makeFailure(
                 'CONFLICT',
-                'Accepted channel collaboration result cannot add an OutputPackage publish',
+                'Channel collaboration result cannot add a late OutputPackage publish',
               );
             }
           }
