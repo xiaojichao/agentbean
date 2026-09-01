@@ -103,6 +103,26 @@ describe('System Admin Console shell', () => {
     expect(panel).toContain('data-smoke="admin-reset-password-open"');
   });
 
+  test('system admins see the dashboard directly below devices in the main sidebar', () => {
+    const sidebar = readFileSync(
+      new URL('../components/sidebar.tsx', import.meta.url),
+      'utf8',
+    );
+    const devicesNav = '<NavItem href={`/${np}/devices`}';
+    const dashboardGate = '{isAdmin && (';
+    const dashboardNav = '<NavItem href={`/${np}/dashboard`}';
+    const devicesIndex = sidebar.indexOf(devicesNav);
+    const dashboardGateIndex = sidebar.indexOf(dashboardGate, devicesIndex);
+    const dashboardIndex = sidebar.indexOf(dashboardNav, dashboardGateIndex);
+
+    expect(sidebar).toContain("const isAdmin = currentUser?.role === 'admin';");
+    expect(devicesIndex).toBeGreaterThan(-1);
+    expect(dashboardGateIndex).toBeGreaterThan(devicesIndex);
+    expect(dashboardIndex).toBeGreaterThan(dashboardGateIndex);
+    expect(sidebar.slice(devicesIndex, dashboardIndex).match(/<NavItem/g)).toHaveLength(1);
+    expect(sidebar.slice(dashboardIndex, dashboardIndex + 180)).toContain('label="仪表盘"');
+  });
+
   test('inventory lists request server-side pagination with default pageSize 20', () => {
     expect(ADMIN_LIST_DEFAULT_PAGE_SIZE).toBe(20);
     const panel = readFileSync(

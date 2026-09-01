@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { Activity, Bell, BookOpen, Check, CircleHelp, ClipboardList, ExternalLink, Globe, Lock, MessagesSquare, Monitor, Plus, Search, Settings, Users } from 'lucide-react';
+import { Activity, Bell, BookOpen, Check, CircleHelp, ClipboardList, ExternalLink, Globe, LayoutDashboard, Lock, MessagesSquare, Monitor, Plus, Search, Settings, Users } from 'lucide-react';
 import { agentEvents, channelEvents, deviceEvents, getWebSocket, piProviderEvents, teamEvents } from '@/lib/socket';
 import type { PiConfigurationReadinessDto } from '@agentbean/contracts';
 import { useAgentBeanStore } from '@/lib/store';
@@ -166,6 +166,9 @@ export function Sidebar() {
         <NavItem href={`/${np}/tasks`} icon={<ClipboardList size={19} />} label="任务" active={isActive(`/${np}/tasks`)} />
         <NavItem href={`/${np}/members`} icon={<Users size={19} />} label="成员" active={isActive(`/${np}/members`)} />
         <NavItem href={`/${np}/devices`} icon={<Monitor size={19} />} label="设备" active={isActive(`/${np}/devices`)} />
+        {isAdmin && (
+          <NavItem href={`/${np}/dashboard`} icon={<LayoutDashboard size={19} />} label="仪表盘" active={isActive(`/${np}/dashboard`)} />
+        )}
       </nav>
 
       {/* Bottom utilities */}
