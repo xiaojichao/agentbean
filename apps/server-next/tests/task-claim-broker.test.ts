@@ -1,5 +1,12 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createRequire } from 'node:module';
 import { describe, expect, test, vi } from 'vitest';
-import type { TaskClaimAcquireAckV1 } from '../../../packages/contracts/src/index.js';
+import {
+  CHANNEL_COLLABORATION_TASK_TAG,
+  type TaskClaimAcquireAckV1,
+} from '../../../packages/contracts/src/index.js';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
 import { createInvocationGateway } from '../src/application/management/invocation-gateway.js';
 import { createTaskClaimBroker } from '../src/application/management/task-claim-broker.js';
@@ -9,6 +16,16 @@ import { createProjectStageAutoAdvance } from '../src/application/project-stage-
 import { filterStrictProjectStageAgentIds } from '../src/application/project-stage-advance-service.js';
 import type { ServerNextRepositories } from '../src/application/repositories.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
+import {
+  applyGlobalMigrations,
+  applyTeamMigrations,
+  createSqliteRepositories,
+  type SqliteDatabase,
+} from '../src/infra/sqlite/repositories.js';
+
+type DatabaseWithClose = SqliteDatabase & { close(): void };
+type DatabaseConstructor = new (filename: string) => DatabaseWithClose;
+const Database = createRequire(import.meta.url)('better-sqlite3') as DatabaseConstructor;
 
 describe('Task Claim Broker', () => {
   test('#925 ADR-0063: root Task node rejects Agent execution claim on both acquire and accept paths', async () => {
@@ -165,6 +182,95 @@ describe('Task Claim Broker', () => {
     // (task-a) 全表仅一个 active grant——锁死内存分叉的双 active grant 回归。
     await expect(harness.repositories.taskCoordination.executionGrants.listActiveByTask('task-a'))
       .resolves.toHaveLength(1);
+  });
+
+  test('SQLite 重启后保留频道协作自动重派上限，不会启动第三轮', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-claim-reoffer-'));
+    let firstStore: ReturnType<typeof openRestartSqliteRepositories> | undefined;
+    let secondStore: ReturnType<typeof openRestartSqliteRepositories> | undefined;
+    try {
+      firstStore = openRestartSqliteRepositories(dataDir);
+      const harness = await createHarness({
+        repositories: firstStore.repositories,
+        offerTtlMs: 500,
+        leaseTtlMs: 50,
+      });
+      await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+      await harness.repositories.channels.update({
+        channelId: 'channel-1',
+        changes: { agentMemberIds: ['agent-1'], updatedAt: harness.clock.value },
+      });
+      await harness.repositories.tasks.update({
+        taskId: 'task-a',
+        changes: {
+          assigneeId: 'agent-1',
+          tags: [CHANNEL_COLLABORATION_TASK_TAG],
+          updatedAt: harness.clock.value,
+        },
+      });
+
+      const [initialOffer] = await harness.broker.prepareOffers('task-a', {
+        allowedAgentIds: ['agent-1'],
+      });
+      const firstClaim = await harness.broker.respondToOffer({
+        offerId: initialOffer!.offerId,
+        agentId: 'agent-1',
+        kind: 'accepted',
+      });
+      expect(firstClaim).toMatchObject({ kind: 'claim_granted' });
+      harness.clock.value = 61;
+      const [firstExpired] = await harness.broker.expireClaims();
+      expect(firstExpired).toMatchObject({ taskId: 'task-a', agentId: 'agent-1' });
+      await expect(harness.broker.canAutoReofferExpiredChannelCollaborationClaim(firstExpired!))
+        .resolves.toBe(true);
+
+      const [retryOffer] = await harness.broker.prepareOffers('task-a', {
+        allowedAgentIds: ['agent-1'],
+      });
+      const retryClaim = await harness.broker.respondToOffer({
+        offerId: retryOffer!.offerId,
+        agentId: 'agent-1',
+        kind: 'accepted',
+      });
+      expect(retryClaim).toMatchObject({ kind: 'claim_granted' });
+      if (retryClaim.kind !== 'claim_granted') throw new Error('retry claim was not granted');
+      const retryLeaseId = retryClaim.lease.claimLeaseId;
+
+      // 模拟 Server 进程退出：丢弃 broker 内存，仅保留 SQLite 权威状态。
+      firstStore.close();
+      firstStore = undefined;
+      secondStore = openRestartSqliteRepositories(dataDir);
+      harness.clock.value = 112;
+      let restartedId = 0;
+      const restartedBroker = createTaskClaimBroker({
+        repositories: secondStore.repositories,
+        clock: { now: () => harness.clock.value },
+        ids: { nextId: () => `restart-${++restartedId}` },
+        leaseTokens: { nextToken: () => `restart-token-${restartedId}` },
+        offerTtlMs: 500,
+        leaseTtlMs: 50,
+        piAutomationAvailable: async () => true,
+      });
+      const [secondExpired] = await restartedBroker.expireClaims();
+      expect(secondExpired).toMatchObject({
+        claimLeaseId: retryLeaseId,
+        taskId: 'task-a',
+        agentId: 'agent-1',
+      });
+      await expect(restartedBroker.canAutoReofferExpiredChannelCollaborationClaim(secondExpired!))
+        .resolves.toBe(false);
+      await expect(secondStore.repositories.taskCoordination.offers.listByTask('task-a'))
+        .resolves.toHaveLength(2);
+      const expiredEvents = (await secondStore.repositories.management.events.list('run-1'))
+        .filter(({ event }) => event.type === 'claim-invalidated'
+          && event.payload.taskId === 'task-a'
+          && event.payload.reasonCode === 'TASK_CLAIM_EXPIRED');
+      expect(expiredEvents).toHaveLength(2);
+    } finally {
+      secondStore?.close();
+      firstStore?.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   test('#829 文档 InputSet 候选必须同时声明 Agent 与 Device 合同版本', async () => {
@@ -828,6 +934,31 @@ describe('Task Offer respondToOffer（#712 切片 C-1：显式接受事务接线
     });
   });
 
+  test('连接 Device 与目标 Agent 不匹配时拒绝 Offer acceptance，不信任 payload agentId', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const offer = await publishOffer(harness, 'agent-1');
+
+    await expect(harness.broker.respondToOffer({
+      offerId: offer.id, agentId: 'agent-1', kind: 'accepted',
+    }, { deviceId: 'device-2' })).resolves.toMatchObject({
+      kind: 'not_accepted',
+      diagnosticCode: 'TASK_CLAIM_DEVICE_MISMATCH',
+    });
+    await expect(harness.broker.acquire({
+      schemaVersion: 1,
+      offerId: offer.id,
+      agentId: 'agent-1',
+    }, { deviceId: 'device-2' })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_REQUEST',
+      diagnosticCode: 'TASK_CLAIM_DEVICE_MISMATCH',
+    });
+    expect(await harness.repositories.taskCoordination.claimLeases.listActive()).toEqual([]);
+  });
+
   test('rejected/needs_info/counter_proposed 记录响应但不创 Lease (AC#5)', async () => {
     const harness = await createHarness();
     await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
@@ -1254,8 +1385,12 @@ describe('#948-B ADR-0064：Offer 原子发布 + acquire 持久化兜底', () =>
   });
 });
 
-async function createHarness(options: { offerTtlMs?: number; leaseTtlMs?: number } = {}) {
-  const repositories = createInMemoryRepositories();
+async function createHarness(options: {
+  offerTtlMs?: number;
+  leaseTtlMs?: number;
+  repositories?: ServerNextRepositories;
+} = {}) {
+  const repositories = options.repositories ?? createInMemoryRepositories();
   const clock = { value: 10 };
   let id = 0;
   const kernelIds = { nextId: () => id++ === 0 ? 'run-1' : `kernel-${id}` };
@@ -1308,6 +1443,22 @@ async function createHarness(options: { offerTtlMs?: number; leaseTtlMs?: number
     offerTtlMs: options.offerTtlMs ?? 20, leaseTtlMs: options.leaseTtlMs ?? 100,
     piAutomationAvailable: async () => true });
   return { repositories, clock, broker, coordination, authority };
+}
+
+function openRestartSqliteRepositories(dataDir: string) {
+  const globalDb = new Database(join(dataDir, 'global.sqlite'));
+  const teamDb = new Database(join(dataDir, 'team.sqlite'));
+  globalDb.exec('PRAGMA foreign_keys = ON;');
+  teamDb.exec('PRAGMA foreign_keys = ON;');
+  applyGlobalMigrations(globalDb);
+  applyTeamMigrations(teamDb);
+  return {
+    repositories: createSqliteRepositories({ globalDb, teamDb }),
+    close() {
+      globalDb.close();
+      teamDb.close();
+    },
+  };
 }
 
 async function seedAgent(

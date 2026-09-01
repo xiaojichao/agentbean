@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS, WEB_EVENTS, makeSuccess, type DispatchDto } from '../../../packages/contracts/src/index';
 import { createInMemoryServerNext } from '../src/index';
 import type { ServerNextUseCases } from '../src/application/usecases';
+import type { TaskClaimBroker } from '../src/application/management/task-claim-broker';
 import { parseServerNextDevConfig, startServerNextDevServer } from '../src/dev-server';
 import { applyTeamMigrations } from '../src/infra/sqlite/repositories';
 
@@ -360,6 +361,14 @@ describe('server-next dev server entry', () => {
           },
           eventBroadcastLatencyMs: { count: 0, total: 0, max: 0 },
         },
+      },
+      taskClaimExpiry: {
+        cycles: 0,
+        failedCycles: 0,
+        expiredClaims: 0,
+        reofferAttempts: 0,
+        reofferedOffers: 0,
+        reofferFailures: 0,
       },
     });
     await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('id="agent-create-form"');
@@ -1817,6 +1826,93 @@ describe('server-next dev server entry', () => {
       expect(statuses).toEqual([timedOutDispatch]);
       expect(otherTeamStatuses).toEqual([]);
     });
+  });
+
+  test('周期回收过期频道协作 Claim，并对原 Agent 有界重发 Offer', async () => {
+    const expired = {
+      schemaVersion: 1 as const,
+      claimLeaseId: 'lease-expired',
+      taskId: 'task-collaboration-agent',
+      agentId: 'agent-collaboration',
+      expiredAt: 300,
+    };
+    let returnedExpired = false;
+    const expireClaims = vi.fn(async () => {
+      if (returnedExpired) return [];
+      returnedExpired = true;
+      return [expired];
+    });
+    const canAutoReofferExpiredChannelCollaborationClaim = vi.fn(async () => true);
+    const prepareOffers = vi.fn(async () => [{
+      schemaVersion: 1 as const,
+      offerId: 'offer-retry',
+      deviceId: 'device-collaboration',
+      taskId: expired.taskId,
+      taskRevision: 1,
+      taskAttempt: 1,
+      agentId: expired.agentId,
+      requiredCapabilities: [],
+      offerExpiresAt: 1_000,
+    }]);
+    const broker = {
+      expireClaims,
+      canAutoReofferExpiredChannelCollaborationClaim,
+      prepareOffers,
+      resolveCandidates: vi.fn(async () => ({
+        taskId: expired.taskId,
+        taskRevision: 1,
+        taskAttempt: 1,
+        ancestorAgentIds: [],
+        candidates: [{
+          agentId: expired.agentId,
+          deviceId: 'device-collaboration',
+          eligible: true,
+          diagnosticCodes: [],
+          missingCapabilities: [],
+        }],
+      })),
+    } as unknown as TaskClaimBroker;
+    const server = await startServerNextDevServer({
+      app: {} as ServerNextUseCases,
+      taskClaimBroker: broker,
+      Server,
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir: '.agentbean-next-test',
+        sessionSecret: 'test-secret',
+      },
+      dispatchTimeout: { heartbeatTimeoutMs: 0, legacyTimeoutMs: 0, intervalMs: 0 },
+      coordination: { intervalMs: 0 },
+      taskClaimExpiry: { intervalMs: 5, maxAutomaticReoffersPerTask: 1 },
+    });
+    cleanups.push(() => server.close());
+
+    await eventually(() => {
+      expect(canAutoReofferExpiredChannelCollaborationClaim).toHaveBeenCalledWith(expired, {
+        maxAutomaticReoffers: 1,
+      });
+      expect(prepareOffers).toHaveBeenCalledWith(expired.taskId, {
+        allowedAgentIds: [expired.agentId],
+      });
+    });
+    await expect(fetch(`${server.baseUrl}/metricsz`).then((response) => response.json()))
+      .resolves.toMatchObject({
+        taskClaimExpiry: {
+          expiredClaims: 1,
+          reofferAttempts: 1,
+          reofferedOffers: 1,
+          failedCycles: 0,
+          reofferFailures: 0,
+        },
+      });
+
+    await server.close();
+    cleanups.pop();
+    const callsAfterClose = expireClaims.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect(expireClaims).toHaveBeenCalledTimes(callsAfterClose);
   });
 
   test('starts the coordination consumer when durable-job ingestion is enabled', async () => {

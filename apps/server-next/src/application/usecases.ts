@@ -21,6 +21,8 @@ import {
 import { createMessageTracerCommandDispatcher } from './message-tracer-dispatcher.js';
 import {
   parseMessageTracerCommandEnvelopeV1,
+  parseChannelCollaborationTaskTriggerV1,
+  type ChannelCollaborationTaskTriggerV1,
   type MessageTracerCommandResponseV1,
   type TaskContinuationSourceMarkerV1,
 } from '../../../../packages/contracts/src/index.js';
@@ -149,6 +151,11 @@ import {
   type TaskLinkedRequestEvaluation,
 } from './task-linked-request-handler.js';
 import { createTaskLifecycleKernel } from './management/task-lifecycle-kernel.js';
+import {
+  completeChannelCollaborationSubtask,
+  createChannelCollaborationPromotionHooks,
+  recordChannelCollaborationStatus,
+} from './channel-collaboration-task-handler.js';
 import { resolveProjectStageExecutionGate } from './project-stage-execution-gate.js';
 import { createMemorySourceInvalidationService } from './memory-source-invalidation-service.js';
 import { createCollaborativeMemoryService, type MemoryView } from './collaborative-memory-service.js';
@@ -1284,6 +1291,8 @@ export interface SendMessageInput {
   threadId?: string;
   body: string;
   asTask?: boolean;
+  /** 仅由显式 composer 模式产生；普通聊天不得由 Server/模型推断。 */
+  collaborationTask?: ChannelCollaborationTaskTriggerV1;
   artifactIds?: string[];
   clientMessageId?: string;
   senderId?: string;
@@ -1303,6 +1312,15 @@ export interface SendMessageResult {
   acknowledgementMessage?: MessageDto;
   management?: ManagementRoutingResult;
   referenceSet?: ProjectReferenceSetDto;
+  collaborationTask?: {
+    readonly rootTaskId?: string;
+    readonly managementRunId?: string;
+    readonly subtaskIds: readonly string[];
+    readonly offerDelivery: 'offered' | 'partial' | 'pending' | 'blocked';
+    readonly offeredCount: number;
+    readonly targetCount: number;
+    readonly stableCode: string;
+  };
 }
 
 export interface AcceptDispatchInput {
@@ -1962,6 +1980,14 @@ export interface CreateServerNextUseCasesInput {
    * dev-server 注入；缺省（未接线测试环境）用简单可见性兜底（fail closed 语义由复验链兜底）。
    */
   resolveTaskLinkedEligibleAgentIds?: (taskId: string) => Promise<readonly string[]>;
+  /** Promotion commit 后把已发布的 targeted subtasks 投递给现有 TaskClaimBroker。 */
+  onChannelCollaborationTasksPublished?: (
+    taskIds: readonly string[],
+  ) => Promise<{ readonly offered: number }>;
+  /** 协作认领/PI 汇总消息落库后的轻量 realtime fetch 通知。 */
+  onChannelCollaborationMessageAppended?: (
+    delivery: { readonly teamId: string; readonly channelId: string; readonly messageId: string },
+  ) => Promise<void> | void;
   /**
    * #1059 候选 01/02 深化：OutputPackage 交付流水线深模块。缺省由 {repositories,
    * clock, ids} 内部构造；dev-server 可显式注入，以便切片 2 把 transport 改绑到该模块。
@@ -5538,6 +5564,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async sendMessage(messageInput) {
       if (messageIngestionMode === 'legacy') return sendLegacyMessage(messageInput);
       if (messageIngestionMode === 'message-tracer') return sendMessageViaMessageTracer(messageInput);
+      let collaborationTask: ChannelCollaborationTaskTriggerV1 | undefined;
+      if (messageInput.collaborationTask !== undefined) {
+        try {
+          collaborationTask = parseChannelCollaborationTaskTriggerV1(messageInput.collaborationTask);
+        } catch {
+          return makeFailure('VALIDATION_ERROR', 'CHANNEL_COLLABORATION_TASK_TRIGGER_INVALID');
+        }
+        if (messageInput.threadId || messageInput.asTask === true) {
+          return makeFailure('VALIDATION_ERROR', 'CHANNEL_COLLABORATION_TASK_CONTEXT_INVALID');
+        }
+      }
       if ((messageInput.selections?.length ?? 0) > 0
         && !projectCollaborationRollout.bundleSelection) {
         projectCollaborationMetrics.recordMutationFailure('disabled');
@@ -5555,6 +5592,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       if (channel.visibility === 'private' && !channel.humanMemberIds.includes(messageInput.userId)) {
         return makeFailure('FORBIDDEN', 'User cannot view channel');
+      }
+      if (collaborationTask && channel.kind !== 'channel') {
+        return makeFailure('VALIDATION_ERROR', 'CHANNEL_COLLABORATION_TASK_CHANNEL_REQUIRED');
       }
 
       const now = clock.now();
@@ -5737,6 +5777,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
               ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
               ...(messageInput.asTask === true ? { asTask: true } : {}),
+              ...(collaborationTask ? { collaborationTask } : {}),
               ...(mentions.length ? { mentions } : {}),
               ...(continuationSource.kind === 'valid'
                 ? { taskContinuationSource: continuationSource.marker }
@@ -5820,6 +5861,124 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           outcome.taskLinked.context,
           outcome.taskLinked.evaluation,
         );
+      }
+
+      if (collaborationTask) {
+        const candidates = visibleAgents
+          .filter((agent) => channel.agentMemberIds.includes(agent.id))
+          .map((agent) => ({ agentId: agent.id, agentName: agent.name }));
+        const hooks = createChannelCollaborationPromotionHooks({
+          requesterId: messageInput.userId,
+          objective: messageInput.body.trim(),
+          candidates,
+          ids,
+        });
+        const promotionHandler = createPromotionGateHandler({
+          teamId: messageInput.teamId,
+          requesterId: messageInput.userId,
+          unitOfWork: repositories.taskCoordinationUnitOfWork,
+          clock,
+          ids,
+          onAppliedInTransaction: hooks.onAppliedInTransaction,
+          onConvergedInTransaction: hooks.onConvergedInTransaction,
+        });
+        let promotion;
+        let promotionFailureCode = 'CHANNEL_COLLABORATION_PROMOTION_PENDING';
+        try {
+          promotion = await promotionHandler.promoteToTask({
+            schemaVersion: 1,
+            commandName: 'promote-to-task',
+            commandSchemaVersion: 1,
+            idempotencyKey: `channel-collaboration:${messageInput.teamId}:${messageInput.clientMessageId ?? outcome.message.id}`,
+            causationRef: { kind: 'message', id: outcome.message.id },
+          }, {
+            triggerKind: 'human-structured',
+            channelId: messageInput.channelId,
+            rootMessageId: outcome.message.id,
+            objectiveSnapshot: {
+              schemaVersion: 1,
+              objective: messageInput.body.trim(),
+              scope: `channel:${messageInput.channelId}:all-channel-agents`,
+              riskLevel: 'low',
+            },
+            freshnessBasis: {
+              schemaVersion: 1,
+              sourceLineage: { kind: 'message', id: outcome.message.id },
+            },
+            ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+          });
+        } catch {
+          promotionFailureCode = 'CHANNEL_COLLABORATION_PROMOTION_FAILED';
+          promotion = null;
+        }
+        let projected = hooks.getResult();
+        if (!projected && promotion?.result?.rootTaskId && promotion.result.managementRunId) {
+          const replayRootTaskId = promotion.result.rootTaskId;
+          const coordinations = await repositories.taskCoordination.coordinations
+            .listByManagementRun(promotion.result.managementRunId);
+          projected = {
+            rootTaskId: replayRootTaskId,
+            managementRunId: promotion.result.managementRunId,
+            subtaskIds: coordinations
+              .filter((coordination) => coordination.nodeKind === 'subtask'
+                && coordination.parentTaskId === replayRootTaskId)
+              .map((coordination) => coordination.taskId)
+              .sort(),
+          };
+        }
+        const rootTask = projected
+          ? await repositories.tasks.getById(projected.rootTaskId)
+          : null;
+        let offeredCount = 0;
+        let offerDelivery: 'offered' | 'partial' | 'pending' | 'blocked' = projected?.subtaskIds.length
+          ? 'pending'
+          : 'blocked';
+        if (projected?.subtaskIds.length && input.onChannelCollaborationTasksPublished) {
+          try {
+            const delivery = await input.onChannelCollaborationTasksPublished(projected.subtaskIds);
+            offeredCount = delivery.offered;
+            offerDelivery = offeredCount === projected.subtaskIds.length
+              ? 'offered'
+              : offeredCount > 0 ? 'partial' : 'blocked';
+          } catch {
+            offerDelivery = 'pending';
+          }
+        }
+        const message = {
+          ...outcome.message,
+          meta: {
+            ...outcome.message.meta,
+            ...(projected ? { taskId: projected.rootTaskId } : {}),
+          },
+          ...(outcome.artifacts.length > 0
+            ? { artifacts: outcome.artifacts.map(toArtifactDto) }
+            : {}),
+          ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
+        };
+        if (message.id) {
+          void bindMessageEpochBestEffort(
+            message.teamId,
+            message.id,
+            messageInput.clientMessageId ?? null,
+          );
+        }
+        return makeSuccess({
+          message,
+          dispatches: [],
+          ...(rootTask ? { task: rootTask } : {}),
+          collaborationTask: {
+            ...(projected ? {
+              rootTaskId: projected.rootTaskId,
+              managementRunId: projected.managementRunId,
+            } : {}),
+            subtaskIds: projected?.subtaskIds ?? [],
+            offerDelivery,
+            offeredCount,
+            targetCount: projected?.subtaskIds.length ?? 0,
+            stableCode: promotion?.stableCode ?? promotionFailureCode,
+          },
+          ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
+        });
       }
 
       // Replay: return already-created dispatches/tasks without re-executing side effects.
@@ -12197,7 +12356,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
           startedAt: managedAttempt.startedAt, completedAt: now,
           ...(!resultSucceeded ? { error: completion.error ?? workspaceRunFailureError(resultInput.workspaceRun) } : {}) };
-        await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
+        const collaborationSummary = await recordManagedDispatchTerminal(
+          repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
           dispatchId: completed.dispatch.id,
           status: completion.terminal,
           artifactIds: artifacts.map((artifact) => artifact.id),
@@ -12205,7 +12365,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(message ? { deliveryMessageId: message.id } : {}),
           actorId: resultInput.agentId,
           ...(!resultSucceeded ? { errorCode: completion.error ?? workspaceRunFailureError(resultInput.workspaceRun) } : {}),
-        });
+          },
+        );
+        if (collaborationSummary) {
+          await Promise.resolve(input.onChannelCollaborationMessageAppended?.({
+            teamId: collaborationSummary.teamId,
+            channelId: collaborationSummary.channelId,
+            messageId: collaborationSummary.id,
+          })).catch(() => undefined);
+        }
       }
       await markAgentOnlineIfIdle(repositories, {
         agentId: resultInput.agentId,
@@ -12292,12 +12460,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const originMessage = await repositories.messages.getById(failed.dispatch.messageId);
       const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
       if (managedAttempt) {
-        await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
+        const collaborationStatus = await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
           dispatchId: failed.dispatch.id,
           status: 'failed',
           actorId: errorInput.agentId,
           errorCode: errorInput.error,
         });
+        if (collaborationStatus) {
+          await Promise.resolve(input.onChannelCollaborationMessageAppended?.({
+            teamId: collaborationStatus.teamId,
+            channelId: collaborationStatus.channelId,
+            messageId: collaborationStatus.id,
+          })).catch(() => undefined);
+        }
       }
 
       return makeSuccess({
@@ -16087,10 +16262,10 @@ async function recordManagedDispatchTerminal(
     artifactIds?: readonly string[];
     result?: AgentInvocationResultDto;
   },
-): Promise<void> {
+): Promise<MessageRecord | null> {
   const attempt = await repositories.management.dispatchAttempts.getByDispatchId(input.dispatchId);
   if (!attempt) {
-    return;
+    return null;
   }
   const invocation = await repositories.management.invocations.getById(attempt.invocationId);
   if (!invocation) {
@@ -16111,7 +16286,7 @@ async function recordManagedDispatchTerminal(
         idempotencyKey: `handoff-root-delivery:${handoff.id}:${input.dispatchId}`,
       });
     }
-    return;
+    return null;
   }
   const taskContext = invocation.intent.taskContext;
   const coordination = taskContext
@@ -16125,8 +16300,41 @@ async function recordManagedDispatchTerminal(
         invocationId: invocation.id,
         reasonCode: input.errorCode ?? `INVOCATION_${input.status.toUpperCase()}`,
       });
+      if (input.status === 'failed' && taskContext) {
+        const projected = await recordChannelCollaborationStatus({
+          repositories,
+          clock,
+          status: {
+            kind: 'invocation_failed',
+            managementRunId: invocation.managementRunId,
+            taskId: taskContext.taskId,
+            agentId: invocation.intent.targetAgentId,
+            invocationId: invocation.id,
+            reasonCode: input.errorCode ?? 'INVOCATION_FAILED',
+          },
+        });
+        return projected?.created ? projected.message : null;
+      }
+      return null;
     }
-    return;
+    if (!input.deliveryMessageId || !taskContext) return null;
+    const projected = await completeChannelCollaborationSubtask({
+      repositories,
+      clock,
+      ids,
+      completion: {
+        managementRunId: invocation.managementRunId,
+        taskId: taskContext.taskId,
+        taskRevision: taskContext.taskRevision,
+        taskAttempt: taskContext.taskAttempt,
+        claimLeaseId: taskContext.claimLeaseId,
+        invocationId: invocation.id,
+        agentId: invocation.intent.targetAgentId,
+        deliveryMessageId: input.deliveryMessageId,
+        summary: input.result?.body ?? 'Agent 已完成频道协作子任务',
+      },
+    });
+    return projected.summaryCreated ? projected.summaryMessage : null;
   }
   await kernel.recordInvocationTerminal({
     managementRunId: invocation.managementRunId,
@@ -16136,6 +16344,7 @@ async function recordManagedDispatchTerminal(
     ...(input.actorId ? { actorId: input.actorId } : {}),
     ...(input.errorCode ? { errorCode: input.errorCode } : {}),
   });
+  return null;
 }
 
 async function submitRootDeliveryFromHandoff(
@@ -16288,7 +16497,7 @@ function projectReferenceRequestFingerprint(
   input: Pick<
     SendMessageInput,
     'userId' | 'teamId' | 'channelId' | 'messageId' | 'threadId' | 'body'
-    | 'asTask' | 'artifactIds' | 'meta' | 'selections'
+    | 'asTask' | 'collaborationTask' | 'artifactIds' | 'meta' | 'selections'
   >,
 ): string {
   return createHash('sha256').update(stableSerialize({
@@ -16299,6 +16508,7 @@ function projectReferenceRequestFingerprint(
     threadId: input.threadId ?? null,
     body: input.body,
     asTask: input.asTask === true,
+    collaborationTask: input.collaborationTask ?? null,
     artifactIds: input.artifactIds ?? [],
     meta: input.meta ?? null,
     selections: input.selections ?? [],
@@ -16309,7 +16519,7 @@ function legacyProjectReferenceRequestFingerprint(
   input: Pick<
     SendMessageInput,
     'userId' | 'teamId' | 'channelId' | 'messageId' | 'threadId' | 'body'
-    | 'asTask' | 'artifactIds' | 'meta' | 'selections'
+    | 'asTask' | 'collaborationTask' | 'artifactIds' | 'meta' | 'selections'
   >,
 ): string {
   return createHash('sha256').update(JSON.stringify({
@@ -16320,6 +16530,7 @@ function legacyProjectReferenceRequestFingerprint(
     threadId: input.threadId ?? null,
     body: input.body,
     asTask: input.asTask === true,
+    collaborationTask: input.collaborationTask ?? null,
     artifactIds: input.artifactIds ?? [],
     meta: input.meta ?? null,
     selections: input.selections ?? [],
@@ -16331,7 +16542,7 @@ function projectReferenceRequestFingerprintMatches(
   input: Pick<
     SendMessageInput,
     'userId' | 'teamId' | 'channelId' | 'messageId' | 'threadId' | 'body'
-    | 'asTask' | 'artifactIds' | 'meta' | 'selections'
+    | 'asTask' | 'collaborationTask' | 'artifactIds' | 'meta' | 'selections'
   >,
 ): boolean {
   return storedFingerprint === projectReferenceRequestFingerprint(input)

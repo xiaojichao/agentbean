@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 const AGENT_EVENTS = {
   device: { hello: 'device:hello', runtimes: 'device:runtimes', scanRequested: 'device:scan-requested' },
   agent: { registerBatch: 'agent:register-batch' },
-  dispatch: { request: 'dispatch:request', result: 'dispatch:result' },
+  dispatch: { request: 'dispatch:request', result: 'dispatch:result', error: 'dispatch:error' },
   managementWorker: {
     register: 'management-worker:register',
     leaseOffer: 'management-worker:lease-offer',
@@ -34,6 +34,10 @@ const WEB_EVENTS = {
     create: 'agent:create',
     publish: 'agent:publish',
     unpublish: 'agent:unpublish',
+  },
+  agentExposure: {
+    createDraft: 'agent-exposure:create-draft',
+    publish: 'agent-exposure:publish',
   },
   channel: {
     subscribe: 'channels:subscribe',
@@ -825,6 +829,997 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
   }
 }
 
+export async function runAgentBeanChannelCollaborationBrowserSmoke({
+  baseUrl,
+  chromeBin,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  artifactsDir,
+  headed = false,
+  skipBuild = false,
+  ioFactory = loadSocketIoClient(),
+} = {}) {
+  const resolvedArtifactsDir = resolve(
+    artifactsDir ?? join(tmpdir(), `agentbean-channel-collaboration-smoke-${Date.now()}`),
+  );
+  mkdirSync(resolvedArtifactsDir, { recursive: true });
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const checks = [];
+  const cleanup = [];
+  const browserEvents = [];
+  const artifacts = {
+    dir: resolvedArtifactsDir,
+    consoleLog: join(resolvedArtifactsDir, 'browser-console.json'),
+    screenshot: join(resolvedArtifactsDir, 'channel-collaboration-final.png'),
+    failureScreenshot: join(resolvedArtifactsDir, 'channel-collaboration-failure.png'),
+    failureContext: join(resolvedArtifactsDir, 'failure-context.json'),
+  };
+  let page;
+  try {
+    const target = baseUrl
+      ? { baseUrl: normalizeBaseUrlOrThrow(baseUrl).toString(), close: async () => undefined }
+      : await startLocalServer({ suffix, skipBuild, timeoutMs, webEntry: 'app' });
+    cleanup.push(target.close);
+    checks.push(check('channel-collaboration-target-ready', true, `Target is ${target.baseUrl}`));
+
+    const chrome = await launchChrome({
+      chromeBin: chromeBin ?? process.env.CHROME_BIN,
+      artifactsDir: resolvedArtifactsDir,
+      headed,
+      timeoutMs,
+    });
+    cleanup.push(chrome.close);
+    checks.push(check('channel-collaboration-chrome-ready', true, `Chrome DevTools is listening on ${chrome.debugUrl}`));
+
+    page = await openPage(chrome.debugUrl, browserEvents, timeoutMs, { flow: 'channel-collaboration' });
+    cleanup.push(page.close);
+    await page.setViewport(DEFAULT_VIEWPORT);
+    const seededSession = await createSmokeBrowserSession({
+      baseUrl: target.baseUrl,
+      ioFactory,
+      suffix,
+      timeoutMs,
+    });
+    cleanup.push(async () => seededSession.socket.disconnect?.());
+    // about:blank 禁止 localStorage；先进入隔离 Server origin，再注入当前页与后续导航会话。
+    await page.navigate(target.baseUrl);
+    await seedWebUiAuthStorage({ page, session: seededSession.session });
+
+    const result = await exerciseWebUiChannelCollaborationSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      webSocket: seededSession.socket,
+      session: seededSession.session,
+      ioFactory,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check('channel-collaboration-three-agents', result.agentReplies.length === 3, 'Three channel Agents independently claimed and replied'),
+      check('channel-collaboration-pi-summary', result.summaryVisible === true, 'PI summary rendered after all three replies'),
+      check('channel-collaboration-device-isolation', result.offerAgentIds.length === 3
+        && new Set(result.offerAgentIds).size === 3, 'Each Device received only its own Agent offer'),
+    );
+
+    const metrics = await fetch(new URL('/metricsz', target.baseUrl)).then((response) => response.json());
+    const metricsReady = Number.isInteger(metrics?.taskClaimExpiry?.cycles)
+      && metrics.taskClaimExpiry.cycles >= 1
+      && Number.isInteger(metrics.taskClaimExpiry.reofferFailures);
+    checks.push(check('channel-collaboration-recovery-metrics', metricsReady, 'Task Claim recovery metrics are exposed without message bodies'));
+
+    await page.screenshot(artifacts.screenshot);
+    checks.push(check('channel-collaboration-screenshot', true, `Saved final screenshot: ${artifacts.screenshot}`));
+    const pageErrors = browserEvents.filter((event) => event.level === 'error' || event.type === 'exception');
+    checks.push(check(
+      'channel-collaboration-console-clean',
+      pageErrors.length === 0,
+      pageErrors.length === 0
+        ? 'No browser console errors or uncaught exceptions were observed'
+        : `Browser reported ${pageErrors.length} console errors or exceptions`,
+    ));
+    return summarizeBrowserSmoke(checks, artifacts);
+  } catch (error) {
+    checks.push(check(
+      'channel-collaboration-runtime-error',
+      false,
+      error instanceof Error ? error.message : String(error),
+    ));
+    try {
+      await writeBrowserSmokeFailureContext({ artifacts, page, flow: 'channel-collaboration', error });
+    } catch {
+      // Diagnostic writes must not replace the original failure.
+    }
+    if (page) {
+      try {
+        await page.screenshot(artifacts.failureScreenshot);
+      } catch {
+        // Preserve the original failure if the page already closed.
+      }
+    }
+    return summarizeBrowserSmoke(checks, artifacts);
+  } finally {
+    writeFileSync(artifacts.consoleLog, JSON.stringify(browserEvents, null, 2));
+    for (const close of cleanup.reverse()) {
+      try {
+        await close();
+      } catch {
+        // Cleanup errors must not hide the acceptance result.
+      }
+    }
+  }
+}
+
+export async function exerciseWebUiChannelCollaborationSmoke({
+  page,
+  baseUrl,
+  webSocket,
+  session,
+  ioFactory = loadSocketIoClient(),
+  suffix,
+  timeoutMs,
+}) {
+  assertSession(session);
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-28);
+  const prompt = '各位，请分别介绍一下自己吧';
+  const channelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
+    userId: session.user.id,
+    teamId: session.team.id,
+    name: `collaboration-${safeSuffix}`,
+    visibility: 'private',
+  }, timeoutMs);
+  const channelId = readNestedString(channelAck, ['channel', 'id']);
+  if (!channelId) throw new Error(`Could not create collaboration channel: ${formatAck(channelAck)}`);
+
+  const definitions = [
+    { key: 'alpha', name: `CollabAlpha${safeSuffix.slice(-6)}`, reply: '我是 Alpha，负责需求分析。' },
+    { key: 'beta', name: `CollabBeta${safeSuffix.slice(-6)}`, reply: '我是 Beta，负责方案实现。' },
+    { key: 'gamma', name: `CollabGamma${safeSuffix.slice(-6)}`, reply: '我是 Gamma，负责验证交付。' },
+  ];
+  const daemons = [];
+  const claimPromises = [];
+  const offerAgentIds = [];
+  try {
+    for (const definition of definitions) {
+      const daemon = await connectSmokeDaemon({
+        baseUrl: root,
+        ioFactory,
+        session,
+        suffix: `collaboration-${definition.key}-${safeSuffix}`,
+        timeoutMs,
+        dispatchResultFactory: async () => ({ body: definition.reply }),
+      });
+      daemons.push(daemon);
+      const agentAck = await emitAck(webSocket, WEB_EVENTS.agent.create, {
+        userId: session.user.id,
+        teamId: session.team.id,
+        deviceId: daemon.deviceId,
+        runtimeId: daemon.runtimeId,
+        name: definition.name,
+        env: { AGENTBEAN_CHANNEL_COLLABORATION_SMOKE: definition.key },
+      }, timeoutMs);
+      const agentId = readNestedString(agentAck, ['agent', 'id']);
+      if (!agentId) throw new Error(`Could not create ${definition.name}: ${formatAck(agentAck)}`);
+      await publishSmokeAgentExposure({ webSocket, session, agentId, timeoutMs });
+      const membership = await emitAck(webSocket, WEB_EVENTS.channel.addAgent, {
+        userId: session.user.id,
+        teamId: session.team.id,
+        channelId,
+        agentId,
+      }, timeoutMs);
+      if (membership?.ok !== true) {
+        throw new Error(`Could not add ${definition.name} to channel: ${formatAck(membership)}`);
+      }
+      claimPromises.push(new Promise((resolveClaim, rejectClaim) => {
+        daemon.socket.on(AGENT_EVENTS.taskClaim.offer, (offer, ack) => {
+          ack?.({ schemaVersion: 1, ok: true });
+          void (async () => {
+            if (offer.agentId !== agentId) {
+              throw new Error(`Device ${daemon.deviceId} received another Agent's offer ${offer.agentId}`);
+            }
+            offerAgentIds.push(offer.agentId);
+            const response = await emitAck(daemon.socket, AGENT_EVENTS.taskClaim.respond, {
+              schemaVersion: 1,
+              offerId: offer.offerId,
+              agentId: offer.agentId,
+              kind: 'accepted',
+            }, timeoutMs);
+            if (response?.kind !== 'claim_granted') {
+              throw new Error(`Claim was not granted for ${definition.name}: ${formatAck(response)}`);
+            }
+            resolveClaim({ agentId, offerId: offer.offerId });
+          })().catch(rejectClaim);
+        });
+      }));
+    }
+
+    const teamPath = session.team.path ?? session.team.id;
+    await page.navigate(new URL(`/${teamPath}/channel/${channelId}`, root).toString());
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="chat-message-input"]') !== null
+        && document.querySelector('[data-smoke="chat-channel-collaboration-toggle"] input') !== null`,
+      'channel collaboration composer controls to render',
+      timeoutMs,
+    );
+    await page.click('[data-smoke="chat-channel-collaboration-toggle"] input');
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="chat-channel-collaboration-toggle"] input')?.checked === true
+        && document.querySelector('[data-smoke="chat-as-task-toggle"] input')?.checked === false`,
+      'channel collaboration mode to enable exclusively',
+      timeoutMs,
+    );
+    await page.setInputValue('[data-smoke="chat-message-input"]', prompt);
+    await page.click('[data-smoke="chat-message-send"]');
+    await page.waitForFunction(
+      `Array.from(document.querySelectorAll('[data-smoke="chat-message"]'))
+        .some((message) => message.dataset.messageBody === ${JSON.stringify(prompt)})`,
+      'collaboration root message to render',
+      timeoutMs,
+    );
+    await promiseWithTimeout(Promise.all(claimPromises), timeoutMs, 'three channel Agents to claim their offers');
+
+    await page.waitForFunction(
+      `(() => {
+        const root = Array.from(document.querySelectorAll('[data-smoke="chat-message"]'))
+          .find((message) => message.dataset.messageBody === ${JSON.stringify(prompt)});
+        return Boolean(root?.querySelector('button[data-thread-id]'));
+      })()`,
+      'collaboration root to expose its completed discussion thread',
+      timeoutMs,
+    );
+    const opened = await page.evaluateJson(`(() => {
+      const root = Array.from(document.querySelectorAll('[data-smoke="chat-message"]'))
+        .find((message) => message.dataset.messageBody === ${JSON.stringify(prompt)});
+      const button = root?.querySelector('button[data-thread-id]');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`);
+    if (!opened) throw new Error('Could not open the collaboration discussion thread');
+    const replyBodies = definitions.map((definition) => definition.reply);
+    const summary = `PI 汇总：${definitions.length} 个频道 Agent 均已完成定向子任务，独立结果已回到本讨论串，等待你验收。`;
+    try {
+      await page.waitForFunction(
+        `(() => {
+          const panel = document.querySelector('[data-smoke="chat-thread-panel"]');
+          if (!panel) return false;
+          const bodies = Array.from(panel.querySelectorAll('[data-smoke="chat-message"]'))
+            .map((message) => message.dataset.messageBody);
+          return ${JSON.stringify(replyBodies)}.every((body) => bodies.includes(body))
+            && (panel.textContent ?? '').includes(${JSON.stringify(summary)});
+        })()`,
+        'three independent Agent replies and the PI summary to render in the thread',
+        timeoutMs,
+      );
+    } catch (error) {
+      const rendered = await page.evaluateJson(`(() => {
+        const panel = document.querySelector('[data-smoke="chat-thread-panel"]');
+        return {
+          bodies: Array.from(panel?.querySelectorAll('[data-smoke="chat-message"]') ?? [])
+            .map((message) => message.dataset.messageBody),
+          text: panel?.textContent ?? '',
+        };
+      })()`);
+      throw new Error(`${error instanceof Error ? error.message : String(error)}; rendered=${JSON.stringify(rendered)}`);
+    }
+    await page.evaluateJson(`(() => {
+      const messages = document.querySelectorAll('[data-smoke="chat-thread-panel"] [data-smoke="chat-message"]');
+      messages.item(messages.length - 1)?.scrollIntoView({ block: 'end' });
+      return messages.length;
+    })()`);
+    return { channelId, prompt, agentReplies: replyBodies, offerAgentIds, summaryVisible: true };
+  } finally {
+    for (const daemon of daemons) daemon.socket.disconnect?.();
+  }
+}
+
+export async function runAgentBeanChannelCollaborationRecoveryBrowserSmoke({
+  baseUrl,
+  chromeBin,
+  timeoutMs = 90_000,
+  artifactsDir,
+  headed = false,
+  skipBuild = false,
+  ioFactory = loadSocketIoClient(),
+} = {}) {
+  const resolvedArtifactsDir = resolve(
+    artifactsDir ?? join(tmpdir(), `agentbean-channel-collaboration-recovery-smoke-${Date.now()}`),
+  );
+  mkdirSync(resolvedArtifactsDir, { recursive: true });
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const checks = [];
+  const cleanup = [];
+  const browserEvents = [];
+  const artifacts = {
+    dir: resolvedArtifactsDir,
+    consoleLog: join(resolvedArtifactsDir, 'browser-console.json'),
+    screenshot: join(resolvedArtifactsDir, 'channel-collaboration-recovery-final.png'),
+    failureScreenshot: join(resolvedArtifactsDir, 'channel-collaboration-recovery-failure.png'),
+    failureContext: join(resolvedArtifactsDir, 'failure-context.json'),
+  };
+  let page;
+  try {
+    const target = baseUrl
+      ? { baseUrl: normalizeBaseUrlOrThrow(baseUrl).toString(), close: async () => undefined }
+      : await startLocalServer({ suffix, skipBuild, timeoutMs, webEntry: 'app' });
+    cleanup.push(target.close);
+    checks.push(check('channel-collaboration-recovery-target-ready', true, `Target is ${target.baseUrl}`));
+
+    const chrome = await launchChrome({
+      chromeBin: chromeBin ?? process.env.CHROME_BIN,
+      artifactsDir: resolvedArtifactsDir,
+      headed,
+      timeoutMs,
+    });
+    cleanup.push(chrome.close);
+    checks.push(check('channel-collaboration-recovery-chrome-ready', true, `Chrome DevTools is listening on ${chrome.debugUrl}`));
+
+    page = await openPage(chrome.debugUrl, browserEvents, timeoutMs, { flow: 'channel-collaboration-recovery' });
+    cleanup.push(page.close);
+    await page.setViewport(DEFAULT_VIEWPORT);
+    const seededSession = await createSmokeBrowserSession({
+      baseUrl: target.baseUrl,
+      ioFactory,
+      suffix,
+      timeoutMs,
+    });
+    cleanup.push(async () => seededSession.socket.disconnect?.());
+    await page.navigate(target.baseUrl);
+    await seedWebUiAuthStorage({ page, session: seededSession.session });
+
+    const result = await exerciseWebUiChannelCollaborationRecoverySmoke({
+      page,
+      baseUrl: target.baseUrl,
+      webSocket: seededSession.socket,
+      session: seededSession.session,
+      ioFactory,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check('channel-collaboration-offer-rejected-visible', result.rejectedVisible, 'Rejected Offer is visible in the discussion thread'),
+      check('channel-collaboration-invocation-failed-visible', result.failureVisible, 'Invocation failure is visible in the discussion thread'),
+      check('channel-collaboration-claim-expired-visible', result.expiredVisible, 'Expired Claim is visible in the discussion thread'),
+      check('channel-collaboration-reoffer-bounded', result.offerCounts.expire === 2, 'Expired Claim was automatically reoffered exactly once'),
+      check('channel-collaboration-recovery-offer-scoping',
+        result.offerCounts.reject === 1 && result.offerCounts.failure === 1
+          && result.offerCounts.blocked === 0,
+        'Rejecting and failing Agent Devices each received one scoped Offer; offline Device received none'),
+      check('channel-collaboration-allocation-blocked-visible', result.blockedVisible,
+        'Offline target is visible as allocation_blocked without silent reassignment'),
+      check('channel-collaboration-no-false-summary', result.summaryVisible === false, 'PI success summary is not rendered while subtasks remain unresolved'),
+    );
+
+    const metrics = await fetch(new URL('/metricsz', target.baseUrl)).then((response) => response.json());
+    const recoveryMetrics = metrics?.taskClaimExpiry;
+    checks.push(check(
+      'channel-collaboration-recovery-counts',
+      recoveryMetrics?.expiredClaims >= 1
+        && recoveryMetrics?.reofferAttempts === 1
+        && recoveryMetrics?.reofferedOffers === 1
+        && recoveryMetrics?.reofferFailures === 0,
+      'Recovery metrics record one expiry and one successful bounded reoffer',
+    ));
+
+    await page.screenshot(artifacts.screenshot);
+    checks.push(check('channel-collaboration-recovery-screenshot', true, `Saved final screenshot: ${artifacts.screenshot}`));
+    const pageErrors = browserEvents.filter((event) => event.level === 'error' || event.type === 'exception');
+    checks.push(check(
+      'channel-collaboration-recovery-console-clean',
+      pageErrors.length === 0,
+      pageErrors.length === 0
+        ? 'No browser console errors or uncaught exceptions were observed'
+        : `Browser reported ${pageErrors.length} console errors or exceptions`,
+    ));
+    return summarizeBrowserSmoke(checks, artifacts);
+  } catch (error) {
+    checks.push(check(
+      'channel-collaboration-recovery-runtime-error',
+      false,
+      error instanceof Error ? error.message : String(error),
+    ));
+    try {
+      await writeBrowserSmokeFailureContext({ artifacts, page, flow: 'channel-collaboration-recovery', error });
+    } catch {
+      // Diagnostic writes must not replace the original failure.
+    }
+    if (page) {
+      try {
+        await page.screenshot(artifacts.failureScreenshot);
+      } catch {
+        // Preserve the original failure if the page already closed.
+      }
+    }
+    return summarizeBrowserSmoke(checks, artifacts);
+  } finally {
+    writeFileSync(artifacts.consoleLog, JSON.stringify(browserEvents, null, 2));
+    for (const close of cleanup.reverse()) {
+      try {
+        await close();
+      } catch {
+        // Cleanup errors must not hide the acceptance result.
+      }
+    }
+  }
+}
+
+export async function exerciseWebUiChannelCollaborationRecoverySmoke({
+  page,
+  baseUrl,
+  webSocket,
+  session,
+  ioFactory = loadSocketIoClient(),
+  suffix,
+  timeoutMs,
+}) {
+  assertSession(session);
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-28);
+  const prompt = '请分别处理这个异常恢复演练';
+  const channelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
+    userId: session.user.id,
+    teamId: session.team.id,
+    name: `collaboration-recovery-${safeSuffix}`,
+    visibility: 'private',
+  }, timeoutMs);
+  const channelId = readNestedString(channelAck, ['channel', 'id']);
+  if (!channelId) throw new Error(`Could not create recovery channel: ${formatAck(channelAck)}`);
+
+  const definitions = [
+    { key: 'reject', name: `RejectAgent${safeSuffix.slice(-6)}` },
+    { key: 'expire', name: `ExpireAgent${safeSuffix.slice(-6)}` },
+    { key: 'failure', name: `FailureAgent${safeSuffix.slice(-6)}` },
+    { key: 'blocked', name: `BlockedAgent${safeSuffix.slice(-6)}` },
+  ];
+  const daemons = [];
+  const agents = new Map();
+  const offerCounts = { reject: 0, expire: 0, failure: 0, blocked: 0 };
+  let resolveRejected;
+  let rejectRejected;
+  const rejected = new Promise((resolve, reject) => { resolveRejected = resolve; rejectRejected = reject; });
+  let resolveExpiredClaim;
+  let rejectExpiredClaim;
+  const expiredClaim = new Promise((resolve, reject) => { resolveExpiredClaim = resolve; rejectExpiredClaim = reject; });
+  let resolveReoffered;
+  let rejectReoffered;
+  const reoffered = new Promise((resolve, reject) => { resolveReoffered = resolve; rejectReoffered = reject; });
+  let resolveFailedClaim;
+  let rejectFailedClaim;
+  const failedClaim = new Promise((resolve, reject) => { resolveFailedClaim = resolve; rejectFailedClaim = reject; });
+  let resolveDispatchFailure;
+  const dispatchFailure = new Promise((resolve) => { resolveDispatchFailure = resolve; });
+
+  try {
+    for (const definition of definitions) {
+      let agentId;
+      const daemon = await connectSmokeDaemon({
+        baseUrl: root,
+        ioFactory,
+        session,
+        suffix: `collaboration-recovery-${definition.key}-${safeSuffix}`,
+        timeoutMs,
+        dispatchRequestHandler: async ({ socket, request }) => {
+          if (!agentId || request.agentId !== agentId) return { ok: true, ignored: true };
+          if (definition.key !== 'failure') return { ok: true, ignored: true };
+          const ack = await emitAck(socket, AGENT_EVENTS.dispatch.error, {
+            dispatchId: request.id,
+            agentId: request.agentId,
+            error: 'CHANNEL_COLLABORATION_BROWSER_SMOKE_FAILURE',
+          }, timeoutMs);
+          if (ack?.ok !== true) throw new Error(`Could not report invocation failure: ${formatAck(ack)}`);
+          resolveDispatchFailure(ack);
+          return ack;
+        },
+      });
+      daemons.push(daemon);
+      const agentAck = await emitAck(webSocket, WEB_EVENTS.agent.create, {
+        userId: session.user.id,
+        teamId: session.team.id,
+        deviceId: daemon.deviceId,
+        runtimeId: daemon.runtimeId,
+        name: definition.name,
+        env: { AGENTBEAN_CHANNEL_COLLABORATION_RECOVERY_SMOKE: definition.key },
+      }, timeoutMs);
+      agentId = readNestedString(agentAck, ['agent', 'id']);
+      if (!agentId) throw new Error(`Could not create ${definition.name}: ${formatAck(agentAck)}`);
+      agents.set(definition.key, { ...definition, agentId, daemon });
+      await publishSmokeAgentExposure({ webSocket, session, agentId, timeoutMs });
+      const membership = await emitAck(webSocket, WEB_EVENTS.channel.addAgent, {
+        userId: session.user.id,
+        teamId: session.team.id,
+        channelId,
+        agentId,
+      }, timeoutMs);
+      if (membership?.ok !== true) {
+        throw new Error(`Could not add ${definition.name} to recovery channel: ${formatAck(membership)}`);
+      }
+      if (definition.key === 'blocked') {
+        daemon.socket.disconnect?.();
+        continue;
+      }
+
+      daemon.socket.on(AGENT_EVENTS.taskClaim.offer, (offer, ack) => {
+        ack?.({ schemaVersion: 1, ok: true });
+        void (async () => {
+          if (offer.agentId !== agentId) {
+            throw new Error(`Device ${daemon.deviceId} received another Agent's offer ${offer.agentId}`);
+          }
+          offerCounts[definition.key] += 1;
+          if (definition.key === 'reject') {
+            const response = await emitAck(daemon.socket, AGENT_EVENTS.taskClaim.respond, {
+              schemaVersion: 1,
+              offerId: offer.offerId,
+              agentId: offer.agentId,
+              kind: 'rejected',
+              detail: 'browser-smoke-rejection',
+            }, timeoutMs);
+            if (response?.kind !== 'response_recorded' || response.status !== 'rejected') {
+              throw new Error(`Offer rejection was not recorded: ${formatAck(response)}`);
+            }
+            resolveRejected(response);
+            return;
+          }
+          if (definition.key === 'expire' && offerCounts.expire > 1) {
+            resolveReoffered({ offerId: offer.offerId });
+            return;
+          }
+          const response = await emitAck(daemon.socket, AGENT_EVENTS.taskClaim.respond, {
+            schemaVersion: 1,
+            offerId: offer.offerId,
+            agentId: offer.agentId,
+            kind: 'accepted',
+          }, timeoutMs);
+          if (response?.kind !== 'claim_granted') {
+            throw new Error(`Recovery Claim was not granted for ${definition.name}: ${formatAck(response)}`);
+          }
+          if (definition.key === 'expire') resolveExpiredClaim(response);
+          if (definition.key === 'failure') resolveFailedClaim(response);
+        })().catch((error) => {
+          if (definition.key === 'reject') rejectRejected(error);
+          if (definition.key === 'expire' && offerCounts.expire <= 1) rejectExpiredClaim(error);
+          if (definition.key === 'expire' && offerCounts.expire > 1) rejectReoffered(error);
+          if (definition.key === 'failure') rejectFailedClaim(error);
+        });
+      });
+    }
+
+    const teamPath = session.team.path ?? session.team.id;
+    await page.navigate(new URL(`/${teamPath}/channel/${channelId}`, root).toString());
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="chat-message-input"]') !== null
+        && document.querySelector('[data-smoke="chat-channel-collaboration-toggle"] input') !== null`,
+      'channel collaboration recovery composer controls to render',
+      timeoutMs,
+    );
+    await page.click('[data-smoke="chat-channel-collaboration-toggle"] input');
+    await page.setInputValue('[data-smoke="chat-message-input"]', prompt);
+    await page.click('[data-smoke="chat-message-send"]');
+    await page.waitForFunction(
+      `Array.from(document.querySelectorAll('[data-smoke="chat-message"]'))
+        .some((message) => message.dataset.messageBody === ${JSON.stringify(prompt)})`,
+      'collaboration recovery root message to render',
+      timeoutMs,
+    );
+    await promiseWithTimeout(
+      Promise.all([rejected, expiredClaim, failedClaim, dispatchFailure]),
+      timeoutMs,
+      'rejection, expiring claim, and invocation failure to be recorded',
+    );
+    await page.waitForFunction(
+      `(() => {
+        const root = Array.from(document.querySelectorAll('[data-smoke="chat-message"]'))
+          .find((message) => message.dataset.messageBody === ${JSON.stringify(prompt)});
+        return Boolean(root?.querySelector('button[data-thread-id]'));
+      })()`,
+      'collaboration recovery root to expose its discussion thread',
+      timeoutMs,
+    );
+    await page.evaluateJson(`(() => {
+      const root = Array.from(document.querySelectorAll('[data-smoke="chat-message"]'))
+        .find((message) => message.dataset.messageBody === ${JSON.stringify(prompt)});
+      const button = root?.querySelector('button[data-thread-id]');
+      button?.click();
+      return Boolean(button);
+    })()`);
+
+    await promiseWithTimeout(reoffered, timeoutMs, 'expired Claim to be reoffered once');
+    const rejectAgent = agents.get('reject');
+    const expireAgent = agents.get('expire');
+    const failureAgent = agents.get('failure');
+    const blockedAgent = agents.get('blocked');
+    const rejectedBody = `${rejectAgent.name} 已拒绝认领该子任务；其他 Agent 继续执行。`;
+    const expiredBody = `${expireAgent.name} 的认领已过期，子任务已重新开放，可重新派发；其他 Agent 继续执行。`;
+    const failureBody = `${failureAgent.name} 执行失败，子任务已回到待处理，等待重试或人工处理；其他 Agent 继续执行。`;
+    const blockedBody = `${blockedAgent.name} 当前无法认领该子任务，状态为 allocation_blocked；等待其恢复或人工处理，不会静默改派给其他 Agent。`;
+    await page.waitForFunction(
+      `(() => {
+        const text = document.querySelector('[data-smoke="chat-thread-panel"]')?.textContent ?? '';
+        return text.includes(${JSON.stringify(rejectedBody)})
+          && text.includes(${JSON.stringify(expiredBody)})
+          && text.includes(${JSON.stringify(failureBody)})
+          && text.includes(${JSON.stringify(blockedBody)});
+      })()`,
+      'all collaboration recovery states to render in the discussion thread',
+      timeoutMs,
+    );
+    const rendered = await page.evaluateJson(`(() => {
+      const panel = document.querySelector('[data-smoke="chat-thread-panel"]');
+      const messages = panel?.querySelectorAll('[data-smoke="chat-message"]') ?? [];
+      messages.item(messages.length - 1)?.scrollIntoView({ block: 'end' });
+      const text = panel?.textContent ?? '';
+      return {
+        rejectedVisible: text.includes(${JSON.stringify(rejectedBody)}),
+        expiredVisible: text.includes(${JSON.stringify(expiredBody)}),
+        failureVisible: text.includes(${JSON.stringify(failureBody)}),
+        blockedVisible: text.includes(${JSON.stringify(blockedBody)}),
+        summaryVisible: text.includes('PI 汇总：'),
+      };
+    })()`);
+    return { ...rendered, channelId, prompt, offerCounts };
+  } finally {
+    for (const daemon of daemons) daemon.socket.disconnect?.();
+  }
+}
+
+async function publishSmokeAgentExposure({ webSocket, session, agentId, timeoutMs }) {
+  const draft = await emitAck(webSocket, WEB_EVENTS.agentExposure.createDraft, {
+    userId: session.user.id,
+    teamId: session.team.id,
+    agentId,
+    capabilities: [{
+      name: 'channel-collaboration',
+      description: 'Browser smoke capability for channel collaboration recovery',
+    }],
+    skills: [],
+    availability: { status: 'available' },
+  }, timeoutMs);
+  const manifestId = readNestedString(draft, ['manifest', 'id']);
+  if (!manifestId) throw new Error(`Could not create Agent exposure draft: ${formatAck(draft)}`);
+  const published = await emitAck(webSocket, WEB_EVENTS.agentExposure.publish, {
+    userId: session.user.id,
+    teamId: session.team.id,
+    manifestId,
+  }, timeoutMs);
+  if (published?.ok !== true) throw new Error(`Could not publish Agent exposure: ${formatAck(published)}`);
+}
+
+export async function runAgentBeanChannelCollaborationRestartBrowserSmoke({
+  chromeBin,
+  timeoutMs = 90_000,
+  artifactsDir,
+  headed = false,
+  skipBuild = false,
+  ioFactory = loadSocketIoClient(),
+} = {}) {
+  const resolvedArtifactsDir = resolve(
+    artifactsDir ?? join(tmpdir(), `agentbean-channel-collaboration-restart-smoke-${Date.now()}`),
+  );
+  mkdirSync(resolvedArtifactsDir, { recursive: true });
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const checks = [];
+  const cleanup = [];
+  const browserEvents = [];
+  const artifacts = {
+    dir: resolvedArtifactsDir,
+    consoleLog: join(resolvedArtifactsDir, 'browser-console.json'),
+    screenshot: join(resolvedArtifactsDir, 'channel-collaboration-restart-final.png'),
+    failureScreenshot: join(resolvedArtifactsDir, 'channel-collaboration-restart-failure.png'),
+    failureContext: join(resolvedArtifactsDir, 'failure-context.json'),
+  };
+  let page;
+  let restartWindowStart = -1;
+  let restartWindowEnd = -1;
+  try {
+    const target = await startLocalServer({ suffix, skipBuild, timeoutMs, webEntry: 'app' });
+    cleanup.push(target.close);
+    checks.push(check('channel-collaboration-restart-target-ready', true, `Target is ${target.baseUrl}`));
+
+    const chrome = await launchChrome({
+      chromeBin: chromeBin ?? process.env.CHROME_BIN,
+      artifactsDir: resolvedArtifactsDir,
+      headed,
+      timeoutMs,
+    });
+    cleanup.push(chrome.close);
+    checks.push(check('channel-collaboration-restart-chrome-ready', true, `Chrome DevTools is listening on ${chrome.debugUrl}`));
+
+    page = await openPage(chrome.debugUrl, browserEvents, timeoutMs, { flow: 'channel-collaboration-restart' });
+    cleanup.push(page.close);
+    await page.setViewport(DEFAULT_VIEWPORT);
+    const seededSession = await createSmokeBrowserSession({
+      baseUrl: target.baseUrl,
+      ioFactory,
+      suffix,
+      timeoutMs,
+    });
+    cleanup.push(async () => seededSession.socket.disconnect?.());
+    await page.navigate(target.baseUrl);
+    await seedWebUiAuthStorage({ page, session: seededSession.session });
+
+    const result = await exerciseWebUiChannelCollaborationRestartSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      webSocket: seededSession.socket,
+      session: seededSession.session,
+      ioFactory,
+      suffix,
+      timeoutMs,
+      restartServer: target.restart,
+      onRestartWindowStart: () => { restartWindowStart = browserEvents.length; },
+      onRestartWindowEnd: () => { restartWindowEnd = browserEvents.length; },
+    });
+    checks.push(
+      check('channel-collaboration-restart-device-reconnected', result.sameDevice, 'Device reconnected with the same durable identity'),
+      check('channel-collaboration-restart-claim-once', result.claimMessageCount === 1, 'Persisted Claim projection rendered exactly once after restart'),
+      check('channel-collaboration-restart-expiry-once', result.expiredMessageCount === 1, 'Claim expiry projection rendered exactly once after restart'),
+      check('channel-collaboration-restart-reoffer-once', result.reconnectedOfferCount === 1, 'Recovered task emitted exactly one reoffer to the reconnected Device'),
+      check('channel-collaboration-restart-no-false-summary', result.summaryVisible === false, 'PI success summary is not rendered for the unresolved recovered task'),
+    );
+
+    const metrics = await fetch(new URL('/metricsz', target.baseUrl)).then((response) => response.json());
+    const recoveryMetrics = metrics?.taskClaimExpiry;
+    checks.push(check(
+      'channel-collaboration-restart-recovery-counts',
+      recoveryMetrics?.expiredClaims === 1
+        && recoveryMetrics?.reofferAttempts === 1
+        && recoveryMetrics?.reofferedOffers === 1
+        && recoveryMetrics?.reofferFailures === 0,
+      'Restarted scheduler recorded one persisted Claim expiry and one successful reoffer',
+    ));
+
+    await page.screenshot(artifacts.screenshot);
+    checks.push(check('channel-collaboration-restart-screenshot', true, `Saved final screenshot: ${artifacts.screenshot}`));
+    const pageErrors = browserEvents
+      .map((event, index) => ({ event, index }))
+      .filter(({ event }) => event.level === 'error' || event.type === 'exception');
+    const controlledRestartErrors = pageErrors.filter(({ event, index }) =>
+      index >= restartWindowStart && index < restartWindowEnd && isControlledRestartNetworkError(event));
+    const unexpectedPageErrors = pageErrors.filter(({ event, index }) =>
+      !(index >= restartWindowStart && index < restartWindowEnd && isControlledRestartNetworkError(event)));
+    checks.push(check(
+      'channel-collaboration-restart-console-clean',
+      unexpectedPageErrors.length === 0,
+      unexpectedPageErrors.length === 0
+        ? `No unexpected browser errors after recovery (${controlledRestartErrors.length} controlled restart network errors retained)`
+        : `Browser reported ${unexpectedPageErrors.length} unexpected console errors or exceptions`,
+    ));
+    return summarizeBrowserSmoke(checks, artifacts);
+  } catch (error) {
+    checks.push(check(
+      'channel-collaboration-restart-runtime-error',
+      false,
+      error instanceof Error ? error.message : String(error),
+    ));
+    try {
+      await writeBrowserSmokeFailureContext({ artifacts, page, flow: 'channel-collaboration-restart', error });
+    } catch {
+      // Diagnostic writes must not replace the original failure.
+    }
+    if (page) {
+      try {
+        await page.screenshot(artifacts.failureScreenshot);
+      } catch {
+        // Preserve the original failure if the page already closed.
+      }
+    }
+    return summarizeBrowserSmoke(checks, artifacts);
+  } finally {
+    writeFileSync(artifacts.consoleLog, JSON.stringify(browserEvents, null, 2));
+    for (const close of cleanup.reverse()) {
+      try {
+        await close();
+      } catch {
+        // Cleanup errors must not hide the acceptance result.
+      }
+    }
+  }
+}
+
+export async function exerciseWebUiChannelCollaborationRestartSmoke({
+  page,
+  baseUrl,
+  webSocket,
+  session,
+  ioFactory = loadSocketIoClient(),
+  suffix,
+  timeoutMs,
+  restartServer,
+  onRestartWindowStart,
+  onRestartWindowEnd,
+}) {
+  assertSession(session);
+  if (typeof restartServer !== 'function') throw new Error('Restart smoke requires a managed local Server');
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-28);
+  const prompt = '请处理这个进程重启恢复演练';
+  const agentName = `RestartAgent${safeSuffix.slice(-6)}`;
+  const daemonSuffix = `collaboration-restart-${safeSuffix}`;
+  const channelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
+    userId: session.user.id,
+    teamId: session.team.id,
+    name: `collaboration-restart-${safeSuffix}`,
+    visibility: 'private',
+  }, timeoutMs);
+  const channelId = readNestedString(channelAck, ['channel', 'id']);
+  if (!channelId) throw new Error(`Could not create restart channel: ${formatAck(channelAck)}`);
+
+  let agentId;
+  const originalDaemon = await connectSmokeDaemon({
+    baseUrl: root,
+    ioFactory,
+    session,
+    suffix: daemonSuffix,
+    timeoutMs,
+    dispatchRequestHandler: async ({ request }) => ({
+      ok: true,
+      ignored: request.agentId === agentId,
+    }),
+  });
+  let reconnectedDaemon;
+  try {
+    const agentAck = await emitAck(webSocket, WEB_EVENTS.agent.create, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      deviceId: originalDaemon.deviceId,
+      runtimeId: originalDaemon.runtimeId,
+      name: agentName,
+      env: { AGENTBEAN_CHANNEL_COLLABORATION_RESTART_SMOKE: '1' },
+    }, timeoutMs);
+    agentId = readNestedString(agentAck, ['agent', 'id']);
+    if (!agentId) throw new Error(`Could not create ${agentName}: ${formatAck(agentAck)}`);
+    await publishSmokeAgentExposure({ webSocket, session, agentId, timeoutMs });
+    const membership = await emitAck(webSocket, WEB_EVENTS.channel.addAgent, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      channelId,
+      agentId,
+    }, timeoutMs);
+    if (membership?.ok !== true) throw new Error(`Could not add ${agentName} to restart channel: ${formatAck(membership)}`);
+
+    let resolveInitialClaim;
+    let rejectInitialClaim;
+    const initialClaim = new Promise((resolve, reject) => {
+      resolveInitialClaim = resolve;
+      rejectInitialClaim = reject;
+    });
+    originalDaemon.socket.on(AGENT_EVENTS.taskClaim.offer, (offer, ack) => {
+      ack?.({ schemaVersion: 1, ok: true });
+      void (async () => {
+        if (offer.agentId !== agentId) throw new Error(`Original Device received another Agent's offer ${offer.agentId}`);
+        const response = await emitAck(originalDaemon.socket, AGENT_EVENTS.taskClaim.respond, {
+          schemaVersion: 1,
+          offerId: offer.offerId,
+          agentId: offer.agentId,
+          kind: 'accepted',
+        }, timeoutMs);
+        if (response?.kind !== 'claim_granted') {
+          throw new Error(`Restart Claim was not granted: ${formatAck(response)}`);
+        }
+        resolveInitialClaim(response);
+      })().catch(rejectInitialClaim);
+    });
+
+    const teamPath = session.team.path ?? session.team.id;
+    const channelRoute = new URL(`/${teamPath}/channel/${channelId}`, root).toString();
+    await page.navigate(channelRoute);
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="chat-message-input"]') !== null
+        && document.querySelector('[data-smoke="chat-channel-collaboration-toggle"] input') !== null`,
+      'channel collaboration restart composer controls to render',
+      timeoutMs,
+    );
+    await page.click('[data-smoke="chat-channel-collaboration-toggle"] input');
+    await page.setInputValue('[data-smoke="chat-message-input"]', prompt);
+    await page.click('[data-smoke="chat-message-send"]');
+    await promiseWithTimeout(initialClaim, timeoutMs, 'Agent to claim before Server restart');
+    const claimBody = `已认领：${agentName}：${prompt}`;
+    await page.waitForFunction(
+      `(() => {
+        const root = Array.from(document.querySelectorAll('[data-smoke="chat-message"]'))
+          .find((message) => message.dataset.messageBody === ${JSON.stringify(prompt)});
+        return Boolean(root?.querySelector('button[data-thread-id]'));
+      })()`,
+      'restart discussion thread to become available after Claim',
+      timeoutMs,
+    );
+    const threadId = await page.evaluateJson(`(() => {
+      const root = Array.from(document.querySelectorAll('[data-smoke="chat-message"]'))
+        .find((message) => message.dataset.messageBody === ${JSON.stringify(prompt)});
+      const button = root?.querySelector('button[data-thread-id]');
+      button?.click();
+      return button?.dataset.threadId ?? null;
+    })()`);
+    if (!threadId) throw new Error('Could not resolve restart discussion thread id');
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="chat-thread-panel"]')?.textContent.includes(${JSON.stringify(claimBody)}) === true`,
+      'Claim projection to render before Server restart',
+      timeoutMs,
+    );
+
+    onRestartWindowStart?.();
+    originalDaemon.socket.disconnect?.();
+    webSocket.disconnect?.();
+    await restartServer();
+
+    reconnectedDaemon = await connectSmokeDaemon({
+      baseUrl: root,
+      ioFactory,
+      session,
+      suffix: daemonSuffix,
+      timeoutMs,
+      dispatchRequestHandler: async ({ request }) => ({
+        ok: true,
+        ignored: request.agentId === agentId,
+      }),
+    });
+    let reconnectedOfferCount = 0;
+    let resolveReconnectedOffer;
+    let rejectReconnectedOffer;
+    const reconnectedOffer = new Promise((resolve, reject) => {
+      resolveReconnectedOffer = resolve;
+      rejectReconnectedOffer = reject;
+    });
+    reconnectedDaemon.socket.on(AGENT_EVENTS.taskClaim.offer, (offer, ack) => {
+      ack?.({ schemaVersion: 1, ok: true });
+      try {
+        if (offer.agentId !== agentId) throw new Error(`Reconnected Device received another Agent's offer ${offer.agentId}`);
+        reconnectedOfferCount += 1;
+        resolveReconnectedOffer(offer);
+      } catch (error) {
+        rejectReconnectedOffer(error);
+      }
+    });
+
+    const threadRoute = new URL(
+      `/${teamPath}/channel/${channelId}?thread=${encodeURIComponent(`${channelId}:${threadId}`)}`,
+      root,
+    ).toString();
+    await page.navigate(threadRoute);
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="chat-thread-panel"]') !== null`,
+      'discussion thread to restore after Server restart',
+      timeoutMs,
+    );
+    await sleep(250);
+    onRestartWindowEnd?.();
+    await promiseWithTimeout(reconnectedOffer, timeoutMs, 'persisted Claim to expire and reoffer after Server restart');
+    const expiredBody = `${agentName} 的认领已过期，子任务已重新开放，可重新派发；其他 Agent 继续执行。`;
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="chat-thread-panel"]')?.textContent.includes(${JSON.stringify(expiredBody)}) === true`,
+      'persisted Claim expiry to render after Server restart',
+      timeoutMs,
+    );
+    const rendered = await page.evaluateJson(`(() => {
+      const panel = document.querySelector('[data-smoke="chat-thread-panel"]');
+      const text = panel?.textContent ?? '';
+      const count = (value) => text.split(value).length - 1;
+      const messages = panel?.querySelectorAll('[data-smoke="chat-message"]') ?? [];
+      messages.item(messages.length - 1)?.scrollIntoView({ block: 'end' });
+      return {
+        claimMessageCount: count(${JSON.stringify(claimBody)}),
+        expiredMessageCount: count(${JSON.stringify(expiredBody)}),
+        summaryVisible: text.includes('PI 汇总：'),
+      };
+    })()`);
+    return {
+      ...rendered,
+      sameDevice: reconnectedDaemon.deviceId === originalDaemon.deviceId,
+      reconnectedOfferCount,
+      channelId,
+      prompt,
+    };
+  } finally {
+    originalDaemon.socket.disconnect?.();
+    reconnectedDaemon?.socket.disconnect?.();
+  }
+}
+
+function isControlledRestartNetworkError(event) {
+  const text = typeof event?.text === 'string' ? event.text : '';
+  return text.includes('net::ERR_INCOMPLETE_CHUNKED_ENCODING')
+    || text.includes('net::ERR_CONNECTION_REFUSED')
+    || text === 'TypeError: network error';
+}
+
 export function summarizeBrowserSmoke(checks, artifacts) {
   const failed = checks.filter((candidate) => !candidate.ok);
   return {
@@ -890,56 +1885,68 @@ async function startLocalServer({ suffix, skipBuild, timeoutMs, webEntry = 'prev
   }
 
   const dataDir = mkdtempSync(join(tmpdir(), `agentbean-next-browser-smoke-data-${suffix}-`));
-  const server = spawn(
-    process.execPath,
-    [
-      'apps/server-next/dist/apps/server-next/src/bin.js',
-      '--host',
-      '127.0.0.1',
-      '--port',
-      '0',
-      '--storage',
-      'sqlite',
-      '--data-dir',
-      dataDir,
-      '--session-secret',
-      `browser-smoke-secret-${suffix}`,
-      '--web-entry',
-      webEntry,
-    ],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        PORT: '',
-        AGENTBEAN_CHANNEL_FILES_MARKDOWN_EDITING: 'true',
-        AGENTBEAN_PROJECT_STAGE: 'true',
-        AGENTBEAN_PROJECT_REVIEW_FINALIZATION: 'true',
-        AGENTBEAN_PROJECT_BUNDLE_SELECTION: 'true',
-        AGENTBEAN_PROJECT_INPUT_SET_OUTPUT: 'true',
-        AGENTBEAN_PROJECT_MANAGER_AUTO_ADVANCE: 'true',
+  const sessionSecret = `browser-smoke-secret-${suffix}`;
+  let server;
+  const launch = async (port) => {
+    let output = '';
+    server = spawn(
+      process.execPath,
+      [
+        'apps/server-next/dist/apps/server-next/src/bin.js',
+        '--host',
+        '127.0.0.1',
+        '--port',
+        String(port),
+        '--storage',
+        'sqlite',
+        '--data-dir',
+        dataDir,
+        '--session-secret',
+        sessionSecret,
+        '--web-entry',
+        webEntry,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          PORT: '',
+          AGENTBEAN_CHANNEL_FILES_MARKDOWN_EDITING: 'true',
+          AGENTBEAN_PROJECT_STAGE: 'true',
+          AGENTBEAN_PROJECT_REVIEW_FINALIZATION: 'true',
+          AGENTBEAN_PROJECT_BUNDLE_SELECTION: 'true',
+          AGENTBEAN_PROJECT_INPUT_SET_OUTPUT: 'true',
+          AGENTBEAN_PROJECT_MANAGER_AUTO_ADVANCE: 'true',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  );
-
-  let output = '';
-  server.stdout.setEncoding('utf8');
-  server.stderr.setEncoding('utf8');
-  server.stdout.on('data', (chunk) => {
-    output += chunk;
-  });
-  server.stderr.on('data', (chunk) => {
-    output += chunk;
-  });
-
-  const baseUrl = await waitForLocalServerUrl(server, () => output, timeoutMs).catch(async (error) => {
-    await stopProcess(server);
-    throw error;
-  });
+    );
+    server.stdout.setEncoding('utf8');
+    server.stderr.setEncoding('utf8');
+    server.stdout.on('data', (chunk) => {
+      output += chunk;
+    });
+    server.stderr.on('data', (chunk) => {
+      output += chunk;
+    });
+    return waitForLocalServerUrl(server, () => output, timeoutMs).catch(async (error) => {
+      await stopProcess(server);
+      throw error;
+    });
+  };
+  const baseUrl = await launch(0);
+  const restartPort = Number(new URL(baseUrl).port);
   return {
     baseUrl,
     dataDir,
+    async restart() {
+      await stopProcess(server);
+      const restartedUrl = await launch(restartPort);
+      if (restartedUrl !== baseUrl) {
+        throw new Error(`Restarted Server changed origin from ${baseUrl} to ${restartedUrl}`);
+      }
+      return restartedUrl;
+    },
     async close() {
       await stopProcess(server);
     },
@@ -4929,6 +5936,7 @@ async function connectSmokeDaemon({
   suffix,
   timeoutMs,
   dispatchResultFactory,
+  dispatchRequestHandler,
   onDispatchResultAck,
 }) {
   const socket = await connectSocket(ioFactory, new URL('/agent', baseUrl).toString(), timeoutMs);
@@ -4947,10 +5955,19 @@ async function connectSmokeDaemon({
   };
   socket.on(AGENT_EVENTS.dispatch.request, async (request) => {
     const pending = dispatchResultFor(request.id);
-    const result = await dispatchResultFactory?.(request) ?? {
-      body: `browser-smoke:${request.prompt}`,
-    };
     try {
+      if (dispatchRequestHandler) {
+        const handled = await dispatchRequestHandler({ socket, request, timeoutMs });
+        pending.resolve(
+          handled?.ok === false
+            ? { ok: false, error: new Error(`Smoke daemon dispatch handler failed: ${formatAck(handled)}`) }
+            : { ok: true },
+        );
+        return;
+      }
+      const result = await dispatchResultFactory?.(request) ?? {
+        body: `browser-smoke:${request.prompt}`,
+      };
       const ack = await emitAck(socket, AGENT_EVENTS.dispatch.result, {
         dispatchId: request.id,
         agentId: request.agentId,
