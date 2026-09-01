@@ -90,6 +90,10 @@ import {
 } from './artifact-revision-handler.js';
 import type { ArtifactRevisionConflictDto } from '../../../../packages/contracts/src/index.js';
 import { parseArtifactRevisionCommandInputV1 } from '../../../../packages/contracts/src/index.js';
+import {
+  safeParseDispatchAgentMessageV1,
+  type DispatchAgentMessageV1,
+} from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest, evaluateWorkspaceStagingSizeLimits, evaluateWorkspaceStagingUpload, evaluateWorkspaceStagingCommitReadiness, evaluateWorkspaceStagingExpiry, normalizeWorkspacePublishId, isCompatibleWorkspaceStagingBegin, DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_RETENTION_MS, deriveActivityAudience, mapLifecycleCommandToActivityFact, mapRemediationCommandToActivityFact } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
@@ -855,6 +859,7 @@ export interface ServerNextUseCases {
   receiveDispatchResult(input: ReceiveDispatchResultInput): Promise<Ack<ReceiveDispatchResultResult>>;
   receiveDispatchError(input: ReceiveDispatchErrorInput): Promise<Ack<ReceiveDispatchErrorResult>>;
   receiveDispatchProgress(input: ReceiveDispatchProgressInput): Promise<Ack<ReceiveDispatchProgressResult>>;
+  receiveDispatchAgentMessage(input: ReceiveDispatchAgentMessageInput): Promise<Ack<ReceiveDispatchAgentMessageResult>>;
   reactMessage(input: ReactMessageInput): Promise<Ack<{ messageId: string }>>;
   saveMessage(input: SaveMessageInput): Promise<Ack<{ messageId: string }>>;
   listSavedMessages(input: ListSavedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
@@ -1309,7 +1314,6 @@ export interface SendMessageResult {
   route?: RouteResult;
   coalescedDispatchId?: string;
   task?: TaskDto;
-  acknowledgementMessage?: MessageDto;
   management?: ManagementRoutingResult;
   referenceSet?: ProjectReferenceSetDto;
   collaborationTask?: {
@@ -1850,6 +1854,12 @@ export interface ReceiveDispatchProgressInput {
   sentAt?: number;
 }
 export type ReceiveDispatchProgressResult = { dispatchId: string };
+
+export type ReceiveDispatchAgentMessageInput = DispatchAgentMessageV1;
+export interface ReceiveDispatchAgentMessageResult {
+  dispatch: DispatchDto;
+  message: MessageDto;
+}
 
 export interface ReactMessageInput {
   userId: string;
@@ -3113,7 +3123,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         await createInitialChannelDocuments(repositories, attachedArtifacts, messageInput.userId, now);
       }
       const dispatches: DispatchDto[] = [];
-      let acknowledgementMessage: MessageDto | undefined;
       if (route.kind === 'dispatch' && management.kind !== 'managed' && !coalescedDispatchId) {
         const dispatch = await repositories.dispatches.create({
           id: ids.nextId(), teamId: messageInput.teamId, channelId: messageInput.channelId,
@@ -3122,11 +3131,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
         dispatches.push(toDispatchDto(dispatch));
         await repositories.agents.updateStatus({ agentId: dispatch.agentId, status: 'busy', lastSeenAt: now });
-        if (task) {
-          acknowledgementMessage = await appendTaskClaimAcknowledgementMessage(repositories, {
-            id: ids.nextId(), message, task, dispatch: toDispatchDto(dispatch), createdAt: now,
-          });
-        }
       }
       if (management.kind === 'managed') management = await managementRouter.scheduleManaged(management);
       if (management.mode === 'shadow' && management.shadowRequestKey) {
@@ -3144,7 +3148,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         route,
         ...(coalescedDispatchId ? { coalescedDispatchId } : {}),
         ...(task ? { task } : {}),
-        ...(acknowledgementMessage ? { acknowledgementMessage } : {}),
         management,
         ...(referenceSet ? { referenceSet } : {}),
       });
@@ -6124,7 +6127,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       const dispatches: DispatchDto[] = [];
-      let acknowledgementMessage: MessageDto | undefined;
       // #1064 AC4/AC9：task-linked 复验通过的请求已发布 targeted Offer（唯一 authority 路径），
       // 不再走 direct dispatch，避免同一请求双重投递。
       const taskLinkedOffered = outcome.kind === 'saved' && outcome.taskLinked != null;
@@ -6143,15 +6145,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
         dispatches.push(toDispatchDto(dispatch));
         await repositories.agents.updateStatus({ agentId: dispatch.agentId, status: 'busy', lastSeenAt: now });
-        if (task) {
-          acknowledgementMessage = await appendTaskClaimAcknowledgementMessage(repositories, {
-            id: ids.nextId(),
-            message: outcome.message,
-            task,
-            dispatch: toDispatchDto(dispatch),
-            createdAt: now,
-          });
-        }
       }
       if (management.kind === 'managed') {
         management = await managementRouter.scheduleManaged(management);
@@ -6189,7 +6182,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         dispatches,
         route,
         ...(task ? { task } : {}),
-        ...(acknowledgementMessage ? { acknowledgementMessage } : {}),
         management,
         ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
       });
@@ -11377,6 +11369,92 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async receiveDispatchAgentMessage(rawInput) {
+      const parsed = safeParseDispatchAgentMessageV1(rawInput);
+      if (!parsed.ok) {
+        return makeFailure('VALIDATION_ERROR', 'Invalid dispatch agent message');
+      }
+      const input: DispatchAgentMessageV1 = parsed.value;
+      const dispatch = await repositories.dispatches.getById(input.dispatchId);
+      if (!dispatch) {
+        return makeFailure('NOT_FOUND', 'Dispatch not found');
+      }
+      if (dispatch.agentId !== input.agentId) {
+        return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
+      }
+
+      const existingMessages = await repositories.messages.listByDispatch(dispatch.id);
+      const existing = existingMessages.find((message) =>
+        message.meta?.kind === 'dispatch-agent-message');
+      if (existing) {
+        const matches = existing.senderKind === 'agent'
+          && existing.senderId === input.agentId
+          && existing.body === input.body
+          && existing.meta?.dispatchUpdateId === input.updateId
+          && existing.meta?.dispatchSequence === input.sequence
+          && existing.meta?.dispatchUpdateKind === input.kind;
+        return matches
+          ? makeSuccess({ dispatch: toDispatchDto(dispatch), message: existing })
+          : makeFailure('CONFLICT', 'Dispatch agent message does not match the first report');
+      }
+      if (!isPendingDispatchStatus(dispatch.status)) {
+        return makeFailure('CONFLICT', 'Dispatch is already completed');
+      }
+
+      const originMessage = await repositories.messages.getById(dispatch.messageId);
+      if (!originMessage) {
+        return makeFailure('NOT_FOUND', 'Dispatch origin message not found');
+      }
+      const now = clock.now();
+      const nestReplyInThread = shouldNestDispatchReplyInThread(originMessage);
+      const messageId = `dispatch-message-${createHash('sha256')
+        .update(`${dispatch.id}:${input.sequence}`)
+        .digest('hex')
+        .slice(0, 24)}`;
+      const appendMessage = () => repositories.messages.append({
+        id: messageId,
+        teamId: dispatch.teamId,
+        channelId: dispatch.channelId,
+        threadId: originMessage.threadId ?? originMessage.id,
+        senderKind: 'agent',
+        senderId: input.agentId,
+        body: input.body,
+        createdAt: now,
+        meta: {
+          kind: 'dispatch-agent-message',
+          dispatchId: dispatch.id,
+          dispatchUpdateId: input.updateId,
+          dispatchSequence: input.sequence,
+          dispatchUpdateKind: input.kind,
+          replyScope: nestReplyInThread ? 'thread' : 'channel',
+          ...(nestReplyInThread && originMessage.threadId
+            ? { parentMessageId: originMessage.threadId }
+            : {}),
+        },
+      });
+      let message: MessageDto;
+      try {
+        message = await appendMessage();
+      } catch {
+        const persisted = (await repositories.messages.listByDispatch(dispatch.id)).find((candidate) =>
+          candidate.id === messageId && candidate.meta?.kind === 'dispatch-agent-message');
+        if (!persisted) {
+          return makeFailure('INTERNAL_ERROR', 'Dispatch agent message could not be persisted');
+        }
+        if (persisted.senderKind !== 'agent'
+          || persisted.senderId !== input.agentId
+          || persisted.meta?.dispatchUpdateId !== input.updateId
+          || persisted.meta?.dispatchSequence !== input.sequence
+          || persisted.meta?.dispatchUpdateKind !== input.kind
+          || persisted.body !== input.body) {
+          return makeFailure('CONFLICT', 'Dispatch agent message does not match the first report');
+        }
+        message = persisted;
+      }
+      await repositories.dispatches.touchHeartbeat({ dispatchId: dispatch.id, at: now });
+      return makeSuccess({ dispatch: toDispatchDto(dispatch), message });
+    },
+
     async receiveDispatchProgress(input) {
       const dispatch = await repositories.dispatches.getById(input.dispatchId);
       if (!dispatch) {
@@ -15632,37 +15710,7 @@ function shouldNestDispatchReplyInThread(originMessage: MessageRecord | null | u
   return typeof originMessage.meta?.taskId === 'string';
 }
 
-const TASK_CLAIM_ACKNOWLEDGEMENT_BODY = '我来处理，会先看请求和附件，再把结果发在线程里。';
-
-async function appendTaskClaimAcknowledgementMessage(
-  repositories: ServerNextRepositories,
-  input: {
-    id: string;
-    message: MessageDto;
-    task: TaskDto;
-    dispatch: DispatchDto;
-    createdAt: number;
-  },
-): Promise<MessageDto> {
-  return await repositories.messages.append({
-    id: input.id,
-    teamId: input.message.teamId,
-    channelId: input.message.channelId,
-    threadId: input.message.threadId ?? input.message.id,
-    senderKind: 'agent',
-    senderId: input.dispatch.agentId,
-    body: TASK_CLAIM_ACKNOWLEDGEMENT_BODY,
-    createdAt: input.createdAt,
-    meta: {
-      kind: 'task-claim-confirmed',
-      taskId: input.task.id,
-      dispatchId: input.dispatch.id,
-      parentMessageId: input.message.id,
-      replyScope: 'thread',
-    },
-  });
-}
-
+/** 旧版本曾把 Server 接单提示保存成 Agent Message；只保留识别逻辑用于历史兼容。 */
 function isTaskClaimAcknowledgementMessage(message: MessageRecord): boolean {
   return message.meta?.kind === 'task-claim-confirmed';
 }

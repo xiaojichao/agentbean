@@ -32,6 +32,14 @@ describe('Web chat-view message projection', () => {
     meta: { kind: 'task-status-updated', taskId: 'task-1', status: 'in_progress' },
   });
   const reply = message({ id: 'reply-1', threadId: 'root-1', createdAt: 3 });
+  const legacyClaim = message({
+    id: 'claim-1',
+    senderKind: 'agent',
+    senderId: 'agent-1',
+    threadId: 'root-1',
+    createdAt: 3,
+    meta: { kind: 'task-claim-confirmed', taskId: 'task-1', dispatchId: 'dispatch-1' },
+  });
   const secondStatus = message({
     id: 'status-2',
     senderKind: 'system',
@@ -41,12 +49,12 @@ describe('Web chat-view message projection', () => {
   });
 
   test('状态事件不进入频道主线、Thread 回复与回复计数，但普通消息保留', () => {
-    const raw = [root, firstStatus, reply, secondStatus];
+    const raw = [root, firstStatus, legacyClaim, reply, secondStatus];
     const projected = projectChatViewMessages(raw);
 
     expect(projected.map((item) => item.id)).toEqual(['root-1', 'reply-1']);
     expect(projected.filter((item) => item.threadId === 'root-1')).toHaveLength(1);
-    expect(raw).toHaveLength(4);
+    expect(raw).toHaveLength(5);
     expect(shouldHideSystemMessage(firstStatus)).toBe(false);
   });
 

@@ -1141,6 +1141,7 @@ export function registerAgentSocketHandlers(
       };
     },
   });
+  bind(socket, AGENT_EVENTS.dispatch.message, app, 'receiveDispatchAgentMessage', afterAgentMutation);
   bind(socket, AGENT_EVENTS.dispatch.result, app, 'receiveDispatchResult', afterDispatchCompletion);
   bind(socket, AGENT_EVENTS.dispatch.error, app, 'receiveDispatchError', afterDispatchCompletion);
   bind(socket, AGENT_EVENTS.dispatch.progress, app, 'receiveDispatchProgress');

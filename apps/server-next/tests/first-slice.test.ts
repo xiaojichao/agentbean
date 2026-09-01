@@ -2050,7 +2050,6 @@ describe('server-next first-slice use cases', () => {
         'dispatch-1',
         'request-1',
         'message-2',
-        'message-3',
       ]),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
@@ -2089,21 +2088,8 @@ describe('server-next first-slice use cases', () => {
         status: 'in_progress',
       },
       dispatches: [{ id: 'dispatch-1', messageId: 'message-1' }],
-      acknowledgementMessage: {
-        id: 'message-2',
-        senderKind: 'agent',
-        senderId: 'agent-1',
-        threadId: 'message-1',
-        body: '我来处理，会先看请求和附件，再把结果发在线程里。',
-        meta: {
-          kind: 'task-claim-confirmed',
-          taskId: 'task-1',
-          dispatchId: 'dispatch-1',
-          parentMessageId: 'message-1',
-          replyScope: 'thread',
-        },
-      },
     });
+    expect(sendAck).not.toHaveProperty('acknowledgementMessage');
     await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
       ok: true,
       request: {
@@ -2120,7 +2106,7 @@ describe('server-next first-slice use cases', () => {
     })).resolves.toMatchObject({
       ok: true,
       message: {
-        id: 'message-3',
+        id: 'message-2',
         threadId: 'message-1',
         body: '国内新闻 Top20 结果',
         meta: { parentMessageId: 'message-1', replyScope: 'thread' },
@@ -2131,14 +2117,13 @@ describe('server-next first-slice use cases', () => {
     await expect(app.getMessageContext({
       userId: 'user-1',
       teamId: 'team-1',
-      messageId: 'message-3',
+      messageId: 'message-2',
     })).resolves.toMatchObject({
       ok: true,
       threadRootId: 'message-1',
       messages: [
         { id: 'message-1', body: '@Hermes-Agent 总结一下今天的国内新闻 Top20' },
-        { id: 'message-2', body: '我来处理，会先看请求和附件，再把结果发在线程里。' },
-        { id: 'message-3', body: '国内新闻 Top20 结果' },
+        { id: 'message-2', body: '国内新闻 Top20 结果' },
       ],
     });
   });
@@ -2157,7 +2142,6 @@ describe('server-next first-slice use cases', () => {
         'dispatch-1',
         'request-1',
         'message-2',
-        'message-3',
       ]),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
@@ -2196,21 +2180,8 @@ describe('server-next first-slice use cases', () => {
         status: 'in_progress',
       },
       dispatches: [{ id: 'dispatch-1', messageId: 'message-1' }],
-      acknowledgementMessage: {
-        id: 'message-2',
-        senderKind: 'agent',
-        senderId: 'agent-1',
-        threadId: 'message-1',
-        body: '我来处理，会先看请求和附件，再把结果发在线程里。',
-        meta: {
-          kind: 'task-claim-confirmed',
-          taskId: 'task-1',
-          dispatchId: 'dispatch-1',
-          parentMessageId: 'message-1',
-          replyScope: 'thread',
-        },
-      },
     });
+    expect(sendAck).not.toHaveProperty('acknowledgementMessage');
 
     now = 341;
     await expect(app.receiveDispatchResult({
@@ -2220,7 +2191,7 @@ describe('server-next first-slice use cases', () => {
     })).resolves.toMatchObject({
       ok: true,
       message: {
-        id: 'message-3',
+        id: 'message-2',
         threadId: 'message-1',
         body: '图片分析结果',
         meta: { parentMessageId: 'message-1', replyScope: 'thread' },
@@ -2231,14 +2202,13 @@ describe('server-next first-slice use cases', () => {
     await expect(app.getMessageContext({
       userId: 'user-1',
       teamId: 'team-1',
-      messageId: 'message-3',
+      messageId: 'message-2',
     })).resolves.toMatchObject({
       ok: true,
       threadRootId: 'message-1',
       messages: [
         { id: 'message-1', body: '分析一下这张图' },
-        { id: 'message-2', body: '我来处理，会先看请求和附件，再把结果发在线程里。' },
-        { id: 'message-3', body: '图片分析结果' },
+        { id: 'message-2', body: '图片分析结果' },
       ],
     });
   });
@@ -2257,7 +2227,6 @@ describe('server-next first-slice use cases', () => {
         'request-1',
         'message-2',
         'message-3',
-        'message-4',
       ]),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
@@ -2283,7 +2252,6 @@ describe('server-next first-slice use cases', () => {
     })).resolves.toMatchObject({
       ok: true,
       dispatches: [{ id: 'dispatch-1', messageId: 'message-1' }],
-      acknowledgementMessage: { id: 'message-2' },
     });
 
     now = 11_000;
@@ -2294,7 +2262,7 @@ describe('server-next first-slice use cases', () => {
       body: '并且按重要性排序',
     })).resolves.toMatchObject({
       ok: true,
-      message: { id: 'message-3' },
+      message: { id: 'message-2' },
       dispatches: [],
       coalescedDispatchId: 'dispatch-1',
     });
@@ -2307,7 +2275,7 @@ describe('server-next first-slice use cases', () => {
       body: '最后给我一个三句话摘要',
     })).resolves.toMatchObject({
       ok: true,
-      message: { id: 'message-4' },
+      message: { id: 'message-3' },
       dispatches: [],
       coalescedDispatchId: 'dispatch-1',
     });
@@ -2995,7 +2963,6 @@ describe('server-next first-slice use cases', () => {
         'request-1',
         'message-2',
         'message-3',
-        'message-4',
         'dispatch-2',
         'request-2',
       ]),
@@ -3055,8 +3022,8 @@ describe('server-next first-slice use cases', () => {
       body: '继续补一条回归测试',
     })).resolves.toMatchObject({
       ok: true,
-      message: { id: 'message-4', threadId: 'message-1' },
-      dispatches: [{ id: 'dispatch-2', agentId: 'agent-1', messageId: 'message-4' }],
+      message: { id: 'message-3', threadId: 'message-1' },
+      dispatches: [{ id: 'dispatch-2', agentId: 'agent-1', messageId: 'message-3' }],
       route: { kind: 'dispatch', agentId: 'agent-1' },
     });
   });
@@ -3307,7 +3274,7 @@ describe('server-next first-slice use cases', () => {
     const app = createServerNextUseCases({
       repositories,
       clock: { now: () => now },
-      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'task-1', 'dispatch-1', 'request-1', 'message-2', 'message-3']) },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'task-1', 'dispatch-1', 'request-1', 'message-2']) },
       messageIngestionMode: 'legacy',
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
@@ -3359,7 +3326,7 @@ describe('server-next first-slice use cases', () => {
       body: '继续补一条回归测试',
     })).resolves.toMatchObject({
       ok: true,
-      message: { id: 'message-3', threadId: 'message-1' },
+      message: { id: 'message-2', threadId: 'message-1' },
       dispatches: [],
       route: { kind: 'no-dispatch', reason: 'no-online-agent' },
     });
@@ -4469,7 +4436,7 @@ describe('server-next first-slice use cases', () => {
     let now = 452;
     const app = createInMemoryServerNext({
       now: () => now,
-      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'task-1', 'dispatch-1', 'request-1', 'message-2']),
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'task-1', 'dispatch-1', 'request-1']),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
     await app.registerAgent({
@@ -4492,7 +4459,6 @@ describe('server-next first-slice use cases', () => {
     })).resolves.toMatchObject({
       ok: true,
       task: { id: 'task-1', status: 'in_progress' },
-      acknowledgementMessage: { id: 'message-2' },
     });
 
     now = 470;
@@ -4821,6 +4787,101 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('receiveDispatchAgentMessage persists one genuine Agent update idempotently before the terminal result', async () => {
+    let now = 900;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1', 'message-2',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      ownerId: 'user-1',
+      name: 'OpenSNS',
+      adapterKind: 'hermes',
+      category: 'custom',
+      status: 'online',
+      source: 'custom',
+      visibleTeamIds: ['team-1'],
+      deviceId: 'device-1',
+      lastSeenAt: 900,
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@OpenSNS hello',
+    });
+    await app.acceptDispatch({ dispatchId: 'dispatch-1', agentId: 'agent-1', quietWindowMs: 0 });
+
+    now = 950;
+    const update = {
+      schemaVersion: 1 as const,
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      updateId: 'dispatch-1:agent-message:1',
+      sequence: 1 as const,
+      kind: 'plan' as const,
+      body: '我会先盘点可用技能，再整理为 Markdown 文件。',
+      sentAt: 949,
+    };
+    const first = await app.receiveDispatchAgentMessage(update);
+    expect(first).toMatchObject({
+      ok: true,
+      dispatch: { id: 'dispatch-1', status: 'accepted' },
+      message: {
+        senderKind: 'agent',
+        senderId: 'agent-1',
+        threadId: 'message-1',
+        body: update.body,
+        meta: {
+          kind: 'dispatch-agent-message',
+          dispatchId: 'dispatch-1',
+          dispatchUpdateId: update.updateId,
+          dispatchSequence: 1,
+          dispatchUpdateKind: 'plan',
+        },
+      },
+    });
+    await expect(app.receiveDispatchAgentMessage(update)).resolves.toMatchObject({
+      ok: true,
+      message: { id: first.ok ? first.message.id : undefined },
+    });
+    await expect(app.receiveDispatchAgentMessage({ ...update, body: '另一条不一致的计划' })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+    });
+    await expect(app.receiveDispatchAgentMessage({
+      ...update,
+      updateId: 'dispatch-1:different-update:1',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+    });
+
+    now = 1000;
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: '最终结果',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatch: { status: 'succeeded' },
+      message: { id: 'message-2', body: '最终结果' },
+    });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        { id: 'message-1', senderKind: 'human' },
+        { senderKind: 'agent', body: update.body },
+        { id: 'message-2', senderKind: 'agent', body: '最终结果' },
+      ],
+    });
+  });
+
   test('receiveDispatchProgress heartbeat keeps a long-running dispatch alive past absolute timeout', async () => {
     let now = 1000;
     const app = createInMemoryServerNext({
@@ -4905,7 +4966,6 @@ describe('server-next first-slice use cases', () => {
         'task-1',
         'dispatch-1',
         'request-1',
-        'message-2',
         'workspace-run-1',
         'reply-1',
       ]),
@@ -4991,7 +5051,6 @@ describe('server-next first-slice use cases', () => {
         'task-1',
         'dispatch-1',
         'request-1',
-        'message-2',
         'workspace-run-1',
         'reply-1',
       ]),

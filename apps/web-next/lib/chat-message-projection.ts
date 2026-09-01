@@ -21,6 +21,10 @@ export function taskStatusEventFromMessage(message: ChatMessage): TaskStatusEven
   return taskStatusEventSummary(messageMeta(message));
 }
 
+function isLegacyTaskClaimAcknowledgement(message: ChatMessage): boolean {
+  return messageMeta(message).kind === 'task-claim-confirmed';
+}
+
 /**
  * Web 聊天视图投影：状态流水仍保留在客户端原始消息集合中，但不进入频道主线、
  * Thread 回复/计数、Activity 或消息搜索。该规则不改变 Server/Contracts 序列化边界。
@@ -30,6 +34,7 @@ export function projectChatViewMessages(messages: readonly ChatMessage[]): ChatM
   return messages.filter((message) =>
     !shouldHideSystemMessage(message)
     && !taskStatusEventFromMessage(message)
+    && !isLegacyTaskClaimAcknowledgement(message)
     && !mergedCardIds.has(message.id));
 }
 

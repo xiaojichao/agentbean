@@ -16,6 +16,7 @@ import { PTY_ADAPTERS, defaultPtySpawnLoader, runPtyAgentCommand } from './execu
 import type { PtySpawnFn } from './executor-pty.js';
 import { buildRuntimePrompt, redactDeviceLocalMemory } from './memory/runtime-memory-context.js';
 import { appendManagedOutputContext } from './managed-output-context.js';
+import { appendAgentActivityContext, createAgentActivityFile } from './agent-activity-file.js';
 
 export { buildChildEnv };
 
@@ -64,23 +65,48 @@ export function createCommandExecutor(options: CommandExecutorOptions = {}): Stu
   const clock = options.clock ?? { now: () => Date.now() };
   const ptySpawnLoader = options.ptySpawnLoader ?? defaultPtySpawnLoader;
 
-  return async (request) => {
+  return async (request, executionContext) => {
     const runtimePrompt = buildRuntimePrompt(request);
     if (!request.customAgent?.command) {
       return redactDeviceLocalMemory(`${fallbackPrefix}${runtimePrompt}`, request.memoryContext);
     }
+    let activity: ReturnType<typeof createAgentActivityFile> | null = null;
+    if (executionContext?.reportAgentMessage) {
+      try {
+        activity = createAgentActivityFile({
+          onMessage: (message) => executionContext.reportAgentMessage!({
+            ...message,
+            body: redactDeviceLocalMemory(message.body, request.memoryContext),
+          }),
+        });
+      } catch {
+        // 动态文件是可选能力；临时目录不可用时仍须执行 Agent 并回写最终结果。
+      }
+    }
     const managedOutputDir = request.customAgent?.env?.AGENTBEAN_OUTPUT_DIR;
+    const activityPrompt = activity ? appendAgentActivityContext(runtimePrompt) : runtimePrompt;
     const runtimeRequest = {
       ...request,
       prompt: managedOutputDir
-        ? appendManagedOutputContext(runtimePrompt, managedOutputDir)
-        : runtimePrompt,
+        ? appendManagedOutputContext(activityPrompt, managedOutputDir)
+        : activityPrompt,
+      customAgent: {
+        ...request.customAgent,
+        env: {
+          ...(request.customAgent.env ?? {}),
+          ...(activity ? { AGENTBEAN_ACTIVITY_FILE: activity.path } : {}),
+        },
+      },
     };
-    const result = await runCustomAgentCommand(
-      runtimeRequest,
-      { timeoutMs, killGraceMs, maxAccumulatedBytes, clock, ptySpawnLoader },
-    );
-    return sanitizeDeviceLocalMemoryResult(result, request.memoryContext);
+    try {
+      const result = await runCustomAgentCommand(
+        runtimeRequest,
+        { timeoutMs, killGraceMs, maxAccumulatedBytes, clock, ptySpawnLoader },
+      );
+      return sanitizeDeviceLocalMemoryResult(result, request.memoryContext);
+    } finally {
+      await activity?.close().catch(() => undefined);
+    }
   };
 }
 
