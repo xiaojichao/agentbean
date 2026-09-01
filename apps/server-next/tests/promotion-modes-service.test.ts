@@ -346,6 +346,43 @@ describe('#923 Promotion modes service', () => {
     expect(applied.outcome).toBe('applied');
   });
 
+  test('Team policy 在提交事务内复验附加授权，冲突时回滚 root Task', async () => {
+    const { repositories, service } = harness();
+    await seedSimpleRequest(repositories, 'queued');
+    await service.upsertTeamPolicy({
+      schemaVersion: 1,
+      teamId: 'team-1',
+      revision: 1,
+      enabled: true,
+      ruleId: 'structured-workflow',
+      preauthorized: true,
+      requireOrchestrationNeed: true,
+      updatedAt: 1_000,
+    });
+
+    await expect(service.applyTeamPolicy({
+      requesterId: 'user-1',
+      channelId: 'channel-1',
+      ruleId: 'structured-workflow',
+      orchestrationNeed: true,
+      objectiveSnapshot: objective,
+      freshnessBasis: {
+        schemaVersion: 1,
+        sourceLineage: { kind: 'message', id: 'message-1' },
+        sourceRevision: 1,
+      },
+      idempotencyKey: 'policy-additional-authority-conflict',
+      revalidateAdditionalAuthorityInTransaction: async () => {
+        throw new Error('MESSAGE_ROUTE_SEMANTIC_ROLLOUT_FRESHNESS_CONFLICT');
+      },
+    })).rejects.toThrow('MESSAGE_ROUTE_SEMANTIC_ROLLOUT_FRESHNESS_CONFLICT');
+    expect(await repositories.tasks.list({
+      teamId: 'team-1',
+      channelIds: ['channel-1'],
+      includeGlobal: true,
+    })).toEqual([]);
+  });
+
   test('Agent escalation freshness hold 不创建 Task、不 fence 旧执行权、不留下 handoff', async () => {
     const { repositories, service } = harness();
     await seedSimpleRequest(repositories);

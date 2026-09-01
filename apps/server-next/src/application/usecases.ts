@@ -2233,18 +2233,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (assessCoordinationRisk({ modelRisk: route.riskLevel, objective: riskObjective }) !== 'low') {
         throw new Error('MESSAGE_ROUTE_HIGH_RISK_REQUIRES_HUMAN');
       }
+      const directoryResult = await agentExposure.getCapabilityDirectory({
+        teamId: route.analysis.teamId,
+        channelId: route.analysis.channelId,
+      });
+      if (!directoryResult.ok) throw new Error('MESSAGE_ROUTE_CAPABILITY_DIRECTORY_UNAVAILABLE');
+      const directoryByAgent = new Map(directoryResult.directory.entries.map((entry) => [entry.agentId, entry]));
+      for (const targetAgentId of route.targetAgentIds) {
+        const directoryEntry = directoryByAgent.get(targetAgentId);
+        if (!directoryEntry) throw new Error('MESSAGE_ROUTE_TARGET_NOT_FOUND');
+        if (!directoryEntry.available) throw new Error('MESSAGE_ROUTE_TARGET_UNAVAILABLE');
+      }
       if (route.intentSource === 'pi') {
         if (route.subtasks.length === 0) throw new Error('MESSAGE_ROUTE_SUBTASKS_REQUIRED');
-        const directoryResult = await agentExposure.getCapabilityDirectory({
-          teamId: route.analysis.teamId,
-          channelId: route.analysis.channelId,
-        });
-        if (!directoryResult.ok) throw new Error('MESSAGE_ROUTE_CAPABILITY_DIRECTORY_UNAVAILABLE');
-        const directoryByAgent = new Map(directoryResult.directory.entries.map((entry) => [entry.agentId, entry]));
         subtasks = route.subtasks.map((subtask) => {
           const directoryEntry = directoryByAgent.get(subtask.targetAgentId);
           if (!directoryEntry) throw new Error('MESSAGE_ROUTE_SUBTASK_TARGET_NOT_FOUND');
-          if (!directoryEntry.available) throw new Error('MESSAGE_ROUTE_SUBTASK_TARGET_UNAVAILABLE');
           const capabilityNameById = new Map(directoryEntry.capabilities.map((capability) => [
             capability.registry.capabilityId,
             capability.name,
@@ -2302,6 +2306,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           objectiveSnapshot,
           freshnessBasis,
           idempotencyKey: `message-route:${route.analysis.id}`,
+          revalidateAdditionalAuthorityInTransaction: async (context) => {
+            const currentRollout = await context.repositories.promotion.semanticRollout
+              .get(route.analysis.teamId);
+            if (currentRollout) {
+              throw new Error('MESSAGE_ROUTE_SEMANTIC_ROLLOUT_FRESHNESS_CONFLICT');
+            }
+          },
           onAppliedInTransaction: hooks.onAppliedInTransaction,
           onConvergedInTransaction: hooks.onConvergedInTransaction,
         });

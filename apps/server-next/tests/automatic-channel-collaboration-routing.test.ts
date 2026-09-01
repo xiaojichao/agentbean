@@ -208,6 +208,20 @@ describe('automatic channel collaboration routing (#1270)', () => {
     await expect(repositories.messages.getById(sent.message.id)).resolves.toMatchObject({
       body: '各位，请分别介绍一下自己吧',
     });
+
+    const unavailableFallback = await app.sendMessage({
+      userId, teamId, channelId, clientMessageId: 'natural-collaboration-at-capacity',
+      body: '各位，请分别介绍一下自己吧',
+    });
+    expect(unavailableFallback.ok).toBe(true);
+    if (!unavailableFallback.ok) return;
+    await waitForRouteResolution(repositories, unavailableFallback.message.id);
+    await expect(repositories.channelCoordinationUnitOfWork.run((tx) =>
+      tx.routes.getByMessageId(unavailableFallback.message.id))).resolves.toMatchObject({
+      status: 'deferred', diagnosticCode: 'MESSAGE_ROUTE_TARGET_UNAVAILABLE', linkedTaskId: null,
+    });
+    const afterUnavailable = await app.listTasks({ userId, teamId, channelId });
+    expect(afterUnavailable.ok && afterUnavailable.tasks).toHaveLength(4);
   });
 
   test('PI 为未指派简单请求选择 qualified Agent，并自动 acceptance 与 Claim', async () => {

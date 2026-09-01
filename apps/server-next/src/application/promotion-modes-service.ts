@@ -369,6 +369,7 @@ export function createPromotionModesService(dependencies: PromotionModesServiceD
     readonly objectiveSnapshot: PromotionProposalV1['objectiveSnapshot'];
     readonly freshnessBasis: PromotionFreshnessBasisV1;
     readonly idempotencyKey: string;
+    readonly revalidateAdditionalAuthorityInTransaction?: (context: PromotionSuccessContext) => Promise<void>;
     readonly onAppliedInTransaction?: (context: PromotionSuccessContext) => Promise<void>;
     readonly onConvergedInTransaction?: (context: PromotionSuccessContext) => Promise<void>;
   }) {
@@ -408,10 +409,12 @@ export function createPromotionModesService(dependencies: PromotionModesServiceD
     };
     const onApplied = async (context: PromotionSuccessContext) => {
       await revalidatePolicy(context);
+      await input.revalidateAdditionalAuthorityInTransaction?.(context);
       await input.onAppliedInTransaction?.(context);
     };
     const onConverged = async (context: PromotionSuccessContext) => {
       await revalidatePolicy(context);
+      await input.revalidateAdditionalAuthorityInTransaction?.(context);
       await input.onConvergedInTransaction?.(context);
     };
     try {
