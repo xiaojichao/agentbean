@@ -1,9 +1,128 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { createServerNextUseCases } from '../src/application/usecases.js';
 import { createTaskClaimBroker } from '../src/application/management/task-claim-broker.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
+async function enableAutomaticRouting(
+  repositories: ReturnType<typeof createInMemoryRepositories>,
+  teamId: string,
+  withPiPolicy: boolean,
+) {
+  await repositories.teamPiAuthorityMigrations.upsert({
+    teamId, authorityEpoch: 1, migrationRevision: 1, state: 'new_authority',
+    legacyWriterFenced: true, emergencyStop: false, cutoverVersion: 1,
+    cutoverAt: 1, cutoverBy: 'owner', drainDeadlineAt: null, createdAt: 1, updatedAt: 1,
+  });
+  if (withPiPolicy) {
+    await repositories.taskCoordinationUnitOfWork.run((tx) => tx.promotion.teamPolicy.upsert({
+      schemaVersion: 1, teamId, revision: 1, enabled: true,
+      ruleId: 'pi-message-route-v1', preauthorized: true,
+      requireOrchestrationNeed: true, updatedAt: 1,
+    }));
+  }
+}
+
+async function waitForRouteResolution(
+  repositories: ReturnType<typeof createInMemoryRepositories>,
+  messageId: string,
+) {
+  await vi.waitFor(async () => {
+    const route = await repositories.channelCoordinationUnitOfWork.run((tx) =>
+      tx.routes.getByMessageId(messageId));
+    expect(route?.status).not.toBe('pending');
+    expect(route?.status).not.toBe('running');
+  });
+}
+
 describe('automatic channel collaboration routing (#1270)', () => {
+  test('发送 ACK 不等待外部 PI，durable route 在后台继续处理', async () => {
+    const repositories = createInMemoryRepositories();
+    let id = 0;
+    let releaseAnalyzer!: (value: { unavailable: true; diagnosticCode: string }) => void;
+    const analyzerResult = new Promise<{ unavailable: true; diagnosticCode: string }>((resolve) => {
+      releaseAnalyzer = resolve;
+    });
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 100 },
+      ids: { nextId: () => `async-route-${++id}` },
+      analyzeMessageRouteWithPi: async () => analyzerResult,
+    });
+    const registered = await app.registerUser({ username: 'async-owner', password: 'secret', teamName: 'Async' });
+    if (!registered.ok) throw new Error(registered.error);
+    const userId = registered.user.id;
+    const teamId = registered.user.primaryTeamId!;
+    await enableAutomaticRouting(repositories, teamId, true);
+    const channel = await app.createChannel({ userId, teamId, name: 'Async route', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+
+    const sent = await app.sendMessage({
+      userId, teamId, channelId: channel.channel.id, body: '请分析这个任务',
+    });
+    expect(sent).toMatchObject({ ok: true, dispatches: [] });
+    await vi.waitFor(async () => {
+      const route = sent.ok
+        ? await repositories.channelCoordinationUnitOfWork.run((tx) => tx.routes.getByMessageId(sent.message.id))
+        : null;
+      expect(route?.status).toBe('running');
+    });
+    releaseAnalyzer({ unavailable: true, diagnosticCode: 'PI_ROUTE_TEST_UNAVAILABLE' });
+    if (sent.ok) await waitForRouteResolution(repositories, sent.message.id);
+  });
+
+  test('显式 semantic rollout 配置阻止 PI 绕过 Team policy 直接提升 Task', async () => {
+    const repositories = createInMemoryRepositories();
+    let id = 0;
+    const ids = { nextId: () => `rollout-route-${++id}` };
+    const clock = { now: () => 100 };
+    const setupApp = createServerNextUseCases({ repositories, ids, clock });
+    const registered = await setupApp.registerUser({ username: 'rollout-owner', password: 'secret', teamName: 'Rollout' });
+    if (!registered.ok) throw new Error(registered.error);
+    const userId = registered.user.id;
+    const teamId = registered.user.primaryTeamId!;
+    await enableAutomaticRouting(repositories, teamId, true);
+    await repositories.taskCoordinationUnitOfWork.run((tx) => tx.promotion.semanticRollout.upsert({
+      schemaVersion: 1, teamId, mode: 'off', revision: 1, updatedAt: 100,
+    }));
+    const channel = await setupApp.createChannel({ userId, teamId, name: 'Rollout', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+    const hello = await setupApp.deviceHello({ teamId, ownerId: userId, machineId: 'rollout-machine', hostname: 'host' });
+    if (!hello.ok) throw new Error(hello.error);
+    const discovered = await setupApp.registerDiscoveredAgents({
+      teamId, deviceId: hello.device.id,
+      agents: [{ name: 'Reviewer', adapterKind: 'hermes', category: 'agentos-hosted' }],
+    });
+    const reviewer = discovered.ok ? discovered.agents[0] : undefined;
+    if (!reviewer) throw new Error('agent missing');
+    await setupApp.addChannelAgentMember({ userId, teamId, channelId: channel.channel.id, agentId: reviewer.id });
+    await repositories.agentExposure.manifests.create({
+      id: `manifest-${reviewer.id}`, teamId, agentId: reviewer.id, revision: 1, status: 'active',
+      capabilities: [], skills: [], constraints: [], availability: { status: 'available' },
+      validFrom: 0, validUntil: null, createdBy: userId, now: 100,
+    });
+    const routedApp = createServerNextUseCases({
+      repositories, ids, clock,
+      analyzeMessageRouteWithPi: async () => ({
+        routeKind: 'direct_agent', riskLevel: 'low', targetAgentIds: [reviewer.id],
+        requiredCapabilityIds: [], subtasks: [{
+          title: '审查', objective: '审查方案', targetAgentId: reviewer.id,
+          requiredCapabilityIds: [], acceptanceCriteria: ['给出结论'], dependsOnSubtaskIndexes: [],
+        }],
+      }),
+    });
+    const sent = await routedApp.sendMessage({
+      userId, teamId, channelId: channel.channel.id, body: '请审查方案',
+    });
+    expect(sent.ok).toBe(true);
+    if (!sent.ok) return;
+    await waitForRouteResolution(repositories, sent.message.id);
+    await expect(repositories.channelCoordinationUnitOfWork.run((tx) =>
+      tx.routes.getByMessageId(sent.message.id))).resolves.toMatchObject({
+      status: 'deferred', diagnosticCode: 'MESSAGE_ROUTE_SEMANTIC_ROLLOUT_REQUIRES_REVIEW',
+      linkedTaskId: null,
+    });
+  });
+
   test('不勾选协作、不 @Agent，也能把低风险 collective message 自动分解为每 Agent 一个 Offer', async () => {
     const repositories = createInMemoryRepositories();
     let id = 0;
@@ -23,6 +142,7 @@ describe('automatic channel collaboration routing (#1270)', () => {
     if (!registered.ok) throw new Error(registered.error);
     const userId = registered.user.id;
     const teamId = registered.user.primaryTeamId!;
+    await enableAutomaticRouting(repositories, teamId, false);
     const created = await app.createChannel({ userId, teamId, name: '协作', visibility: 'public' });
     if (!created.ok) throw new Error(created.error);
     const channelId = created.channel.id;
@@ -60,6 +180,7 @@ describe('automatic channel collaboration routing (#1270)', () => {
     expect(sent).toMatchObject({ ok: true, dispatches: [] });
     if (!sent.ok) return;
     expect(sent).not.toHaveProperty('collaborationTask');
+    await waitForRouteResolution(repositories, sent.message.id);
 
     const listed = await app.listTasks({ userId, teamId, channelId });
     if (!listed.ok) throw new Error(listed.error);
@@ -101,6 +222,7 @@ describe('automatic channel collaboration routing (#1270)', () => {
     if (!registered.ok) throw new Error(registered.error);
     const userId = registered.user.id;
     const teamId = registered.user.primaryTeamId!;
+    await enableAutomaticRouting(repositories, teamId, true);
     const channel = await setupApp.createChannel({ userId, teamId, name: '简单任务', visibility: 'public' });
     if (!channel.ok) throw new Error(channel.error);
     const hello = await setupApp.deviceHello({ teamId, ownerId: userId, machineId: 'direct-machine', hostname: 'host' });
@@ -148,12 +270,48 @@ describe('automatic channel collaboration routing (#1270)', () => {
     });
     if (!policy.ok) throw new Error(policy.error);
 
+    await repositories.taskCoordinationUnitOfWork.run((tx) => tx.promotion.teamPolicy.upsert({
+      schemaVersion: 1, teamId, revision: 2, enabled: false,
+      ruleId: 'pi-message-route-v1', preauthorized: true,
+      requireOrchestrationNeed: true, updatedAt: clock.now(),
+    }));
+    const policyBlocked = await routedApp.sendMessage({
+      userId, teamId, channelId: channel.channel.id, clientMessageId: 'policy-disabled',
+      body: '请审查另一个方案',
+    });
+    expect(policyBlocked.ok).toBe(true);
+    if (!policyBlocked.ok) return;
+    await waitForRouteResolution(repositories, policyBlocked.message.id);
+    await expect(repositories.channelCoordinationUnitOfWork.run((tx) =>
+      tx.routes.getByMessageId(policyBlocked.message.id))).resolves.toMatchObject({
+      status: 'deferred', diagnosticCode: 'POLICY_DISABLED', linkedTaskId: null,
+    });
+    await repositories.taskCoordinationUnitOfWork.run((tx) => tx.promotion.teamPolicy.upsert({
+      schemaVersion: 1, teamId, revision: 3, enabled: true,
+      ruleId: 'pi-message-route-v1', preauthorized: true,
+      requireOrchestrationNeed: true, updatedAt: clock.now(),
+    }));
+
+    const riskBlocked = await routedApp.sendMessage({
+      userId, teamId, channelId: channel.channel.id, clientMessageId: 'server-risk',
+      body: '请删除生产数据库中的全部数据',
+    });
+    expect(riskBlocked.ok).toBe(true);
+    if (!riskBlocked.ok) return;
+    await waitForRouteResolution(repositories, riskBlocked.message.id);
+    await expect(repositories.channelCoordinationUnitOfWork.run((tx) =>
+      tx.routes.getByMessageId(riskBlocked.message.id))).resolves.toMatchObject({
+      status: 'resolved', routeKind: 'clarification', riskLevel: 'high',
+      diagnosticCode: 'MESSAGE_ROUTE_HIGH_RISK_REQUIRES_HUMAN', linkedTaskId: null,
+    });
+
     const sent = await routedApp.sendMessage({
       userId, teamId, channelId: channel.channel.id, clientMessageId: 'direct-natural',
       body: '请审查当前方案并给出结论',
     });
     expect(sent).toMatchObject({ ok: true, dispatches: [] });
     if (!sent.ok) return;
+    await waitForRouteResolution(repositories, sent.message.id);
     const route = await repositories.channelCoordinationUnitOfWork.run((tx) =>
       tx.routes.getByMessageId(sent.message.id));
     expect(route).toMatchObject({
@@ -183,6 +341,7 @@ describe('automatic channel collaboration routing (#1270)', () => {
     if (!registered.ok) throw new Error(registered.error);
     const userId = registered.user.id;
     const teamId = registered.user.primaryTeamId!;
+    await enableAutomaticRouting(repositories, teamId, true);
     const channel = await app.createChannel({ userId, teamId, name: '智能路由', visibility: 'public' });
     if (!channel.ok) throw new Error(channel.error);
     const hello = await app.deviceHello({ teamId, ownerId: userId, machineId: 'm2', hostname: 'host' });
@@ -249,6 +408,7 @@ describe('automatic channel collaboration routing (#1270)', () => {
     });
     expect(sent.ok).toBe(true);
     if (!sent.ok) return;
+    await waitForRouteResolution(repositories, sent.message.id);
     const route = await repositories.channelCoordinationUnitOfWork.run((tx) =>
       tx.routes.getByMessageId(sent.message.id));
     expect(route).toMatchObject({

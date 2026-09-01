@@ -165,6 +165,12 @@ export function createMessageRouteAnalysisService(deps: MessageRouteAnalysisServ
         linkedTaskId: applied.linkedTaskId, diagnosticCode: null,
       });
     } catch (error) {
+      if (error instanceof Error && error.message === 'MESSAGE_ROUTE_HIGH_RISK_REQUIRES_HUMAN') {
+        return update(analysis, {
+          status: 'resolved', routeKind: 'clarification', intentSource, riskLevel: 'high',
+          diagnosticCode: error.message,
+        });
+      }
       return update(analysis, {
         status: 'deferred', nextRetryAt: deps.clock.now() + retryDelayMs,
         diagnosticCode: error instanceof Error && /^[A-Z0-9_]+$/.test(error.message)

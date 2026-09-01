@@ -40,6 +40,7 @@ import {
   type UpdateAgentExposureDraftInput,
   type UpsertAgentAutoAcceptPolicyInput,
   type UpsertAgentExposureRestrictionInput,
+  type UnixMs,
 } from '../../../../packages/contracts/src/index.js';
 import {
   bindAgentExposureCapability,
@@ -49,7 +50,7 @@ import {
   parseAgentExposureContent,
 } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureRepositories, AgentExposureUnitOfWork } from './agent-exposure-repositories.js';
-import type { AgentRecord, ChannelRecord } from './repositories.js';
+import type { AgentRecord, ChannelRecord, DeviceRecord } from './repositories.js';
 
 export interface AgentExposureServiceRepositories {
   readonly agentExposure: AgentExposureRepositories;
@@ -57,6 +58,12 @@ export interface AgentExposureServiceRepositories {
   readonly agents: {
     getById(agentId: ID): Promise<AgentRecord | null>;
     listVisibleInTeam(teamId: ID): Promise<AgentRecord[]>;
+  };
+  readonly devices: {
+    getById(deviceId: ID): Promise<DeviceRecord | null>;
+  };
+  readonly claimLeases: {
+    listActive(): Promise<readonly { readonly agentId: ID; readonly expiresAt: UnixMs }[]>;
   };
   readonly channels: {
     getById(channelId: ID): Promise<ChannelRecord | null>;
@@ -496,9 +503,18 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
       .filter((agent) => channelAgentIds === null || channelAgentIds.has(agent.id))
       .sort((left, right) => left.id.localeCompare(right.id));
     const entries: AgentCapabilityDirectoryEntryDto[] = [];
+    const activeClaimCountByAgent = new Map<ID, number>();
+    for (const claim of await repositories.claimLeases.listActive()) {
+      if (claim.expiresAt <= now) continue;
+      activeClaimCountByAgent.set(claim.agentId, (activeClaimCountByAgent.get(claim.agentId) ?? 0) + 1);
+    }
     for (const agent of agentsInScope) {
       const active = await resolveActive(input.teamId, agent.id, now);
       if (!active) continue;
+      const device = agent.deviceId ? await repositories.devices.getById(agent.deviceId) : null;
+      const autoAcceptPolicy = await repo.autoAcceptPolicies.getByTeamAgent(input.teamId, agent.id);
+      const hasCapacity = !autoAcceptPolicy?.enabled
+        || (activeClaimCountByAgent.get(agent.id) ?? 0) < autoAcceptPolicy.maxActiveClaims;
       const restriction = await repo.restrictions.getByTeamAgent(input.teamId, agent.id);
       const currentRestriction = restriction?.manifestId === active.id ? restriction : null;
       const disabledCapabilities = new Set(
@@ -512,7 +528,10 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
         agentName: agent.name,
         manifestId: active.id,
         manifestRevision: active.revision,
-        available: active.availability.status === 'available',
+        available: active.availability.status === 'available'
+          && agent.status === 'online'
+          && device?.status === 'online'
+          && hasCapacity,
         capabilities: active.capabilities
           .filter((capability) => !disabledCapabilities.has(capability.name.toLowerCase()))
           .map((capability) => {

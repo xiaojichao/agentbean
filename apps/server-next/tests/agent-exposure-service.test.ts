@@ -378,6 +378,40 @@ describe('Team Agent Exposure (#710)', () => {
     expect(JSON.stringify(result.directory)).not.toContain('sourcePath');
     expect(JSON.stringify(result.directory)).not.toContain('scannedCapabilities');
 
+    await repositories.agents.updateStatus({ agentId: 'agent-1', status: 'offline', lastSeenAt: 100 });
+    const offlineAgentDirectory = await app.getAgentCapabilityDirectory({
+      userId: 'user-member', teamId: 'team-1', channelId: 'channel-1',
+    });
+    expect(offlineAgentDirectory.ok && offlineAgentDirectory.directory.entries[0]?.available).toBe(false);
+    await repositories.agents.updateStatus({ agentId: 'agent-1', status: 'online', lastSeenAt: 100 });
+    await repositories.devices.markOffline({ deviceId: 'device-1', timestamp: 100 });
+    const offlineDeviceDirectory = await app.getAgentCapabilityDirectory({
+      userId: 'user-member', teamId: 'team-1', channelId: 'channel-1',
+    });
+    expect(offlineDeviceDirectory.ok && offlineDeviceDirectory.directory.entries[0]?.available).toBe(false);
+    await seedDeviceAndAgent(repositories, 'user-1', 'device-1', 'agent-1', 'team-1');
+
+    const autoAccept = await app.upsertAgentAutoAcceptPolicy({
+      userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', enabled: true,
+      allowedCapabilityIds: ['capability:v1:code-review'], allowedRiskLevels: ['low'],
+      maxActiveClaims: 1,
+    });
+    expect(autoAccept.ok).toBe(true);
+    await repositories.taskCoordination.coordinations.create({
+      schemaVersion: 1, taskId: 'task-existing', teamId: 'team-1', managementRunId: 'run-existing',
+      nodeKind: 'root', reviewPolicy: 'human', claimPolicy: 'open', requiredCapabilities: [],
+      taskRevision: 1, attempt: 1, maxAttempts: 1, createdAt: 1, updatedAt: 1,
+    });
+    await repositories.taskCoordination.claimLeases.create({
+      id: 'claim-at-capacity', teamId: 'team-1', taskId: 'task-existing', taskRevision: 1,
+      taskAttempt: 1, agentId: 'agent-1', leaseTokenHash: 'hash', leaseFingerprint: 'fingerprint',
+      fencingToken: 1, status: 'active', acquiredAt: 1, heartbeatAt: 1, expiresAt: 1_000,
+    });
+    const capacityDirectory = await app.getAgentCapabilityDirectory({
+      userId: 'user-member', teamId: 'team-1', channelId: 'channel-1',
+    });
+    expect(capacityDirectory.ok && capacityDirectory.directory.entries[0]?.available).toBe(false);
+
     const outsider = await app.getAgentCapabilityDirectory({
       userId: 'user-outsider', teamId: 'team-1', channelId: 'channel-1',
     });

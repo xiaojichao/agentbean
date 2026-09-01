@@ -362,12 +362,15 @@ export function createPromotionModesService(dependencies: PromotionModesServiceD
   async function applyTeamPolicy(input: {
     readonly requesterId: string;
     readonly channelId: string;
+    readonly rootMessageId?: string;
     readonly ruleId: string;
     readonly orchestrationNeed: boolean;
     readonly exclusion?: SemanticPromotionExclusion;
     readonly objectiveSnapshot: PromotionProposalV1['objectiveSnapshot'];
     readonly freshnessBasis: PromotionFreshnessBasisV1;
     readonly idempotencyKey: string;
+    readonly onAppliedInTransaction?: (context: PromotionSuccessContext) => Promise<void>;
+    readonly onConvergedInTransaction?: (context: PromotionSuccessContext) => Promise<void>;
   }) {
     const policy = await unitOfWork.run(async (repos) => repos.promotion.teamPolicy.get(teamId));
     if (!policy) return { outcome: 'rejected' as const, stableCode: 'TEAM_PROMOTION_POLICY_NOT_FOUND' };
@@ -403,6 +406,14 @@ export function createPromotionModesService(dependencies: PromotionModesServiceD
         throw new Error('TEAM_PROMOTION_POLICY_FRESHNESS_CONFLICT');
       }
     };
+    const onApplied = async (context: PromotionSuccessContext) => {
+      await revalidatePolicy(context);
+      await input.onAppliedInTransaction?.(context);
+    };
+    const onConverged = async (context: PromotionSuccessContext) => {
+      await revalidatePolicy(context);
+      await input.onConvergedInTransaction?.(context);
+    };
     try {
       return await createPromotionGateHandler({
       teamId,
@@ -411,8 +422,8 @@ export function createPromotionModesService(dependencies: PromotionModesServiceD
       clock,
       ids,
       trustedTriggerKinds: ['team-policy'],
-      onAppliedInTransaction: revalidatePolicy,
-      onConvergedInTransaction: revalidatePolicy,
+      onAppliedInTransaction: onApplied,
+      onConvergedInTransaction: onConverged,
       }).promoteToTask({
       schemaVersion: 1,
       commandName: 'promote-to-task',
@@ -421,6 +432,7 @@ export function createPromotionModesService(dependencies: PromotionModesServiceD
     }, {
       triggerKind: 'team-policy',
       channelId: input.channelId,
+      ...(input.rootMessageId ? { rootMessageId: input.rootMessageId } : {}),
       objectiveSnapshot: input.objectiveSnapshot,
       freshnessBasis: input.freshnessBasis,
       });
