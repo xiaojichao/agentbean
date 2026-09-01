@@ -1,8 +1,7 @@
 'use client';
 
-import Link from 'next/link';
 import { useState, useEffect, useCallback } from 'react';
-import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw, LayoutDashboard } from 'lucide-react';
+import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { authEvents, clearStoredAuth, getWebSocket, joinEvents, teamEvents, userMemoryEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
@@ -80,18 +79,6 @@ export default function SettingsPage() {
             </button>
           ))}
         </nav>
-        {isSystemAdmin && (
-          <div className="border-t border-neutral-200 p-2">
-            <Link
-              href={`/${teamPath}/dashboard`}
-              className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm text-neutral-600 hover:bg-white/50"
-              data-smoke="settings-admin-console-link"
-            >
-              <LayoutDashboard size={16} />
-              管理后台
-            </Link>
-          </div>
-        )}
       </div>
 
       {/* Right content */}

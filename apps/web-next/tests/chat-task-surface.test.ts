@@ -54,8 +54,8 @@ describe('chat task surface', () => {
     expect(sidebarSource).not.toContain('gap-1 border-t border-neutral-900/20');
     expect(sidebarSource).toContain('data-smoke="notifications-menu"');
     expect(sidebarSource).toContain('data-smoke="help-resources-menu"');
-    expect(settingsSource).toContain('data-smoke="settings-admin-console-link"');
-    expect(settingsSource).toContain('href={`/${teamPath}/dashboard`}');
+    expect(settingsSource).not.toContain('data-smoke="settings-admin-console-link"');
+    expect(settingsSource).not.toContain('管理后台');
   });
 
   test('普通任务从整枚徽标打开完整状态菜单，受管任务只保留取消与关闭', () => {
