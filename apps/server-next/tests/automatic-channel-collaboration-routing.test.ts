@@ -132,6 +132,7 @@ describe('automatic channel collaboration routing (#1270)', () => {
     const broker = createTaskClaimBroker({ repositories, ids, clock, offerTtlMs: 60_000 });
     const app = createServerNextUseCases({
       repositories, ids, clock,
+      isDeviceRuntimeDisconnected: broker.isDeviceDisconnected,
       onChannelCollaborationTasksPublished: async (taskIds) => {
         let offered = 0;
         for (const taskId of taskIds) offered += (await broker.prepareOffers(taskId)).length;
@@ -172,6 +173,21 @@ describe('automatic channel collaboration routing (#1270)', () => {
       });
       if (!policy.ok) throw new Error(policy.error);
     }
+
+    broker.disconnectDevice(hello.device.id);
+    const disconnectedFallback = await app.sendMessage({
+      userId, teamId, channelId, clientMessageId: 'natural-collaboration-disconnected',
+      body: '各位，请分别介绍一下自己吧',
+    });
+    expect(disconnectedFallback.ok).toBe(true);
+    if (!disconnectedFallback.ok) return;
+    await waitForRouteResolution(repositories, disconnectedFallback.message.id);
+    await expect(repositories.channelCoordinationUnitOfWork.run((tx) =>
+      tx.routes.getByMessageId(disconnectedFallback.message.id))).resolves.toMatchObject({
+      status: 'deferred', diagnosticCode: 'MESSAGE_ROUTE_TARGET_UNAVAILABLE', linkedTaskId: null,
+    });
+    expect((await app.listTasks({ userId, teamId, channelId }))).toMatchObject({ ok: true, tasks: [] });
+    broker.reconnectDevice(hello.device.id);
 
     const sent = await app.sendMessage({
       userId, teamId, channelId, clientMessageId: 'natural-collaboration',

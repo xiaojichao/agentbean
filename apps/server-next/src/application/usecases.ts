@@ -2004,6 +2004,8 @@ export interface CreateServerNextUseCasesInput {
    * dev-server 注入；缺省（未接线测试环境）用简单可见性兜底（fail closed 语义由复验链兜底）。
    */
   resolveTaskLinkedEligibleAgentIds?: (taskId: string) => Promise<readonly string[]>;
+  /** TaskClaimBroker 的实时 Socket disconnect fence，补足 device.status 持久化窗口。 */
+  isDeviceRuntimeDisconnected?: (deviceId: string) => boolean;
   /** Promotion commit 后把已发布的 targeted subtasks 投递给现有 TaskClaimBroker。 */
   onChannelCollaborationTasksPublished?: (
     taskIds: readonly string[],
@@ -2951,6 +2953,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
     clock,
     ids,
+    isDeviceRuntimeDisconnected: input.isDeviceRuntimeDisconnected,
     // #946：manifest 替代后撤销绑定旧 revision 的 execution grant（跨域 best-effort，lease 留存）。
     onManifestSuperseded: async ({ teamId, agentId, manifestRevision, now }) => {
       const grants = await repositories.taskCoordination.executionGrants.listActiveByManifestRevision({

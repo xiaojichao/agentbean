@@ -79,6 +79,8 @@ export interface AgentExposureServiceDependencies {
   readonly canManageAgent: (input: { userId: ID; agentId: ID }) => Promise<boolean>;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
+  /** Socket runtime disconnect fence；持久化 device.status 尚未来得及更新时也必须 fail closed。 */
+  readonly isDeviceRuntimeDisconnected?: (deviceId: ID) => boolean;
   /**
    * #946：active manifest 被新 revision 替代后回调，撤销绑定旧 revision 的 execution grant
    * （manifest-superseded）。跨域（exposure→task-coordination）best-effort，在 publish 事务外
@@ -512,6 +514,9 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
       const active = await resolveActive(input.teamId, agent.id, now);
       if (!active) continue;
       const device = agent.deviceId ? await repositories.devices.getById(agent.deviceId) : null;
+      const runtimeDeviceConnected = agent.deviceId
+        ? deps.isDeviceRuntimeDisconnected?.(agent.deviceId) !== true
+        : false;
       const autoAcceptPolicy = await repo.autoAcceptPolicies.getByTeamAgent(input.teamId, agent.id);
       const hasCapacity = !autoAcceptPolicy?.enabled
         || (activeClaimCountByAgent.get(agent.id) ?? 0) < autoAcceptPolicy.maxActiveClaims;
@@ -531,6 +536,7 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
         available: active.availability.status === 'available'
           && agent.status === 'online'
           && device?.status === 'online'
+          && runtimeDeviceConnected
           && hasCapacity,
         capabilities: active.capabilities
           .filter((capability) => !disabledCapabilities.has(capability.name.toLowerCase()))

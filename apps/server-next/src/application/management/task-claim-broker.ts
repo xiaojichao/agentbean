@@ -224,6 +224,8 @@ export interface TaskClaimBroker {
     expired: TaskClaimExpiredV1,
     options?: { readonly maxAutomaticReoffers?: number },
   ): Promise<boolean>;
+  /** Socket disconnect 先于持久化离线写入时，暴露实时连接 fence 给其他 eligibility 读侧。 */
+  isDeviceDisconnected(deviceId: string): boolean;
   disconnectDevice(deviceId: string): void;
   reconnectDevice(deviceId: string): void;
   /** #712 切片 C-1：持久化一个结构化 Task Offer（PI → Agent，状态 open）。 */
@@ -1082,6 +1084,9 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
     },
     expireClaims,
     canAutoReofferExpiredChannelCollaborationClaim,
+    isDeviceDisconnected(deviceId) {
+      return disconnectedDevices.has(deviceId);
+    },
     disconnectDevice(deviceId) {
       disconnectedDevices.add(deviceId);
       for (const [offerId, offer] of offers) if (offer.deviceId === deviceId) offers.delete(offerId);
