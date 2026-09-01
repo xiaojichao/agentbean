@@ -12248,7 +12248,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ? await repositories.management.handoffs.getByInvocationId(managedAttempt.invocationId)
         : null;
       const channelCollaborationTaskContext = managedInvocation?.intent.taskContext;
-      if (resultSucceeded && channelCollaborationTaskContext) {
+      if (channelCollaborationTaskContext) {
         const claimGate = await inspectChannelCollaborationCompletionClaim({
           repositories,
           now,
@@ -16462,11 +16462,14 @@ async function recordManagedDispatchTerminal(
   if (coordination?.nodeKind === 'subtask'
     && coordination.managementRunId === invocation.managementRunId) {
     if (input.status !== 'succeeded') {
-      await taskKernel.recordInvocationFailure({
+      const failure = await taskKernel.recordInvocationFailure({
         managementRunId: invocation.managementRunId,
         invocationId: invocation.id,
         reasonCode: input.errorCode ?? `INVOCATION_${input.status.toUpperCase()}`,
       });
+      if (failure.disposition === 'ignored' || failure.disposition === 'stale') {
+        return null;
+      }
       if ((input.status === 'failed' || input.status === 'timed_out') && taskContext) {
         const projected = await recordChannelCollaborationStatus({
           repositories,

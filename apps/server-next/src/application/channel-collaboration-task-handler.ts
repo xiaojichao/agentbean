@@ -605,18 +605,23 @@ export async function completeChannelCollaborationSubtask(input: {
         taskId: task.id,
         limit: 1,
       });
-      if (packages.length === 0) {
+      // 仅内联 Artifact 的旧/轻量交付没有 OutputPackage 审核面，仍可按当前客观
+      // criterion 自动验收。只要消息已经声明 Package 卡片，就必须等权威 Package
+      // 投影可见，避免 reconciliation 窗口绕过逐文件审核。
+      if (packages.length === 0 && deliveryMessage.meta?.outputPackageCard) {
         return { summaryMessage: null, summaryCreated: false };
       }
-      const fileReviewGate = await inspectCurrentDeliveryFileReviewGate(repositories, {
-        teamId: task.teamId,
-        channelId: run.channelId,
-        taskId: task.id,
-        taskRevision: task.revision,
-        taskAttempt: coordination.attempt,
-      });
-      if (fileReviewGate.kind === 'rejected') {
-        return { summaryMessage: null, summaryCreated: false };
+      if (packages.length > 0) {
+        const fileReviewGate = await inspectCurrentDeliveryFileReviewGate(repositories, {
+          teamId: task.teamId,
+          channelId: run.channelId,
+          taskId: task.id,
+          taskRevision: task.revision,
+          taskAttempt: coordination.attempt,
+        });
+        if (fileReviewGate.kind === 'rejected') {
+          return { summaryMessage: null, summaryCreated: false };
+        }
       }
     }
 

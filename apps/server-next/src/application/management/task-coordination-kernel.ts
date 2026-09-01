@@ -953,6 +953,15 @@ export function createTaskCoordinationKernel(
           || coordination.taskRevision !== task.revision) {
           return { disposition: 'stale' as const };
         }
+        const currentClaim = await repositories.coordination.claimLeases.getCurrent({
+          taskId: task.id,
+          taskRevision: task.revision,
+          taskAttempt: coordination.attempt,
+        });
+        if (!currentClaim || currentClaim.id !== context.claimLeaseId
+          || currentClaim.agentId !== invocation.intent.targetAgentId) {
+          return { disposition: 'stale' as const };
+        }
         const idempotencyKey = `invocation-failure:${invocation.id}`;
         const commandHash = hashManagementCommandInput({ command: 'record-invocation-failure',
           invocationId: invocation.id, reasonCode: input.reasonCode });
