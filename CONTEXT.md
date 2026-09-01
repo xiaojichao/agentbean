@@ -174,13 +174,43 @@ _Avoid_: 每次调用随机 key、Task ID 复用所有效果、客户端时间�
 
 ## PI Manager
 
-AgentBean 内置的系统协调者，只在权威 PI orchestration trigger 成立后编排根 Task；它不是 Team 成员，也不监听或默认理解每一条普通消息，不替代外部 Agent 完成用户领域工作。本条冻结 #894 决议后的目标术语；ADR-0062 已取代旧的每消息协调合同，旧事实与兼容行为只按 ADR-0068 的迁移边界保留，不能继续授权当前 runtime。
-_Avoid_: PI Agent、每消息 Channel Coordinator、普通聊天 Agent、用户任务执行 Agent。
+AgentBean 内置的系统协调者，对未明确指派的频道消息形成 PI intent proposal，并在权威 PI orchestration trigger 成立后编排根 Task；它不是 Team 成员、Message sender 或用户任务执行 Agent，模型输出本身不拥有任何权威写入能力。
+_Avoid_: PI Agent、普通聊天 Agent、用户任务执行 Agent、模型响应即 Task、PI 直接 Claim。
+
+## Channel Work Intake
+
+Server 在 Message delivery 之后统一判断一条人类频道消息是否保持 Message only、进入 Simple agent request、形成 Promotion clarification，或经权威 trigger 进入 Tracked task 的领域入口；明确目标、既有 Task linkage 与未指派消息分析在此收敛，但原始 Message 本身不能被 Agent claim。
+_Avoid_: composer 发送模式、每消息 Task、第一在线 Agent fallback、Message delivery 即执行、并行路由 writer。
+
+## Message Route Analysis
+
+Channel Work Intake 面向未明确指派频道消息执行的可恢复意图判断，产出 Message only、单 Agent 请求、collective task、complex task 或 clarification 候选；它绑定来源 lineage 与当前 revision，失败或迟到结果不能回滚 Message 或绕过 Server 授权。
+_Avoid_: Task、Dispatch、Claim、模型会话事实、无法恢复的同步分类、分析失败即消息失败。
+
+## PI intent proposal
+
+PI 对 Message Route Analysis 给出的结构化非权威建议，描述目标、工作形态、Capability/Skill 要求、风险与待澄清项；只有 Server 重新校验后形成的路由决定才能产生工作事实。
+_Avoid_: PI orchestration trigger、Task plan commit、Agent assignment、执行授权、模型自由文本即事实。
+
+## Server-authorized semantic trigger
+
+Server 将有效 PI intent proposal 与当前 Team policy、权限、风险、Capability Registry、Agent Exposure、Freshness basis 和 authority epoch 共同校验后形成的结构化 PI orchestration trigger；它允许未指派自然语言进入自动 promotion，但不授权 Task 内的高风险或外部副作用。
+_Avoid_: 模型结果即 trigger、关键词直接建单、客户端自报语义决定、跨 scope 自动扩权、Action approval。
+
+## Deterministic routing fallback
+
+PI 模型不可用时仍可对明确 `@Agent`、既有 Task linkage 与 Low-risk collective directive 作出无需模型的有限路由；无法满足确定性条件的消息保持 deferred 并等待重试或人工指定。
+_Avoid_: 随机 Agent、第一在线 Agent、跨模型静默 fallback、降低 required Capability、伪装成已协调。
+
+## Low-risk collective directive
+
+Server registry 中版本化、目标集合可确定且无高风险外部副作用的有限协作指令，例如让当前频道内合格 Agent 分别作自我介绍；它可以由明确语法和稳定 pattern 在无模型时识别，但仍须冻结目标、policy revision、最小输入与 Offer/acceptance 依据。
+_Avoid_: 任意自然语言规则引擎、频道广播即 Claim、未冻结成员集合、高风险 Action、绕过 Agent exposure 或 auto-accept policy。
 
 ## PI orchestration trigger
 
-允许 PI Manager 开始根 Task 编排的结构化、可审计事实，来自人类明确动作、合法 Agent 升级或 Team promotion policy；普通自然语言、关键词、@Agent、DM 或 Thread owner 本身都不是 trigger。
-_Avoid_: Channel coordination decision、每消息 coordination job、关键词触发、自然语言自动建单、隐式入口。
+允许 PI Manager 开始根 Task 编排的结构化、可审计事实，来自人类明确动作、Server-authorized semantic trigger、合法 Agent 升级或 Team promotion policy；普通自然语言、关键词、`@Agent`、DM 或 Thread owner 本身都不是 trigger。
+_Avoid_: 模型响应即 trigger、Channel coordination decision、关键词直接触发、客户端隐式入口、并行建单路径。
 
 ## Promotion proposal
 
@@ -204,18 +234,18 @@ _Avoid_: 旁观 Agent 升级、自然语言暗示、升级即获得编排权、�
 
 ## Team promotion policy
 
-由 Team Owner/Admin 在系统治理上限内管理、以版本化规则把预授权结构化入口提升为根 Task 的 Team 规则；正文关键词、模型语义分类或频道惯例只能命中 Promotion proposal，不能直接 promotion。
-_Avoid_: 每消息自动分类、自然语言自动建单、覆盖 chat-only、突破权限或数据边界、无版本隐式规则。
+由 Team Owner/Admin 在系统治理上限内管理、以版本化规则约束哪些结构化入口或 Server-authorized semantic trigger 可以自动提升为根 Task 的 Team 规则；它可以关闭或收紧自动化，但不能覆盖明确目标、突破权限、降低能力要求或授权高风险动作。
+_Avoid_: 模型自行制定 policy、覆盖 Message only、突破权限或数据边界、无版本隐式规则、Promotion authorization 替代 Action approval。
 
 ## Semantic promotion rollout
 
-自然语言或模型 proposal 策略的 Team 运行状态，只允许 `off`、不打扰用户的 `shadow` 与展示可确认建议的 `proposal-only`；语义策略永不进入自动 promotion，确定性结构化入口不属于此阶梯。
-_Avoid_: semantic auto-promote、shadow 建 Task、未审计切换、紧急停用后继续接受旧 proposal token。
+自然语言路由策略的 Team 运行状态，允许 `off`、不改变工作事实的 `shadow`、只展示建议的 `proposal-only` 与经 Server 完整校验后形成 trigger 的 `automatic`；状态和 policy revision 必须进入路由依据与审计，紧急停用后旧分析结果不能继续 promotion。
+_Avoid_: 模型自行开启 automatic、shadow 建 Task、未审计切换、停用后接受旧结果、绕过 Server-authorized semantic trigger。
 
 ## Promotion evaluator
 
-受 Semantic promotion rollout 与消息作用域授权控制、对普通自然语言给出 No promotion、Promotion clarification 或 Promotion proposal 的 Server 无副作用判定器；它不取得 claim、不创建 Task，也不是 PI Manager。
-_Avoid_: 每消息 PI Manager、Channel Coordinator、direct dispatch、模型失败回滚 Message、跨频道或 DM ambient access。
+Message Route Analysis 中判断一条 Message 是否需要 Promotion clarification、Promotion proposal 或自动 promotion 候选的无副作用部分；它不取得 claim、不创建 Task，automatic 结果仍须形成 Server-authorized semantic trigger。
+_Avoid_: Channel Coordinator、direct writer、模型失败回滚 Message、跨频道或 DM ambient access、评估结果即 promotion。
 
 ## Message-to-task promotion
 
@@ -304,8 +334,8 @@ _Avoid_: Freshness hold、静默覆盖、隐式合并、先写入者获胜。
 
 ## Orchestration need
 
-请求确实需要多工作单元或跨 Agent 协作、依赖与恢复、结果聚合、持续跟踪或人工审核生命周期的可审计事实；它是 Agent escalation 与 policy direct promotion 的必要门槛。
-_Avoid_: 文本长度、复杂措辞、任务关键词、多个 @、模型主观复杂度、单 Agent 可直接完成的请求。
+请求确实需要多工作单元或跨 Agent 协作、依赖与恢复、结果聚合、持续跟踪或人工审核生命周期的可审计事实；PI 可以提出该事实，Server 必须根据结构化工作形态与当前 policy 复验后才能用于 automatic promotion、Agent escalation 或 policy direct promotion。
+_Avoid_: 文本长度、复杂措辞、任务关键词、多个 `@`、裸模型标签、单 Agent 可直接完成的请求。
 
 ## PI orchestration run
 
@@ -414,13 +444,13 @@ _Avoid_: assignee 即 claim、根 Task assignee、残留 assignee 表示仍负�
 
 ## Uncoordinated message intake
 
-不存在权威 PI orchestration trigger 时，人类频道消息进入 Agent 工作的路径只有：显式 @Agent 的 Simple agent request，或已经绑定到既有 Tracked task 的跟进。Semantic promotion rollout 关闭、旁路或不可用不影响确定性结构化 trigger 进入 Promotion gate；原始消息本身不可被 Agent claim，也不因「频道内谁先在线」而隐式指定负责人。
-_Avoid_: evaluator 关闭即禁用结构化 trigger、PI 自动协调总开关、原始消息抢答、隐式 fallback 负责人、谁先 claim 谁负责（针对聊天消息）、把未 @ 直派当作日常默认。
+不存在权威 PI orchestration trigger 时，显式 `@Agent` 形成 Simple agent request，既有 Tracked task linkage 形成 follow-up，未指派根消息进入 Message Route Analysis；原始消息本身不可被 Agent claim，也不因「频道内谁先在线」而指定负责人。
+_Avoid_: evaluator 关闭即禁用确定性路径、原始消息抢答、第一在线 Agent、谁先 claim 谁负责（针对聊天消息）、分析 job 充当 Task。
 
 ## Coordinated message intake
 
-Message delivery 之后只有权威 PI orchestration trigger 可以进入根 Task 编排；普通消息、Simple agent request 与既有 Task follow-up 各自保持原语义，不经过每消息协调入口。
-_Avoid_: 每消息 Channel coordination decision、legacy 未 @ fallback Dispatch、asTask/@Agent/DM/Thread owner 并行触发编排。
+Message delivery 之后由 Channel Work Intake 收敛确定性路由与 Message Route Analysis，只有最终形成权威 PI orchestration trigger 的来源才能进入根 Task 编排；Message only、Simple agent request 与既有 Task follow-up 各自保持独立语义。
+_Avoid_: 每消息建 Task、legacy 未 `@` fallback Dispatch、composer mode 决定权威路径、`@Agent`/DM/Thread owner 自动 promotion。
 
 ## Task offer
 
@@ -559,8 +589,8 @@ _Avoid_: 每消息 Task、聊天记录别名、Promotion proposal、Action appro
 
 ## Simple agent request
 
-Server message intake 根据显式 @Agent 确定性路由给一个外部 Agent、且不创建 Tracked task 的人类请求；Agent 后续若发现需要编排，只能走结构化 Agent orchestration escalation。
-_Avoid_: PI 每消息判定、未 @ 消息隐式选 Agent、单人任务必建 Task、把简单请求项目管理化。
+Channel Work Intake 根据显式 `@Agent`，或根据 Message Route Analysis 经 Server 授权后的单 Agent 路由决定，确定性路由给一个合格外部 Agent 且不创建 Tracked task；显式目标是不可被 PI 改写的硬约束，语义路由必须记录能力与选择依据。Agent 后续若发现需要编排，只能走结构化 Agent orchestration escalation。
+_Avoid_: PI 直接指定或 Claim、第一在线或随机 Agent、语义路由绕过 eligibility、单人任务必建 Task、把简单请求项目管理化。
 
 ## Simple request escalation handoff
 
@@ -774,8 +804,8 @@ _Avoid_: 费用、账单、Team 配额、伪造为零。
 
 ## PI degraded
 
-Active PI Model 在有限同模型重试后仍不可用的显式全系统运行状态。频道消息继续保存和展示，但 PI 暂停自动建 Task、分解、认领和 Memory 写入；该系统状态只向系统管理员投影，普通用户只获得当前操作的适当结果，不看到 PI、Provider、Model 或诊断身份。MVP 不静默切换到其他模型。
-_Avoid_: PI configuration readiness、消息发送失败、普通用户 PI 状态、隐式跨模型 fallback、伪装成正常协调、静默丢弃自动化。
+Active PI Model 在有限同模型重试后仍不可用的显式全系统运行状态。频道消息继续保存和展示，模型驱动的路由、分解与 Memory 写入暂停并保留可恢复的 deferred 结果；明确目标、既有 Task linkage 与 Low-risk collective directive 仍可走 Deterministic routing fallback，既有 claim、lease、deadline 与恢复流程继续由 Server 事实推进。该系统状态只向系统管理员投影，普通用户只获得当前操作的适当结果，不看到 PI、Provider、Model 或诊断身份；MVP 不静默切换到其他模型。
+_Avoid_: PI configuration readiness、消息发送失败、普通用户 PI 状态、隐式跨模型 fallback、随机派发、降低硬要求、伪装成正常协调、静默丢弃自动化。
 
 ## PI Management
 
@@ -903,10 +933,35 @@ _Avoid_: UI 隐藏、后台继续执行、静默取消、跨频道搬迁 Task。
 Channel archive 后冻结的原频道记忆，只作为归档查看、审计和来源复验的只读历史，不再直接进入任何活跃频道的 Active Memory Context。此前已明确批准的 Team Memory 或 Reusable Experience Pack 投影不因归档自动失效。
 _Avoid_: 可继续检索的 Channel Memory、删除的 Memory、自动跨频道来源。
 
+## Capability Candidate
+
+Agent adapter 从 `AGENTS.md`、`CLAUDE.md`、`SKILL.md`、Agent descriptor 或受支持的自述接口发现的潜在能力线索；它保留来源、摘要与发现时间，只进入所有者审核和验证流程，不参与 Task eligibility。
+_Avoid_: 已公开能力、安装即授权、PI 推断事实、扫描结果自动进入 Team、长期有效缓存。
+
+## Capability Evidence
+
+支持某个 Capability Candidate 或已公开 Agent Capability 的可审计证据，包含来源类型、provenance、验证结果、适用约束、freshness 与失败原因；证据提高可解释性和时效置信度，但不授予 Team exposure、数据权限或执行权。
+_Avoid_: Agent 评分、经验印象、模型总结即证明、权限 token、一次成功永久有效。
+
+## Capability Registry
+
+Server 维护的版本化标准操作契约目录，以稳定 Capability ID 描述输入、输出、风险、所需权限与验证规则；Task 和 PI 只引用已发布 ID，自由文本与扫描结果必须先映射为 Candidate 并经所有者确认，不能在任务分解时临时创造能力名称。
+_Avoid_: Agent 私有工具清单、自然语言标签库、Skill 安装目录、PI prompt 内临时 taxonomy、Team 自定义同名异义能力。
+
+## Capability verification
+
+Agent adapter 按 Capability Registry 的验证规则执行的有界、默认无副作用检查，用于证明某个 Agent 在当前版本和环境下仍能履行公开契约；结果形成 Capability Evidence，需要 runtime verification 的 Capability 在证据失败或过期时不得用于新 Offer，但历史 Manifest 与既有交付保持不变。
+_Avoid_: 高风险真实执行、自动公开、权限提升、PI 自测、用验证替代 accept/claim 时复验。
+
+## Agent Capability Directory
+
+Server 面向 PI 生成的 Team/Channel 限域只读视图，把 Capability Registry、当前 Team Agent Exposure、有效 Capability Evidence、operation restriction、连接状态与容量组合为可查询候选事实；它是匹配入口而不是新的权威源，PI 不直接读取 Agent 文件或内部环境。
+_Avoid_: 全局 Agent 黄页、第二份 Manifest、PI 自建缓存、跨 Team 能力枚举、把排序结果写回能力事实。
+
 ## Agent Capability
 
-Agent 通过对外契约声明自己当前可以接受的操作类型、输入输出、约束和可用状态。Task 的 `requiredCapabilities` 是候选资格的硬门槛，但 PI 只能使用 Agent 暴露的信息与 AgentBean 可观测的连接状态，不能检查其内部运行环境、工具或权限实现。
-_Avoid_: Agent 内部权限、Agent Skill、相似任务经验、模型推断出的擅长领域。
+Agent 所有者从 Capability Candidate 中确认、映射到 Capability Registry，并通过 Team Agent Exposure 对外发布的当前可接受操作契约。Task 的 `requiredCapabilities` 是候选资格硬门槛；PI 只能读取 Server 提供的公开契约与有效 Evidence，不能检查 Agent 内部运行环境、工具或权限实现。
+_Avoid_: Agent 内部权限、Agent Skill、相似任务经验、未经确认的扫描结果、模型推断出的擅长领域。
 
 ## Agent Skill
 
@@ -915,8 +970,8 @@ _Avoid_: Agent 内部 Skill 清单、Capability 标签、PI 猜测、一次成�
 
 ## Agent Exposure Manifest
 
-由 Agent 或其适配器主动发布给 AgentBean 的结构化公开契约，包含愿意暴露的 Capabilities、Skills、版本、约束、可用状态和有效期。PI 只能据此做候选匹配，不得扫描 Agent 文件、核验内部依赖，或把未暴露的信息补入 Manifest。
-_Avoid_: Agent 内部清单、PI 探测、永久有效缓存、自然语言自述。
+由 Agent 所有者发布给 AgentBean 的结构化公开契约，包含愿意暴露的 Capability Registry IDs、Skills、Evidence 要求、版本、约束、可用状态和有效期。Agent adapter 可以扫描本地资料并生成 Candidate，但 PI 只能读取当前 Team 的有效投影，不得把 Candidate、内部依赖或未公开信息补入 Manifest。
+_Avoid_: 扫描结果自动公开、Agent 内部清单、PI 探测、永久有效缓存、自然语言自述直接成为契约。
 
 ## Team Agent Exposure
 
@@ -927,6 +982,11 @@ _Avoid_: 全局 Agent Skill 目录、Channel 独立 Skill 清单、Team 强制�
 
 一次 Team Agent Exposure 的不可变版本标识。Task Offer 同时固定 `taskRevision` 与 `manifestRevision`；相关 Capability 或 Skill 被撤回后，尚未接受的旧 Offer 失效。Agent acceptance 形成独立履约承诺后，Manifest 后续变化不自动取消该 Task。
 _Avoid_: 活动 Task 配置、内部 Skill 版本、无版本覆盖更新。
+
+## Agent Auto-accept Policy
+
+Agent 所有者为特定 Team 发布的版本化自动接受意愿，按 Capability、风险等级、输入敏感性、容量、时限与是否需要完整 preview 限定适用范围；Server 只有在当前 Offer 同时满足 policy 与全部 eligibility 门槛时，才可按所有者的预授权记录绑定 policy revision 的可审计 machine acceptance，并在同一事务复验后建立唯一 claim。
+_Avoid_: Team exposure 即自动接受、PI 代表 Agent Claim、默认全开、绕过 preview 或权限、跨 Team 复用、策略命中即执行。
 
 ## Claim relinquishment
 
@@ -1157,6 +1217,11 @@ _Avoid_: 文件包整体审核、集合整体覆盖审核、Agent 自审、用 T
 
 合法验收人对当前 Task delivery 是否完成任务目标作出的接受或退回决定。它不同于文件版本审核和最终版设置：文件全部通过只满足交付内容门槛，Task 仍需验收后才进入 `done`；同一人可以同时拥有文件审核权和交付验收权，但两者不能互相推导。
 _Avoid_: 文件通过即任务完成、最终版即任务完成、PI 自动主观验收、通用状态更新。
+
+## Task delivery revision
+
+面向当前 root Task 与 DAG revision 的不可变可审核交付候选，显式引用各子 Task 已接受的 delivery、output snapshots、验收证据与贡献 Agent provenance；PI 可以组织结构和说明来源，但它不是 Message，也不能用一段“PI 汇总”正文替换执行者原始交付。
+_Avoid_: PI 聊天气泡、覆盖 Agent 署名、动态 latest 聚合、未验收结果、文件包或 Task 状态别名。
 
 ## Package batch review
 

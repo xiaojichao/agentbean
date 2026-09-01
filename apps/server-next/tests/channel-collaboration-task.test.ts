@@ -115,8 +115,8 @@ describe('channel collaboration task', () => {
       userId,
       teamId,
       channelId,
-      clientMessageId: 'plain-introduction',
-      body: '各位，请分别介绍一下自己吧',
+      clientMessageId: 'plain-chat',
+      body: '大家好，今天聊聊方案',
     });
     expect(plain).toMatchObject({ ok: true, dispatches: [] });
     const tasksAfterPlain = await app.listTasks({ userId, teamId, channelId });
@@ -644,18 +644,14 @@ describe('channel collaboration task', () => {
     });
     await expect(repositories.management.runs.getById(sent.collaborationTask.managementRunId!))
       .resolves.toMatchObject({ status: 'in_review' });
-    await expect(repositories.messages.getById(summaryMessageId)).resolves.toMatchObject({
-      threadId: sent.message.id,
-      senderKind: 'system',
-      meta: { kind: 'channel-collaboration-summary' },
-    });
-    expect(realtimeMessageIds).toEqual([summaryMessageId]);
+    await expect(repositories.messages.getById(summaryMessageId)).resolves.toBeNull();
+    expect(realtimeMessageIds).toEqual([]);
     await expect(app.receiveDispatchResult({
       dispatchId: betaDispatchId,
       agentId: beta.id,
       body: '我是 Beta，负责独立核验。',
     })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
-    await expect(repositories.messages.getById(summaryMessageId)).resolves.toBeTruthy();
+    await expect(repositories.messages.getById(summaryMessageId)).resolves.toBeNull();
     const thread = await repositories.messages.listByThread({
       channelId: channel.channel.id,
       threadId: sent.message.id,
@@ -663,14 +659,14 @@ describe('channel collaboration task', () => {
     });
     expect(thread.map((message) => message.meta?.kind)).toEqual(expect.arrayContaining([
       'dispatch-agent-message',
-      'channel-collaboration-summary',
     ]));
+    expect(thread.map((message) => message.meta?.kind)).not.toContain('channel-collaboration-summary');
     const visible = await app.listChannelMessages({ channelId: channel.channel.id, limit: 20 });
     if (!visible.ok) throw new Error(visible.error);
     expect(visible.messages.map((message) => message.meta?.kind)).toEqual(expect.arrayContaining([
       'dispatch-agent-message',
-      'channel-collaboration-summary',
     ]));
+    expect(visible.messages.map((message) => message.meta?.kind)).not.toContain('channel-collaboration-summary');
   });
 
   test('keeps rejection, expiry and failure visible without blocking other Agents or summarizing early', async () => {

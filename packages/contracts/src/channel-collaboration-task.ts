@@ -1,8 +1,9 @@
 /**
  * 频道协作任务的结构化 human trigger。
  *
- * 普通聊天、自然语言判断与 @Agent 不得合成此 payload。只有用户在 composer 中
- * 显式选择“频道 Agent 协作”时，Web 才能随 message:send 提交本合同。
+ * #1270 后默认 Web composer 不再暴露此开关；该 payload 仅保留给旧客户端和显式
+ * 结构化 API 兼容。普通未指派消息统一由持久化 Message Route Analysis 判断，
+ * 模型 proposal 也不得伪造此 human trigger。
  */
 
 export const CHANNEL_COLLABORATION_TASK_AUDIENCES = ['all-channel-agents'] as const;

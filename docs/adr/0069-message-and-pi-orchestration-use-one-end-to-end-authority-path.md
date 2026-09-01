@@ -4,6 +4,8 @@ status: accepted
 
 # Message 与 PI 编排遵循唯一端到端权威路径
 
+> 修订说明：ADR-0073 已取代本 ADR 中“自然语言与模型判断永远至多产生 clarification/proposal”以及普通聊天场景“未 `@` 绝不自动选择 Agent”的绝对禁止；以下原始场景仍用于保留单一 lineage、authority epoch、幂等、Freshness、Offer/Claim、fencing、恢复与人工验收不变量。
+
 ADR-0062 至 ADR-0068 已分别冻结 PI authority、Task lifecycle、子 Task 合同与 Offer、失败改派、系统活动可见性、Command registry 以及 legacy migration。本决策用十二个完整场景验证这些合同可以组合成唯一解释，并补齐 Simple agent request 升级时旧执行权与新 root Task 之间的原子 handoff。实施阶段不得为同一输入重新选择另一套 trigger、ownership、状态、可见性、恢复或兼容语义。
 
 ## 跨层不变量

@@ -22,6 +22,7 @@ import {
   decideHardSpecifiedOfferKind,
   desensitizeAllocationSuggestion,
   evaluateClaimRelinquishment,
+  evaluateAgentAutoAccept,
   evaluateExecutionGrantIssuance,
   evaluateOfferAcceptance,
   evaluateOfferDecline,
@@ -30,6 +31,8 @@ import {
   evaluateTaskClaimRelease,
   evaluateTaskClaimRenew,
   validateRequirementAttestation,
+  capabilityRegistryReferenceForName,
+  type AgentAutoAcceptDenialReason,
   type OfferInvalidationReason,
   type OfferValidity,
   type TaskClaimLeaseRecord as DomainTaskClaimLeaseRecord,
@@ -95,6 +98,8 @@ export interface TaskOfferRespondInput {
    * 校验 attested ⊇ required 后才放行。
    */
   readonly attestation?: TaskRequirementAttestationV1;
+  /** Server 内部 machine acceptance fence；transport 不得从 Agent payload 透传。 */
+  readonly autoAcceptPolicy?: { readonly id: string; readonly revision: number };
 }
 
 /**
@@ -157,6 +162,11 @@ export type TaskOfferRespondResult =
       readonly reason: 'offer_invalid' | 'agent_not_qualified' | 'claim_rejected';
       readonly diagnosticCode: string;
     };
+
+export type TaskOfferAutoAcceptResult = TaskOfferRespondResult | {
+  readonly kind: 'manual_response_required';
+  readonly reason: AgentAutoAcceptDenialReason | 'policy_not_found';
+};
 
 export interface ProjectStageClaimGranted {
   readonly managementRunId: string;
@@ -226,6 +236,8 @@ export interface TaskClaimBroker {
   publishOffer(input: TaskOfferPublishInput): Promise<TaskOfferRecord>;
   /** #712 切片 C-1：处理 Agent 对 Offer 的显式响应（AC#2/AC#4/AC#5/AC#6）。 */
   respondToOffer(input: TaskOfferRespondInput, binding?: TaskClaimDeviceBinding): Promise<TaskOfferRespondResult>;
+  /** #1270：按 owner 预授权尝试 machine acceptance；未命中时保持 Offer open。 */
+  autoAcceptOffer(offerId: string): Promise<TaskOfferAutoAcceptResult>;
   /** #829：自动阶段 Offer 形成 Claim 后，接通 Server 内部 Invocation 创建。 */
   bindProjectStageClaimGranted(
     handler: (claim: ProjectStageClaimGranted) => Promise<void>,
@@ -465,7 +477,29 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
     return { kind: 'no_offer', reason: 'explicit_unsatisfied' };
   }
 
-  return {
+  async function finalizePreparedOffers(prepared: readonly StoredOffer[]): Promise<readonly TaskClaimOfferV1[]> {
+    for (const offer of prepared) offers.set(offer.offerId, offer);
+    const manualOffers: StoredOffer[] = [];
+    for (const offer of prepared) {
+      // legacy/requirement-confirmation 没有可复验的 Manifest；项目阶段自动推进沿用其独立策略。
+      if (offer.manifestRevision === 0 || offer.projectStageAuto) {
+        manualOffers.push(offer);
+        continue;
+      }
+      const result = await broker.autoAcceptOffer(offer.offerId);
+      if (result.kind === 'claim_granted' || result.kind === 'overtaken') return [];
+      const persisted = await input.repositories.taskCoordination.offers.getById(offer.offerId);
+      if (persisted?.status === 'open') manualOffers.push(offer);
+    }
+    return manualOffers.map(({
+      ancestorAgentIds: _ancestorAgentIds,
+      projectStageAuto: _projectStageAuto,
+      manifestRevision: _manifestRevision,
+      ...offer
+    }) => offer);
+  }
+
+  const broker: TaskClaimBroker = {
     resolveCandidates,
     resolveProjectStageCandidates,
     async prepareOffers(taskId, options) {
@@ -508,14 +542,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               ancestorAgentIds: resolution.ancestorAgentIds,
               projectStageAuto: persisted.objective.constraints.includes(PROJECT_STAGE_AUTO_CONSTRAINT),
             };
-            offers.set(stored.offerId, stored);
-            const {
-              ancestorAgentIds: _ancestorAgentIds,
-              projectStageAuto: _projectStageAuto,
-              manifestRevision: _manifestRevision,
-              ...wireOffer
-            } = stored;
-            return [wireOffer];
+            return finalizePreparedOffers([stored]);
           }
           const offerId = input.ids.nextId();
           let manifestRevision = 0;
@@ -536,13 +563,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             offerExpiresAt: now + offerTtlMs, manifestRevision,
             ancestorAgentIds: resolution.ancestorAgentIds, projectStageAuto: options?.projectStageAuto === true,
           };
-          offers.set(offerId, stored);
-          return [{
-            schemaVersion: 1, offerId, deviceId: decision.deviceId, taskId,
-            taskRevision: resolution.taskRevision, taskAttempt: resolution.taskAttempt,
-            agentId: decision.agentId, requiredCapabilities: [...coordination.requiredCapabilities],
-            offerExpiresAt: now + offerTtlMs,
-          }];
+          return finalizePreparedOffers([stored]);
         }
         if (decision.kind === 'confirmation') {
           // Requirement-confirmation Offer：仅持久化（Task/Agent 视图可见、PI 据此请求确认），
@@ -699,13 +720,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         });
       }
       } // #948-B: end of legacy offer creation fallback
-      for (const offer of prepared) offers.set(offer.offerId, offer);
-      return prepared.map(({
-        ancestorAgentIds: _ancestorAgentIds,
-        projectStageAuto: _projectStageAuto,
-        manifestRevision: _manifestRevision,
-        ...offer
-      }) => offer);
+      return finalizePreparedOffers(prepared);
     },
     async acquire(payload, binding) {
       let offer = offers.get(payload.offerId);
@@ -1155,6 +1170,44 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       };
       return input.repositories.taskCoordination.offers.create(record);
     },
+    async autoAcceptOffer(offerId) {
+      const offer = await input.repositories.taskCoordination.offers.getById(offerId);
+      if (!offer || offer.status !== 'open') {
+        return { kind: 'manual_response_required', reason: 'policy_not_found' };
+      }
+      const policy = await input.repositories.agentExposure.autoAcceptPolicies
+        .getByTeamAgent(offer.teamId, offer.agentId);
+      if (!policy) return { kind: 'manual_response_required', reason: 'policy_not_found' };
+      const manifest = await input.repositories.agentExposure.manifests.getById(policy.manifestId);
+      if (!manifest) return { kind: 'manual_response_required', reason: 'manifest_not_active' };
+      const restriction = await input.repositories.agentExposure.restrictions
+        .getByTeamAgent(offer.teamId, offer.agentId);
+      const disabledCapabilityIds = restriction?.manifestId === manifest.id
+        ? restriction.disabledCapabilities.map((name) =>
+          capabilityRegistryReferenceForName(name).capabilityId)
+        : [];
+      const now = input.clock.now();
+      const activeClaimCount = (await input.repositories.taskCoordination.claimLeases.listActive())
+        .filter((lease) => lease.agentId === offer.agentId && lease.expiresAt > now).length;
+      const decision = evaluateAgentAutoAccept({
+        policy,
+        manifest,
+        offerManifestRevision: offer.manifestRevision,
+        objective: offer.objective,
+        disabledCapabilityIds,
+        frozenInputCount: offer.frozenInputs?.length ?? 0,
+        requirementConfirmation: offer.requirementConfirmation,
+        activeClaimCount,
+        now,
+      });
+      if (decision.kind !== 'auto_accept') return decision;
+      return this.respondToOffer({
+        offerId: offer.id,
+        agentId: offer.agentId,
+        kind: 'accepted',
+        autoAcceptPolicy: { id: policy.id, revision: policy.revision },
+      });
+    },
     async respondToOffer(payload, binding) {
       const offerStore = input.repositories.taskCoordination.offers;
       const offer = await offerStore.getById(payload.offerId);
@@ -1170,6 +1223,9 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             diagnosticCode: 'TASK_CLAIM_DEVICE_MISMATCH',
           };
         }
+      }
+      if (payload.kind === 'accepted' && offer.status === 'overtaken') {
+        return { kind: 'overtaken' };
       }
       const now = input.clock.now();
       const validity = await computeOfferValidity(input.repositories, offer, now);
@@ -1296,6 +1352,55 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               // AC#4：task 已变 → 回滚，不留 accepted 无 claim
               throw new TaskClaimConflict('TASK_CLAIM_OFFER_STALE');
             }
+            const overtakeOpenSiblingOffers = async () => {
+              const siblingOffers = await repositories.coordination.offers.listByTask(task.id);
+              for (const sibling of siblingOffers) {
+                if (sibling.id === offer.id || sibling.status !== 'open'
+                  || sibling.taskRevision !== task.revision
+                  || sibling.taskAttempt !== coordination.attempt) continue;
+                await repositories.coordination.offers.updateStatus({
+                  id: sibling.id,
+                  expectedStatus: 'open',
+                  status: 'overtaken',
+                  response: null,
+                  now,
+                });
+              }
+            };
+            if (payload.autoAcceptPolicy) {
+              const policy = await repositories.agentExposure.autoAcceptPolicies
+                .getByTeamAgent(offer.teamId, offer.agentId);
+              const manifest = policy
+                ? await repositories.agentExposure.manifests.getById(policy.manifestId)
+                : null;
+              if (!policy || !manifest
+                || policy.id !== payload.autoAcceptPolicy.id
+                || policy.revision !== payload.autoAcceptPolicy.revision) {
+                throw new TaskClaimConflict('TASK_CLAIM_AUTO_ACCEPT_POLICY_STALE');
+              }
+              const restriction = await repositories.agentExposure.restrictions
+                .getByTeamAgent(offer.teamId, offer.agentId);
+              const disabledCapabilityIds = restriction?.manifestId === manifest.id
+                ? restriction.disabledCapabilities.map((name) =>
+                  capabilityRegistryReferenceForName(name).capabilityId)
+                : [];
+              const activeClaimCount = (await repositories.coordination.claimLeases.listActive())
+                .filter((lease) => lease.agentId === offer.agentId && lease.expiresAt > now).length;
+              const autoDecision = evaluateAgentAutoAccept({
+                policy,
+                manifest,
+                offerManifestRevision: offer.manifestRevision,
+                objective: offer.objective,
+                disabledCapabilityIds,
+                frozenInputCount: offer.frozenInputs?.length ?? 0,
+                requirementConfirmation: offer.requirementConfirmation,
+                activeClaimCount,
+                now,
+              });
+              if (autoDecision.kind !== 'auto_accept') {
+                throw new TaskClaimConflict(`TASK_CLAIM_AUTO_ACCEPT_${code(autoDecision.reason)}`);
+              }
+            }
             // #1064 AC6/AC8：frozen inputs 复验——offer 冻结的具体版本必须仍存在且
             // collection 归属不变；review/final basis 变化（被拒/重审/新 final）或
             // Channel 归档时 fail closed，不建立部分 claim/grant。
@@ -1373,10 +1478,12 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               );
             }
             if (decision.kind === 'overtaken') {
-              // active-claim-held：他 Agent 已持 lease。标 overtaken（CAS 失败=已终态则忽略）。
+              // active-claim-held：他 Agent 已持 lease。当前轮全部 open Offer 在同一事务收口，
+              // 避免未响应 sibling 在现有 Claim 结束后重新取得执行权。
               await repositories.coordination.offers.updateStatus({
                 id: offer.id, expectedStatus: 'open', status: 'overtaken', response: acceptedResponse, now,
               });
+              await overtakeOpenSiblingOffers();
               return { overtaken: true } as const;
             }
             // decision.kind === 'claim_granted'：CAS offer→accepted（AC#4：与 lease 同事务，任一失败整体回滚）
@@ -1384,6 +1491,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               id: offer.id, expectedStatus: 'open', status: 'accepted', response: acceptedResponse, now,
             });
             if (!accepted) throw new TaskClaimConflict('TASK_CLAIM_OFFER_OVERTAKEN');
+            await overtakeOpenSiblingOffers();
             // 以下 lease 落库 + events + task 更新镜像 acquire() 的 grant 块（AC#4 同事务）。
             // 抽取共享 helper 属后续重构——此处内联以保持既有 acquire 路径零改动、降低回归风险。
             if (latest?.status === 'active') {
@@ -1465,6 +1573,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               .map((dependency) => dependency.dependencyTaskId);
             return { lease, task, coordination, criteria, dependencyTaskIds, grantId, workspaceRevisionId };
           });
+          consumeTaskOffers(offers, offer.taskId);
           if ('overtaken' in result) return { kind: 'overtaken' };
           const response = {
             kind: 'claim_granted',
@@ -1531,6 +1640,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       onTaskClaimExpired = handler;
     },
   };
+  return broker;
 
   async function expireClaims(): Promise<readonly TaskClaimExpiredV1[]> {
     const now = input.clock.now();

@@ -43,6 +43,7 @@ const WEB_EVENTS = {
   agentExposure: {
     createDraft: 'agent-exposure:create-draft',
     publish: 'agent-exposure:publish',
+    upsertAutoAcceptPolicy: 'agent-exposure:upsert-auto-accept-policy',
   },
   channel: {
     subscribe: 'channels:subscribe',
@@ -902,9 +903,10 @@ export async function runAgentBeanChannelCollaborationBrowserSmoke({
       check('channel-collaboration-three-agents', result.agentReplies.length === 3, 'Three channel Agents independently claimed and replied'),
       check('channel-collaboration-agent-confirmations', result.agentConfirmations.length === 3,
         'Three real Agent dispatch messages confirmed work in the root thread'),
-      check('channel-collaboration-pi-summary', result.summaryVisible === true, 'PI summary rendered after all three replies'),
-      check('channel-collaboration-device-isolation', result.offerAgentIds.length === 3
-        && new Set(result.offerAgentIds).size === 3, 'Each Device received only its own Agent offer'),
+      check('channel-collaboration-root-review', result.rootTaskStatus === 'in_review',
+        'Server projected the collaboration root Task to in_review without a synthetic PI summary'),
+      check('channel-collaboration-auto-claim', result.claimedAgentIds.length === 3
+        && new Set(result.claimedAgentIds).size === 3, 'Three Agent policies automatically accepted and claimed their targeted tasks'),
     );
 
     const metrics = await fetch(new URL('/metricsz', target.baseUrl)).then((response) => response.json());
@@ -983,20 +985,23 @@ export async function exerciseWebUiChannelCollaborationSmoke({
     { key: 'gamma', name: `CollabGamma${safeSuffix.slice(-6)}`, reply: '我是 Gamma，负责验证交付。' },
   ];
   const daemons = [];
-  const claimPromises = [];
-  const offerAgentIds = [];
+  const claimedAgentIds = [];
   try {
     for (const definition of definitions) {
+      let agentId = null;
       const daemon = await connectSmokeDaemon({
         baseUrl: root,
         ioFactory,
         session,
         suffix: `collaboration-${definition.key}-${safeSuffix}`,
         timeoutMs,
-        dispatchMessageFactory: async () => ({
-          kind: 'plan',
-          body: `${definition.name} 已认领并开始处理。`,
-        }),
+        dispatchMessageFactory: async () => {
+          if (agentId) claimedAgentIds.push(agentId);
+          return {
+            kind: 'plan',
+            body: `${definition.name} 已认领并开始处理。`,
+          };
+        },
         dispatchResultFactory: async () => ({ body: definition.reply }),
       });
       daemons.push(daemon);
@@ -1008,9 +1013,9 @@ export async function exerciseWebUiChannelCollaborationSmoke({
         name: definition.name,
         env: { AGENTBEAN_CHANNEL_COLLABORATION_SMOKE: definition.key },
       }, timeoutMs);
-      const agentId = readNestedString(agentAck, ['agent', 'id']);
+      agentId = readNestedString(agentAck, ['agent', 'id']);
       if (!agentId) throw new Error(`Could not create ${definition.name}: ${formatAck(agentAck)}`);
-      await publishSmokeAgentExposure({ webSocket, session, agentId, timeoutMs });
+      await publishSmokeAgentExposure({ webSocket, session, agentId, timeoutMs, autoAccept: true });
       const membership = await emitAck(webSocket, WEB_EVENTS.channel.addAgent, {
         userId: session.user.id,
         teamId: session.team.id,
@@ -1020,42 +1025,13 @@ export async function exerciseWebUiChannelCollaborationSmoke({
       if (membership?.ok !== true) {
         throw new Error(`Could not add ${definition.name} to channel: ${formatAck(membership)}`);
       }
-      claimPromises.push(new Promise((resolveClaim, rejectClaim) => {
-        daemon.socket.on(AGENT_EVENTS.taskClaim.offer, (offer, ack) => {
-          ack?.({ schemaVersion: 1, ok: true });
-          void (async () => {
-            if (offer.agentId !== agentId) {
-              throw new Error(`Device ${daemon.deviceId} received another Agent's offer ${offer.agentId}`);
-            }
-            offerAgentIds.push(offer.agentId);
-            const response = await emitAck(daemon.socket, AGENT_EVENTS.taskClaim.respond, {
-              schemaVersion: 1,
-              offerId: offer.offerId,
-              agentId: offer.agentId,
-              kind: 'accepted',
-            }, timeoutMs);
-            if (response?.kind !== 'claim_granted') {
-              throw new Error(`Claim was not granted for ${definition.name}: ${formatAck(response)}`);
-            }
-            resolveClaim({ agentId, offerId: offer.offerId });
-          })().catch(rejectClaim);
-        });
-      }));
     }
 
     const teamPath = session.team.path ?? session.team.id;
     await page.navigate(new URL(`/${teamPath}/channel/${channelId}`, root).toString());
     await page.waitForFunction(
-      `document.querySelector('[data-smoke="chat-message-input"]') !== null
-        && document.querySelector('[data-smoke="chat-channel-collaboration-toggle"] input') !== null`,
-      'channel collaboration composer controls to render',
-      timeoutMs,
-    );
-    await page.click('[data-smoke="chat-channel-collaboration-toggle"] input');
-    await page.waitForFunction(
-      `document.querySelector('[data-smoke="chat-channel-collaboration-toggle"] input')?.checked === true
-        && document.querySelector('[data-smoke="chat-as-task-toggle"] input')?.checked === false`,
-      'channel collaboration mode to enable exclusively',
+      `document.querySelector('[data-smoke="chat-message-input"]') !== null`,
+      'channel message composer to render',
       timeoutMs,
     );
     await page.setInputValue('[data-smoke="chat-message-input"]', prompt);
@@ -1066,8 +1042,6 @@ export async function exerciseWebUiChannelCollaborationSmoke({
       'collaboration root message to render',
       timeoutMs,
     );
-    await promiseWithTimeout(Promise.all(claimPromises), timeoutMs, 'three channel Agents to claim their offers');
-
     await page.waitForFunction(
       `(() => {
         const root = Array.from(document.querySelectorAll('[data-smoke="chat-message"]'))
@@ -1088,7 +1062,6 @@ export async function exerciseWebUiChannelCollaborationSmoke({
     if (!opened) throw new Error('Could not open the collaboration discussion thread');
     const replyBodies = definitions.map((definition) => definition.reply);
     const confirmationBodies = definitions.map((definition) => `${definition.name} 已认领并开始处理。`);
-    const summary = `PI 汇总：${definitions.length} 个频道 Agent 均已完成定向子任务，独立结果已回到本讨论串，等待你验收。`;
     try {
       await page.waitForFunction(
         `(() => {
@@ -1097,10 +1070,9 @@ export async function exerciseWebUiChannelCollaborationSmoke({
           const bodies = Array.from(panel.querySelectorAll('[data-smoke="chat-message"]'))
             .map((message) => message.dataset.messageBody);
           return ${JSON.stringify(replyBodies)}.every((body) => bodies.includes(body))
-            && ${JSON.stringify(confirmationBodies)}.every((body) => bodies.includes(body))
-            && (panel.textContent ?? '').includes(${JSON.stringify(summary)});
+            && ${JSON.stringify(confirmationBodies)}.every((body) => bodies.includes(body));
         })()`,
-        'three independent Agent replies and the PI summary to render in the thread',
+        'three independent Agent replies to render without a PI summary bubble',
         timeoutMs,
       );
     } catch (error) {
@@ -1114,6 +1086,23 @@ export async function exerciseWebUiChannelCollaborationSmoke({
       })()`);
       throw new Error(`${error instanceof Error ? error.message : String(error)}; rendered=${JSON.stringify(rendered)}`);
     }
+    let rootTaskStatus = null;
+    const taskDeadline = Date.now() + timeoutMs;
+    while (Date.now() < taskDeadline) {
+      const tasksAck = await emitAck(webSocket, WEB_EVENTS.task.list, {
+        teamId: session.team.id,
+        channelId,
+      }, Math.min(timeoutMs, 10_000));
+      const rootTask = Array.isArray(tasksAck?.tasks)
+        ? tasksAck.tasks.find((task) => task?.title === prompt && !task?.tags?.includes('channel-collaboration'))
+        : null;
+      rootTaskStatus = rootTask?.status ?? null;
+      if (rootTaskStatus === 'in_review') break;
+      await sleep(100);
+    }
+    if (rootTaskStatus !== 'in_review') {
+      throw new Error(`Collaboration root Task did not reach in_review; status=${rootTaskStatus ?? 'missing'}`);
+    }
     await page.evaluateJson(`(() => {
       const messages = document.querySelectorAll('[data-smoke="chat-thread-panel"] [data-smoke="chat-message"]');
       messages.item(messages.length - 1)?.scrollIntoView({ block: 'end' });
@@ -1124,8 +1113,8 @@ export async function exerciseWebUiChannelCollaborationSmoke({
       prompt,
       agentReplies: replyBodies,
       agentConfirmations: confirmationBodies,
-      offerAgentIds,
-      summaryVisible: true,
+      claimedAgentIds,
+      rootTaskStatus,
     };
   } finally {
     for (const daemon of daemons) daemon.socket.disconnect?.();
@@ -1206,7 +1195,6 @@ export async function runAgentBeanChannelCollaborationRecoveryBrowserSmoke({
         'Rejecting and failing Agent Devices each received one scoped Offer; offline Device received none'),
       check('channel-collaboration-allocation-blocked-visible', result.blockedVisible,
         'Offline target is visible as allocation_blocked without silent reassignment'),
-      check('channel-collaboration-no-false-summary', result.summaryVisible === false, 'PI success summary is not rendered while subtasks remain unresolved'),
     );
 
     const metrics = await fetch(new URL('/metricsz', target.baseUrl)).then((response) => response.json());
@@ -1274,7 +1262,7 @@ export async function exerciseWebUiChannelCollaborationRecoverySmoke({
   assertSession(session);
   const root = normalizeBaseUrlOrThrow(baseUrl);
   const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-28);
-  const prompt = '请分别处理这个异常恢复演练';
+  const prompt = '各位，请分别介绍一下自己吧';
   const channelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
     userId: session.user.id,
     teamId: session.team.id,
@@ -1405,12 +1393,10 @@ export async function exerciseWebUiChannelCollaborationRecoverySmoke({
     const teamPath = session.team.path ?? session.team.id;
     await page.navigate(new URL(`/${teamPath}/channel/${channelId}`, root).toString());
     await page.waitForFunction(
-      `document.querySelector('[data-smoke="chat-message-input"]') !== null
-        && document.querySelector('[data-smoke="chat-channel-collaboration-toggle"] input') !== null`,
-      'channel collaboration recovery composer controls to render',
+      `document.querySelector('[data-smoke="chat-message-input"]') !== null`,
+      'channel collaboration recovery composer to render',
       timeoutMs,
     );
-    await page.click('[data-smoke="chat-channel-collaboration-toggle"] input');
     await page.setInputValue('[data-smoke="chat-message-input"]', prompt);
     await page.click('[data-smoke="chat-message-send"]');
     await page.waitForFunction(
@@ -1471,7 +1457,6 @@ export async function exerciseWebUiChannelCollaborationRecoverySmoke({
         expiredVisible: text.includes(${JSON.stringify(expiredBody)}),
         failureVisible: text.includes(${JSON.stringify(failureBody)}),
         blockedVisible: text.includes(${JSON.stringify(blockedBody)}),
-        summaryVisible: text.includes('PI 汇总：'),
       };
     })()`);
     return { ...rendered, channelId, prompt, offerCounts };
@@ -1480,7 +1465,7 @@ export async function exerciseWebUiChannelCollaborationRecoverySmoke({
   }
 }
 
-async function publishSmokeAgentExposure({ webSocket, session, agentId, timeoutMs }) {
+async function publishSmokeAgentExposure({ webSocket, session, agentId, timeoutMs, autoAccept = false }) {
   const draft = await emitAck(webSocket, WEB_EVENTS.agentExposure.createDraft, {
     userId: session.user.id,
     teamId: session.team.id,
@@ -1500,6 +1485,18 @@ async function publishSmokeAgentExposure({ webSocket, session, agentId, timeoutM
     manifestId,
   }, timeoutMs);
   if (published?.ok !== true) throw new Error(`Could not publish Agent exposure: ${formatAck(published)}`);
+  if (!autoAccept) return;
+  const autoAcceptAck = await emitAck(webSocket, WEB_EVENTS.agentExposure.upsertAutoAcceptPolicy, {
+    userId: session.user.id,
+    teamId: session.team.id,
+    agentId,
+    enabled: true,
+    allowedCapabilityIds: [],
+    allowUnspecifiedCapabilities: true,
+    allowedRiskLevels: ['low'],
+    maxActiveClaims: 1,
+  }, timeoutMs);
+  if (autoAcceptAck?.ok !== true) throw new Error(`Could not enable Agent auto-accept: ${formatAck(autoAcceptAck)}`);
 }
 
 export async function runAgentBeanChannelCollaborationRestartBrowserSmoke({
@@ -1573,7 +1570,6 @@ export async function runAgentBeanChannelCollaborationRestartBrowserSmoke({
         'Persisted Agent dispatch confirmation rendered exactly once after restart'),
       check('channel-collaboration-restart-expiry-once', result.expiredMessageCount === 1, 'Claim expiry projection rendered exactly once after restart'),
       check('channel-collaboration-restart-reoffer-once', result.reconnectedOfferCount === 1, 'Recovered task emitted exactly one reoffer to the reconnected Device'),
-      check('channel-collaboration-restart-no-false-summary', result.summaryVisible === false, 'PI success summary is not rendered for the unresolved recovered task'),
     );
 
     const metrics = await fetch(new URL('/metricsz', target.baseUrl)).then((response) => response.json());
@@ -1651,7 +1647,7 @@ export async function exerciseWebUiChannelCollaborationRestartSmoke({
   if (typeof restartServer !== 'function') throw new Error('Restart smoke requires a managed local Server');
   const root = normalizeBaseUrlOrThrow(baseUrl);
   const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-28);
-  const prompt = '请处理这个进程重启恢复演练';
+  const prompt = '各位，请分别介绍一下自己吧';
   const agentName = `RestartAgent${safeSuffix.slice(-6)}`;
   const daemonSuffix = `collaboration-restart-${safeSuffix}`;
   const channelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
@@ -1727,12 +1723,10 @@ export async function exerciseWebUiChannelCollaborationRestartSmoke({
     const channelRoute = new URL(`/${teamPath}/channel/${channelId}`, root).toString();
     await page.navigate(channelRoute);
     await page.waitForFunction(
-      `document.querySelector('[data-smoke="chat-message-input"]') !== null
-        && document.querySelector('[data-smoke="chat-channel-collaboration-toggle"] input') !== null`,
-      'channel collaboration restart composer controls to render',
+      `document.querySelector('[data-smoke="chat-message-input"]') !== null`,
+      'channel collaboration restart composer to render',
       timeoutMs,
     );
-    await page.click('[data-smoke="chat-channel-collaboration-toggle"] input');
     await page.setInputValue('[data-smoke="chat-message-input"]', prompt);
     await page.click('[data-smoke="chat-message-send"]');
     await promiseWithTimeout(initialClaim, timeoutMs, 'Agent to claim before Server restart');
@@ -1822,7 +1816,6 @@ export async function exerciseWebUiChannelCollaborationRestartSmoke({
       return {
         claimMessageCount: count(${JSON.stringify(claimBody)}),
         expiredMessageCount: count(${JSON.stringify(expiredBody)}),
-        summaryVisible: text.includes('PI 汇总：'),
       };
     })()`);
     return {

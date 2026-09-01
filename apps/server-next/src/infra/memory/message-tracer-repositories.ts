@@ -8,6 +8,8 @@ import type {
   MessageTracerOutboxRecord,
   MessageTracerOutboxRepository,
   MessageTracerRepositories,
+  MessageRouteAnalysisRecord,
+  MessageRouteAnalysisRepository,
 } from '../../application/message-tracer-repositories.js';
 
 // #921 切片 B：Message tracer 的内存持久化实现（独立工厂，便于与 SQLite 实现跑同一套件）。
@@ -19,6 +21,7 @@ export interface MessageTracerMemoryState {
   readonly commandReceipts: Map<string, CommandReceiptRecord>;
   readonly idempotencyTombstones: Map<string, IdempotencyTombstoneRecord>;
   readonly outbox: Map<string, MessageTracerOutboxRecord>;
+  readonly routes: Map<string, MessageRouteAnalysisRecord>;
 }
 
 export function createMessageTracerMemoryState(): MessageTracerMemoryState {
@@ -28,6 +31,7 @@ export function createMessageTracerMemoryState(): MessageTracerMemoryState {
     commandReceipts: new Map(),
     idempotencyTombstones: new Map(),
     outbox: new Map(),
+    routes: new Map(),
   };
 }
 
@@ -38,6 +42,7 @@ export function cloneMessageTracerMemoryState(state: MessageTracerMemoryState): 
     commandReceipts: new Map(state.commandReceipts),
     idempotencyTombstones: new Map(state.idempotencyTombstones),
     outbox: new Map(state.outbox),
+    routes: new Map(state.routes),
   };
 }
 
@@ -55,6 +60,8 @@ export function restoreMessageTracerMemoryState(
   for (const [id, record] of snapshot.idempotencyTombstones) state.idempotencyTombstones.set(id, record);
   state.outbox.clear();
   for (const [id, record] of snapshot.outbox) state.outbox.set(id, record);
+  state.routes.clear();
+  for (const [id, record] of snapshot.routes) state.routes.set(id, record);
 }
 
 function threadKey(threadId: string | null): string {
@@ -213,5 +220,58 @@ export function createInMemoryMessageTracerRepositories(
     },
   };
 
-  return { inbox, commandReceipts, outbox };
+  const routes: MessageRouteAnalysisRepository = {
+    async create(input) {
+      if ([...state.routes.values()].some((record) => record.messageId === input.messageId)) {
+        throw new Error(`MESSAGE_ROUTE_UNIQUE: message_id=${input.messageId}`);
+      }
+      state.routes.set(input.id, input);
+      return input;
+    },
+    async getById(id) {
+      return state.routes.get(id) ?? null;
+    },
+    async getByMessageId(messageId) {
+      return [...state.routes.values()].find((record) => record.messageId === messageId) ?? null;
+    },
+    async listRunnable(input) {
+      return [...state.routes.values()]
+        .filter((record) => record.status === 'pending'
+          || (record.status === 'deferred' && (record.nextRetryAt === null || record.nextRetryAt <= input.now))
+          || (record.status === 'running' && record.updatedAt <= input.runningBefore))
+        .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+        .slice(0, input.limit);
+    },
+    async claimForProcessing(input) {
+      const existing = state.routes.get(input.id);
+      if (!existing || !(existing.status === 'pending'
+        || (existing.status === 'deferred' && (existing.nextRetryAt === null || existing.nextRetryAt <= input.now))
+        || (existing.status === 'running' && existing.updatedAt <= input.runningBefore))) return null;
+      const claimed = { ...existing, status: 'running' as const, attempt: existing.attempt + 1,
+        nextRetryAt: null, updatedAt: input.now };
+      state.routes.set(existing.id, claimed);
+      return claimed;
+    },
+    async update(input) {
+      const existing = state.routes.get(input.id);
+      if (!existing || existing.status !== input.expectedStatus) return null;
+      const updated: MessageRouteAnalysisRecord = {
+        ...existing,
+        status: input.status,
+        nextRetryAt: input.nextRetryAt,
+        routeKind: input.routeKind,
+        intentSource: input.intentSource,
+        riskLevel: input.riskLevel,
+        targetAgentIds: [...input.targetAgentIds],
+        requiredCapabilityIds: [...input.requiredCapabilityIds],
+        linkedTaskId: input.linkedTaskId,
+        diagnosticCode: input.diagnosticCode,
+        updatedAt: input.now,
+      };
+      state.routes.set(existing.id, updated);
+      return updated;
+    },
+  };
+
+  return { inbox, commandReceipts, outbox, routes };
 }

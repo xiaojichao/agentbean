@@ -146,7 +146,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(cliSource).not.toContain('await runAgentBeanNextBrowserSmoke({');
   });
 
-  test('频道协作聚焦 browser gate 覆盖真实开关、三 Agent Claim、PI 汇总与恢复指标', () => {
+  test('频道协作聚焦 browser gate 覆盖自然发送、三 Agent 自动 Claim 与根任务待验收', () => {
     const source = readFileSync(new URL('../../../scripts/smoke-agentbean-next-browser.mjs', import.meta.url), 'utf8');
     const start = source.indexOf('export async function exerciseWebUiChannelCollaborationSmoke');
     const end = source.indexOf('export function summarizeBrowserSmoke', start);
@@ -154,11 +154,11 @@ describe('AgentBean Next browser smoke script', () => {
     const runner = readFileSync(new URL('../../../scripts/smoke-channel-collaboration-browser.mjs', import.meta.url), 'utf8');
 
     expect(start).toBeGreaterThan(-1);
-    expect(smoke).toContain('chat-channel-collaboration-toggle');
-    expect(smoke).toContain('AGENT_EVENTS.taskClaim.offer');
-    expect(smoke).toContain('AGENT_EVENTS.taskClaim.respond');
-    expect(smoke).toContain('Device ${daemon.deviceId} received another Agent');
-    expect(smoke).toContain('PI 汇总：');
+    expect(smoke).not.toContain('chat-channel-collaboration-toggle');
+    expect(smoke).toContain('upsertAutoAcceptPolicy');
+    expect(smoke).toContain('allowUnspecifiedCapabilities: true');
+    expect(smoke).toContain('rootTaskStatus === \'in_review\'');
+    expect(smoke).not.toContain('PI 汇总：');
     expect(smoke).toContain('chat-thread-panel');
     expect(source).toContain('channel-collaboration-recovery-metrics');
     expect(runner).toContain('runAgentBeanChannelCollaborationBrowserSmoke');
@@ -175,7 +175,8 @@ describe('AgentBean Next browser smoke script', () => {
     expect(smoke).toContain("kind: 'rejected'");
     expect(smoke).toContain('AGENT_EVENTS.dispatch.error');
     expect(smoke).toContain('expired Claim to be reoffered once');
-    expect(smoke).toContain("summaryVisible: text.includes('PI 汇总：')");
+    expect(smoke).not.toContain('chat-channel-collaboration-toggle');
+    expect(smoke).not.toContain('summaryVisible');
     expect(source).toContain('channel-collaboration-recovery-counts');
     expect(runner).toContain('runAgentBeanChannelCollaborationRecoveryBrowserSmoke');
   });

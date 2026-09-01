@@ -52,6 +52,9 @@ vi.mock('@/lib/socket', () => ({
     revoke: vi.fn().mockResolvedValue({ ok: true, revoked: true }),
     upsertRestriction: vi.fn().mockResolvedValue({ ok: true, restriction: null }),
     getTeamCoverage: vi.fn().mockResolvedValue({ ok: true, coverage: { teamId: 'team-1', entries: [] } }),
+    getCapabilityDirectory: vi.fn().mockResolvedValue({ ok: true, directory: { teamId: 'team-1', channelId: null, generatedAt: 1, entries: [] } }),
+    getAutoAcceptPolicy: vi.fn().mockResolvedValue({ ok: true, policy: null }),
+    upsertAutoAcceptPolicy: vi.fn().mockResolvedValue({ ok: true, policy: null }),
   }),
   agentMemoryProjectionEvents: () => ({
     listRevisions: vi.fn().mockResolvedValue({ ok: true, revisions: [], activeOptIn: null }),

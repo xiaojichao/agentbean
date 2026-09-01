@@ -53,9 +53,10 @@ async function publishManifest(
   app: Awaited<ReturnType<typeof createHarness>>['app'],
   capabilities: ReadonlyArray<{ name: string; description: string }>,
   skills: ReadonlyArray<{ name: string; description: string }> = [],
+  agentId = 'agent-1',
 ): Promise<string> {
   const draft = await app.createAgentExposureDraft({
-    userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', capabilities, skills,
+    userId: 'user-1', teamId: 'team-1', agentId, capabilities, skills,
   });
   if (!draft.ok) throw new Error('createDraft failed');
   const published = await app.publishAgentExposure({
@@ -66,6 +67,85 @@ async function publishManifest(
 }
 
 describe('Team Agent Exposure (#710)', () => {
+  test('#1270: 只有 Agent owner 可发布自动接受策略，且策略绑定当前 Manifest revision', async () => {
+    const { app } = await createHarness();
+    await publishManifest(app, [{ name: 'code-review', description: '审查' }]);
+
+    const denied = await app.upsertAgentAutoAcceptPolicy({
+      userId: 'user-admin', teamId: 'team-1', agentId: 'agent-1', enabled: true,
+      allowedCapabilityIds: ['capability:v1:code-review'], allowedRiskLevels: ['low'],
+      maxActiveClaims: 1,
+    });
+    expect(denied.ok).toBe(false);
+
+    const saved = await app.upsertAgentAutoAcceptPolicy({
+      userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', enabled: true,
+      allowedCapabilityIds: ['capability:v1:code-review'], allowedRiskLevels: ['low'],
+      allowUnspecifiedCapabilities: true, requireCompletePreview: true, maxActiveClaims: 2,
+    });
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    expect(saved.policy).toMatchObject({
+      manifestRevision: 1, revision: 1, enabled: true, maxActiveClaims: 2,
+    });
+
+    await publishManifest(app, [{ name: 'code-review', description: '审查 v2' }]);
+    const stale = await app.getAgentAutoAcceptPolicy({
+      userId: 'user-1', teamId: 'team-1', agentId: 'agent-1',
+    });
+    expect(stale.ok).toBe(true);
+    if (!stale.ok) return;
+    expect(stale.policy).toMatchObject({ manifestRevision: 1, revision: 1 });
+
+    const rebound = await app.upsertAgentAutoAcceptPolicy({
+      userId: 'user-1', teamId: 'team-1', agentId: 'agent-1', enabled: true,
+      allowedCapabilityIds: ['capability:v1:code-review'], allowedRiskLevels: ['low'],
+      maxActiveClaims: 1,
+    });
+    expect(rebound.ok).toBe(true);
+    if (!rebound.ok) return;
+    expect(rebound.policy).toMatchObject({ manifestRevision: 2, revision: 2 });
+  });
+
+  test('#1270: owner 选择候选后由 Server 绑定 Registry/Evidence，忽略客户端伪造元数据并持久化', async () => {
+    const { repositories, app } = await createHarness();
+    const agent = await repositories.agents.getById('agent-1');
+    if (!agent) throw new Error('agent missing');
+    await repositories.agents.upsert({
+      ...agent,
+      scannedCapabilities: ['code-review'],
+      scannedCapabilitiesSummarized: ['system-design'],
+    });
+
+    const draft = await app.createAgentExposureDraft({
+      userId: 'user-1', teamId: 'team-1', agentId: 'agent-1',
+      capabilities: [{
+        name: 'code-review',
+        description: '审查代码',
+        registry: { capabilityId: 'client-forged', registryVersion: 1 },
+        evidence: [{
+          source: 'runtime_verification', status: 'runtime_verified', provenance: 'client-forged',
+          recordedAt: 1, validUntil: null,
+        }],
+      }],
+      skills: [],
+    });
+    expect(draft.ok).toBe(true);
+    if (!draft.ok) return;
+    expect(draft.manifest.capabilities[0]?.registry).toEqual({
+      capabilityId: 'capability:v1:code-review', registryVersion: 1,
+    });
+    expect(draft.manifest.capabilities[0]?.evidence?.map((item) => [item.source, item.status])).toEqual([
+      ['descriptor_scan', 'observed'],
+      ['owner_attestation', 'owner_confirmed'],
+    ]);
+    expect(JSON.stringify(draft.manifest)).not.toContain('client-forged');
+
+    const stored = await repositories.agentExposure.manifests.getById(draft.manifest.id);
+    expect(stored?.capabilities[0]?.registry?.capabilityId).toBe('capability:v1:code-review');
+    expect(stored?.capabilities[0]?.evidence).toHaveLength(2);
+  });
+
   test('#946: 新 manifest 发布替代旧 revision 后撤销绑定旧 revision 的 execution grant（manifest-superseded）', async () => {
     const { repositories, app } = await createHarness();
     // 首个 manifest（revision 1）激活。
@@ -260,5 +340,47 @@ describe('Team Agent Exposure (#710)', () => {
     if (!coverage.ok) return;
     const entry = coverage.coverage.entries.find((item) => item.agentId === 'agent-1');
     expect(entry?.disabledCapabilities).toEqual([]);
+  });
+
+  test('#1270: Capability Directory 只返回 Channel 内 active exposure，并应用 Team restriction', async () => {
+    const { repositories, app } = await createHarness();
+    await seedDeviceAndAgent(repositories, 'user-1', 'device-2', 'agent-2', 'team-1');
+    await publishManifest(app, [
+      { name: 'code-review', description: '审查' },
+      { name: 'deploy', description: '部署' },
+    ]);
+    await publishManifest(app, [{ name: 'research', description: '调研' }], [], 'agent-2');
+    await repositories.channels.update({
+      channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 100 },
+    });
+    await app.upsertAgentExposureRestriction({
+      userId: 'user-admin', teamId: 'team-1', agentId: 'agent-1',
+      disabledCapabilities: ['deploy'], disabledSkills: [],
+    });
+
+    const result = await app.getAgentCapabilityDirectory({
+      userId: 'user-member', teamId: 'team-1', channelId: 'channel-1',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.directory).toMatchObject({
+      teamId: 'team-1', channelId: 'channel-1', generatedAt: 100,
+    });
+    expect(result.directory.entries.map((entry) => entry.agentId)).toEqual(['agent-1']);
+    expect(result.directory.entries[0]?.capabilities.map((capability) => capability.name)).toEqual([
+      'code-review',
+    ]);
+    expect(result.directory.entries[0]?.disabledCapabilities).toEqual(['deploy']);
+    expect(result.directory.entries[0]?.capabilities[0]?.registry.capabilityId).toBe(
+      'capability:v1:code-review',
+    );
+    expect(JSON.stringify(result.directory)).not.toContain('sourcePath');
+    expect(JSON.stringify(result.directory)).not.toContain('scannedCapabilities');
+
+    const outsider = await app.getAgentCapabilityDirectory({
+      userId: 'user-outsider', teamId: 'team-1', channelId: 'channel-1',
+    });
+    expect(outsider.ok).toBe(false);
   });
 });

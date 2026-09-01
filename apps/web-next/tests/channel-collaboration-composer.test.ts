@@ -8,19 +8,17 @@ const source = readFileSync(
 );
 
 describe('channel collaboration composer', () => {
-  test('only sends the structured trigger after explicit user selection', () => {
-    expect(source).toContain('data-smoke="chat-channel-collaboration-toggle"');
-    expect(source).toContain('频道 Agent 协作');
-    expect(source).toContain('collaborationTask: ALL_CHANNEL_AGENTS_COLLABORATION_TRIGGER_V1');
-    expect(source).toContain('setChannelCollaboration(false)');
+  test('频道普通消息无需勾选协作模式，意图统一交给 Server 路由', () => {
+    expect(source).not.toContain('data-smoke="chat-channel-collaboration-toggle"');
+    expect(source).not.toContain('频道 Agent 协作');
+    expect(source).not.toContain('collaborationTask: ALL_CHANNEL_AGENTS_COLLABORATION_TRIGGER_V1');
+    expect(source).not.toContain('channelCollaboration');
   });
 
-  test('keeps direct messages and regular task mode separate', () => {
-    expect(source).toContain('{!isDm && (');
-    expect(source).toContain('const collaborationMode = channelCollaboration && !isDm');
-    expect(source).toContain('...(collaborationMode');
-    expect(source).toContain('if (e.target.checked) setChannelCollaboration(false)');
-    expect(source).toContain('if (e.target.checked) setAsTask(false)');
+  test('保留用户明确选择的“作为任务”，但不把它当成自动协作前提', () => {
+    expect(source).toContain('data-smoke="chat-as-task-toggle"');
+    expect(source).toContain('const createTask = asTask');
+    expect(source).toContain('onChange={(e) => setAsTask(e.target.checked)}');
   });
 
   test('refreshes authoritative history after Server-owned collaboration messages are appended', () => {

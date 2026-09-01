@@ -84,7 +84,7 @@ function readCandidate(input: { recipientId: string; channelId: string; threadId
 }
 
 describe('send-message command handler', () => {
-  test('applied：原子提交 Message+Inbox+receipt+tombstone+outbox，不建 Job，自身排除', async () => {
+  test('applied：原子提交 Message+Inbox+receipt+tombstone+outbox+未指派路由，不建 legacy Job', async () => {
     const { repos, handle } = setup();
     await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1', 'user-2'], agentMemberIds: ['agent-1'] });
 
@@ -108,9 +108,42 @@ describe('send-message command handler', () => {
       const pending = await tx.outbox.listPending({ limit: 10 });
       expect(pending).toHaveLength(1);
       expect(pending[0].eventKind).toBe('message-delivered');
+      const route = await tx.routes.getByMessageId(res.result?.commandName === 'send-message'
+        ? res.result.messageId : 'missing');
+      expect(route).toMatchObject({ status: 'pending', messageRevision: 1, attempt: 0 });
     });
     // 不建 coordination Job
     expect(await repos.channelCoordination.jobs.listByChannel('channel-1', 10)).toHaveLength(0);
+  });
+
+  test('#1270: 明确 @Agent、DM 或 Task continuation 不创建 PI route analysis', async () => {
+    const { repos, handle } = setup();
+    await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1'], agentMemberIds: ['agent-1'] });
+    await seedChannel(repos, { id: 'direct-1', kind: 'direct', humanMemberIds: ['user-1'], agentMemberIds: ['agent-1'], dmTargetAgentId: 'agent-1' });
+    const explicit = await handle({
+      envelope: envelope('route-explicit'),
+      payload: sendPayload({ mentions: [{ id: 'agent-1', kind: 'agent', name: 'Agent', start: 0, end: 6 }] }),
+      senderId: 'user-1', teamId: 'team-1',
+    });
+    const continuation = await handle({
+      envelope: envelope('route-continuation'),
+      payload: sendPayload({ taskContinuationSource: { schemaVersion: 1, sourceTaskId: 'task-1', sourceTaskRevision: 1 } }),
+      senderId: 'user-1', teamId: 'team-1',
+    });
+    const dm = await handle({
+      envelope: envelope('route-dm'),
+      payload: sendPayload({
+        channelId: 'direct-1',
+        freshnessBasis: { schemaVersion: 1, target: { schemaVersion: 1, kind: 'dm', channelId: 'direct-1' } },
+      }),
+      senderId: 'user-1', teamId: 'team-1',
+    });
+    await repos.channelCoordinationUnitOfWork.run(async (tx) => {
+      for (const response of [explicit, continuation, dm]) {
+        const messageId = response.result?.commandName === 'send-message' ? response.result.messageId : 'missing';
+        expect(await tx.routes.getByMessageId(messageId)).toBeNull();
+      }
+    });
   });
 
   test('applied：持久化已经进入 command hash 的 continuation source marker', async () => {

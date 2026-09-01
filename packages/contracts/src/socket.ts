@@ -118,6 +118,9 @@ export const WEB_EVENTS = {
     getActive: 'agent-exposure:get-active',
     upsertRestriction: 'agent-exposure:upsert-restriction',
     getTeamCoverage: 'agent-exposure:get-team-coverage',
+    getCapabilityDirectory: 'agent-exposure:get-capability-directory',
+    upsertAutoAcceptPolicy: 'agent-exposure:upsert-auto-accept-policy',
+    getAutoAcceptPolicy: 'agent-exposure:get-auto-accept-policy',
   },
   join: {
     create: 'join:create',

@@ -333,6 +333,10 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   if (sqliteTableExists(db, 'promotion_source_relations') && sqliteTableExists(db, 'channels')) {
     applyMigration(db, 'team/0084_task_continuation.sql', { disableForeignKeys: true });
   }
+  // #1270：Agent owner 预授权的自动接受策略，绑定 active Exposure Manifest revision。
+  applyMigration(db, 'team/0086_agent_auto_accept_policies.sql');
+  // #1270：未指派频道消息的可恢复语义路由状态。
+  applyMigration(db, 'team/0087_message_route_analyses.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -634,6 +638,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         inbox: messageTracer.inbox,
         commandReceipts: messageTracer.commandReceipts,
         outbox: messageTracer.outbox,
+        routes: messageTracer.routes,
       }))),
     taskCoordination,
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
@@ -645,6 +650,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           workspaceRuns: repositories.workspaceRuns,
           dispatches: repositories.dispatches,
           coordination: taskCoordination,
+          agentExposure: agentExposure.repositories,
           management: managementRepositories,
           channels: repositories.channels,
           promotion,

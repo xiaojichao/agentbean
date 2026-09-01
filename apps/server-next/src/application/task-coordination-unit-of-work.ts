@@ -15,6 +15,7 @@ import type { ChannelProjectRepository } from './project-repositories.js';
 import type { OutputPackageRepository } from './output-package-repositories.js';
 import type { WorkspacePublishStagingRepository } from './repositories.js';
 import type { ArtifactRevisionRepository } from './artifact-revision-repositories.js';
+import type { AgentExposureRepositories } from './agent-exposure-repositories.js';
 
 export interface TaskCoordinationTransactionRepositories {
   readonly tasks: TaskRepository;
@@ -23,6 +24,8 @@ export interface TaskCoordinationTransactionRepositories {
   readonly workspaceRuns: WorkspaceRunRepository;
   readonly dispatches: DispatchRepository;
   readonly coordination: TaskCoordinationRepositories;
+  /** #1270：Offer accepted 事务内复验 owner 预授权与 Manifest fence，避免策略 TOCTOU。 */
+  readonly agentExposure: AgentExposureRepositories;
   readonly management: ManagementRepositories;
   readonly channels: ChannelRepository;
   /**

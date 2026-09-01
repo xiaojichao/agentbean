@@ -1,4 +1,5 @@
 import type {
+  AgentAutoAcceptPolicyRecord,
   AgentExposureManifestRecord,
   AgentExposureRepositories,
   AgentExposureRestrictionRecord,
@@ -10,10 +11,11 @@ import type { ID } from '../../../../../packages/contracts/src/index.js';
 interface AgentExposureMemoryState {
   manifests: Map<ID, AgentExposureManifestRecord>;
   restrictions: Map<ID, AgentExposureRestrictionRecord>;
+  autoAcceptPolicies: Map<ID, AgentAutoAcceptPolicyRecord>;
 }
 
 export function createAgentExposureMemoryState(): AgentExposureMemoryState {
-  return { manifests: new Map(), restrictions: new Map() };
+  return { manifests: new Map(), restrictions: new Map(), autoAcceptPolicies: new Map() };
 }
 
 export function createInMemoryAgentExposurePersistence(state = createAgentExposureMemoryState()): {
@@ -22,6 +24,7 @@ export function createInMemoryAgentExposurePersistence(state = createAgentExposu
 } {
   const manifests = state.manifests;
   const restrictions = state.restrictions;
+  const autoAcceptPolicies = state.autoAcceptPolicies;
 
   const repositories: AgentExposureRepositories = {
     manifests: {
@@ -144,12 +147,52 @@ export function createInMemoryAgentExposurePersistence(state = createAgentExposu
         return null;
       },
     },
+    autoAcceptPolicies: {
+      async upsert(input) {
+        let existing: AgentAutoAcceptPolicyRecord | null = null;
+        for (const record of autoAcceptPolicies.values()) {
+          if (record.teamId === input.teamId && record.agentId === input.agentId) {
+            existing = record;
+            break;
+          }
+        }
+        const record: AgentAutoAcceptPolicyRecord = {
+          id: existing?.id ?? input.id,
+          teamId: input.teamId,
+          agentId: input.agentId,
+          manifestId: input.manifestId,
+          manifestRevision: input.manifestRevision,
+          revision: (existing?.revision ?? 0) + 1,
+          enabled: input.enabled,
+          allowedCapabilityIds: [...input.allowedCapabilityIds],
+          allowUnspecifiedCapabilities: input.allowUnspecifiedCapabilities,
+          allowedRiskLevels: [...input.allowedRiskLevels],
+          allowFrozenProjectInputs: input.allowFrozenProjectInputs,
+          requireCompletePreview: input.requireCompletePreview,
+          maxActiveClaims: input.maxActiveClaims,
+          validUntil: input.validUntil,
+          updatedBy: input.updatedBy,
+          createdAt: existing?.createdAt ?? input.now,
+          updatedAt: input.now,
+        };
+        if (existing) autoAcceptPolicies.delete(existing.id);
+        autoAcceptPolicies.set(record.id, record);
+        return record;
+      },
+      async getByTeamAgent(teamId, agentId) {
+        for (const record of autoAcceptPolicies.values()) {
+          if (record.teamId === teamId && record.agentId === agentId) return record;
+        }
+        return null;
+      },
+    },
   };
 
   const runTransaction = serializeTransactions<AgentExposureRepositories>(async (operation) => {
     const snapshot = {
       manifests: new Map(manifests),
       restrictions: new Map(restrictions),
+      autoAcceptPolicies: new Map(autoAcceptPolicies),
     };
     try {
       return await operation(repositories);
@@ -158,6 +201,8 @@ export function createInMemoryAgentExposurePersistence(state = createAgentExposu
       for (const [id, value] of snapshot.manifests) manifests.set(id, value);
       restrictions.clear();
       for (const [id, value] of snapshot.restrictions) restrictions.set(id, value);
+      autoAcceptPolicies.clear();
+      for (const [id, value] of snapshot.autoAcceptPolicies) autoAcceptPolicies.set(id, value);
       throw error;
     }
   });
