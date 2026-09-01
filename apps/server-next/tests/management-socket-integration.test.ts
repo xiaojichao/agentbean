@@ -334,14 +334,27 @@ describe('management worker socket integration', () => {
       resolveCandidates: vi.fn(async () => ({ taskId: 'task-1', taskRevision: 1, taskAttempt: 1,
         ancestorAgentIds: [], candidates: [{ agentId: 'agent-1', deviceId: 'device-1', eligible: true,
           diagnosticCodes: [], missingCapabilities: [] }] })),
+      resolveProjectStageCandidates: vi.fn(async () => ({ taskId: 'task-1', taskRevision: 1, taskAttempt: 1,
+        ancestorAgentIds: [], candidates: [{ agentId: 'agent-1', deviceId: 'device-1', eligible: true,
+          diagnosticCodes: [], missingCapabilities: [] }] })),
       prepareOffers: vi.fn(async () => [{ schemaVersion: 1, offerId: 'offer-1', deviceId: 'device-1',
         taskId: 'task-1', taskRevision: 1, taskAttempt: 1, agentId: 'agent-1',
         requiredCapabilities: ['code-review'], offerExpiresAt: 100 }]),
       acquire, renew, release,
+      relinquish: vi.fn(async () => ({ schemaVersion: 1, ok: true, releasedAt: 100,
+        executionStarted: false, attempt: 1 })),
       expireClaims: vi.fn(async () => [{ schemaVersion: 1, claimLeaseId: 'lease-1',
         taskId: 'task-1', agentId: 'agent-1', expiredAt: 100 }]),
+      canAutoReofferExpiredChannelCollaborationClaim: vi.fn(async () => false),
       disconnectDevice,
       reconnectDevice,
+      createOffer: vi.fn(async () => { throw new Error('not used'); }),
+      publishOffer: vi.fn(async () => { throw new Error('not used'); }),
+      respondToOffer: vi.fn(async () => ({ kind: 'response_recorded', status: 'rejected' })),
+      bindProjectStageClaimGranted: vi.fn(),
+      bindTaskClaimGranted: vi.fn(),
+      bindTaskOfferResponseRecorded: vi.fn(),
+      bindTaskClaimExpired: vi.fn(),
     };
     const app = {
       deviceHello: vi.fn(async () => ({ ok: true, device: device('device-1', 'profile-1'), affectedTeamIds: [] })),
@@ -367,6 +380,153 @@ describe('management worker socket integration', () => {
     await socket.disconnect();
     expect(disconnectDevice).toHaveBeenCalledWith('device-1');
     expect(reconnectDevice).toHaveBeenCalledWith('device-1');
+  });
+
+  test('三台 Agent Device 独立接收 Offer、响应 Claim，过期通知不串台', async () => {
+    const fakeServer = new FakeServer();
+    const candidates = [
+      { agentId: 'agent-alpha', deviceId: 'device-alpha' },
+      { agentId: 'agent-beta', deviceId: 'device-beta' },
+      { agentId: 'agent-gamma', deviceId: 'device-gamma' },
+    ];
+    const offers = candidates.map((candidate, index) => ({
+      schemaVersion: 1 as const,
+      offerId: `offer-${candidate.agentId}`,
+      deviceId: candidate.deviceId,
+      taskId: `task-${candidate.agentId}`,
+      taskRevision: 1,
+      taskAttempt: 1,
+      agentId: candidate.agentId,
+      requiredCapabilities: [],
+      offerExpiresAt: 1_000 + index,
+    }));
+    const resolution = {
+      taskId: 'root-collaboration-task',
+      taskRevision: 1,
+      taskAttempt: 1,
+      ancestorAgentIds: [],
+      candidates: candidates.map((candidate) => ({
+        ...candidate,
+        eligible: true,
+        diagnosticCodes: [],
+        missingCapabilities: [],
+      })),
+    };
+    const respondToOffer: TaskClaimBroker['respondToOffer'] = vi.fn(async (payload) => {
+      if (payload.kind === 'rejected') {
+        return { kind: 'response_recorded', status: 'rejected' };
+      }
+      const offer = offers.find((candidate) => candidate.offerId === payload.offerId)!;
+      return {
+        kind: 'claim_granted',
+        lease: {
+          schemaVersion: 1,
+          claimLeaseId: `lease-${payload.agentId}`,
+          taskId: offer.taskId,
+          taskRevision: 1,
+          taskAttempt: 1,
+          agentId: payload.agentId,
+          leaseToken: `token-${payload.agentId}`,
+          fencingToken: 1,
+          acquiredAt: 100,
+          expiresAt: 200,
+        },
+        execution: {
+          schemaVersion: 1,
+          managementRunId: 'run-collaboration',
+          taskId: offer.taskId,
+          taskRevision: 1,
+          taskAttempt: 1,
+          grantId: `grant-${payload.agentId}`,
+          title: `介绍 ${payload.agentId}`,
+          objective: '分别介绍自己',
+          acceptanceCriteria: [],
+          dependencyTaskIds: [],
+          channelId: 'channel-collaboration',
+        },
+      };
+    });
+    const broker: TaskClaimBroker = {
+      resolveCandidates: vi.fn(async () => resolution),
+      resolveProjectStageCandidates: vi.fn(async () => resolution),
+      prepareOffers: vi.fn(async () => offers),
+      acquire: vi.fn(async () => ({ schemaVersion: 1, ok: false, errorCode: 'UNAVAILABLE',
+        diagnosticCode: 'NOT_USED', retryable: false })),
+      renew: vi.fn(async () => ({ schemaVersion: 1, ok: true, expiresAt: 200 })),
+      release: vi.fn(async () => ({ schemaVersion: 1, ok: true, releasedAt: 100 })),
+      relinquish: vi.fn(async () => ({ schemaVersion: 1, ok: true, releasedAt: 100,
+        executionStarted: false, attempt: 1 })),
+      expireClaims: vi.fn(async () => [{ schemaVersion: 1, claimLeaseId: 'lease-agent-beta',
+        taskId: 'task-agent-beta', agentId: 'agent-beta', expiredAt: 300 }]),
+      canAutoReofferExpiredChannelCollaborationClaim: vi.fn(async () => false),
+      disconnectDevice: vi.fn(),
+      reconnectDevice: vi.fn(),
+      createOffer: vi.fn(async () => { throw new Error('not used'); }),
+      publishOffer: vi.fn(async () => { throw new Error('not used'); }),
+      respondToOffer,
+      bindProjectStageClaimGranted: vi.fn(),
+      bindTaskClaimGranted: vi.fn(),
+      bindTaskOfferResponseRecorded: vi.fn(),
+      bindTaskClaimExpired: vi.fn(),
+    };
+    const devices = candidates.map((candidate) => device(candidate.deviceId, 'profile-1'));
+    const app = {
+      deviceHello: vi.fn(async (payload: { deviceId: string }) => ({
+        ok: true,
+        device: devices.find((candidate) => candidate.id === payload.deviceId),
+        affectedTeamIds: [],
+      })),
+      buildDeviceScanRequest: vi.fn(async () => ({ ok: true, skipped: true })),
+      markDeviceOffline: vi.fn(async () => ({ ok: true, affectedTeamIds: [] })),
+    } as unknown as ServerNextUseCases;
+    const realtime = attachServerNextNamespaces(fakeServer, app, {
+      taskClaimBroker: broker,
+      taskClaimOfferTimeoutMs: 20,
+    });
+    const sockets = new Map<string, FakeSocket>();
+    for (const candidate of candidates) {
+      const socket = new FakeSocket();
+      fakeServer.agent.connect(socket);
+      await socket.trigger(AGENT_EVENTS.device.hello, { deviceId: candidate.deviceId });
+      sockets.set(candidate.agentId, socket);
+    }
+
+    await expect(realtime.offerTaskClaims('root-collaboration-task')).resolves.toEqual({
+      taskId: 'root-collaboration-task',
+      offered: 3,
+      accepted: 3,
+    });
+    for (const candidate of candidates) {
+      expect(sockets.get(candidate.agentId)!.outbound(AGENT_EVENTS.taskClaim.offer)).toMatchObject([
+        { payload: { agentId: candidate.agentId, deviceId: candidate.deviceId } },
+      ]);
+    }
+
+    await expect(sockets.get('agent-alpha')!.trigger(AGENT_EVENTS.taskClaim.respond, {
+      schemaVersion: 1,
+      offerId: 'offer-agent-alpha',
+      agentId: 'agent-alpha',
+      kind: 'rejected',
+      detail: '当前不可用',
+    })).resolves.toEqual({ kind: 'response_recorded', status: 'rejected' });
+    for (const agentId of ['agent-beta', 'agent-gamma']) {
+      await expect(sockets.get(agentId)!.trigger(AGENT_EVENTS.taskClaim.respond, {
+        schemaVersion: 1,
+        offerId: `offer-${agentId}`,
+        agentId,
+        kind: 'accepted',
+      })).resolves.toMatchObject({ kind: 'claim_granted', lease: { agentId } });
+    }
+    expect(respondToOffer).toHaveBeenCalledTimes(3);
+
+    await expect(realtime.expireTaskClaims()).resolves.toMatchObject([
+      { claimLeaseId: 'lease-agent-beta', agentId: 'agent-beta' },
+    ]);
+    expect(sockets.get('agent-alpha')!.outbound(AGENT_EVENTS.taskClaim.expired)).toHaveLength(0);
+    expect(sockets.get('agent-beta')!.outbound(AGENT_EVENTS.taskClaim.expired)).toMatchObject([
+      { payload: { claimLeaseId: 'lease-agent-beta', agentId: 'agent-beta' } },
+    ]);
+    expect(sockets.get('agent-gamma')!.outbound(AGENT_EVENTS.taskClaim.expired)).toHaveLength(0);
   });
 
   test('Phase 2 preflight 与调度只选择声明 V2 capability 的真实 Device worker', async () => {

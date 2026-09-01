@@ -968,7 +968,9 @@ export function attachServerNextNamespaces(
       } : {}),
       ...(options.taskClaimBroker ? {
         taskClaim: {
-          acquire: (payload) => options.taskClaimBroker!.acquire(payload),
+          acquire: (payload) => options.taskClaimBroker!.acquire(payload, {
+            deviceId: connectedDeviceId ?? '',
+          }),
           renew: (payload) => options.taskClaimBroker!.renew(payload),
           release: (payload) => options.taskClaimBroker!.release(payload),
           // #948-E ADR-0064/0065：Agent 显式 relinquish Claim（带 cause + attempt 语义）。
@@ -977,7 +979,7 @@ export function attachServerNextNamespaces(
           respond: (payload) => options.taskClaimBroker!.respondToOffer({
             offerId: payload.offerId, agentId: payload.agentId, kind: payload.kind,
             detail: payload.detail ?? null,
-          }),
+          }, { deviceId: connectedDeviceId ?? '' }),
         },
       } : {}),
     });

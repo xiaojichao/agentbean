@@ -31,6 +31,10 @@ import { createManagementToolExecutor, createPhase1ManagementToolHandlers, creat
 import { createSubtaskAcceptanceService } from './application/management/subtask-acceptance-service.js';
 import { createTaskCoordinationKernel } from './application/management/task-coordination-kernel.js';
 import { createTaskLifecycleKernel } from './application/management/task-lifecycle-kernel.js';
+import {
+  recordChannelCollaborationClaim,
+  recordChannelCollaborationStatus,
+} from './application/channel-collaboration-task-handler.js';
 import { resolveTaskAllocation } from './application/management/task-allocation-service.js';
 import { createManagementRouter } from './application/management/management-router.js';
 import { createCollaborativeMemorySearchService } from './application/collaborative-memory-search-service.js';
@@ -63,7 +67,7 @@ import {
 } from './application/project-collaboration-rollout.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
-import { DEFAULT_ARTIFACT_MAX_BYTES, isSafeArtifactInlinePreviewMimeType, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRevisionCommittedPayload, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { CHANNEL_COLLABORATION_TASK_TAG, DEFAULT_ARTIFACT_MAX_BYTES, isSafeArtifactInlinePreviewMimeType, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRevisionCommittedPayload, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases } from './application/usecases.js';
 
 type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => SocketServerLike & {
@@ -112,6 +116,7 @@ export interface StartServerNextDevServerInput {
   Database?: BetterSqlite3Constructor;
   dispatchTimeout?: DispatchTimeoutSchedulerConfig;
   coordination?: CoordinationSchedulerConfig;
+  taskClaimExpiry?: TaskClaimExpirySchedulerConfig;
   webApp?: WebAppHandler;
   /** Test/rollout injection; durable-job also starts the background coordination consumer. */
   messageIngestionMode?: 'legacy' | 'durable-job' | 'message-tracer';
@@ -142,7 +147,7 @@ interface AppWithCleanup {
   bindTaskClaimEmitter?(emit: (taskId: string, options?: {
     readonly allowedAgentIds?: readonly string[];
     readonly projectStageAuto?: boolean;
-  }) => Promise<void>): void;
+  }) => Promise<{ readonly offered: number }>): void;
   recoverProjectStages?(teamId?: string): Promise<void>;
   reconcileDisconnectedDevicesOnStart: boolean;
   close(): Promise<void>;
@@ -188,6 +193,21 @@ export interface DispatchTimeoutSchedulerConfig {
   /** 旧 daemon 兼容回退：从不发心跳的 dispatch（last_heartbeat_at 恒 null）按此绝对时长判定。 */
   legacyTimeoutMs: number;
   intervalMs: number;
+}
+
+export interface TaskClaimExpirySchedulerConfig {
+  intervalMs: number;
+  /** 每个频道协作子 Task 首次 Claim 过期后最多自动重发几轮 Offer。 */
+  maxAutomaticReoffersPerTask?: number;
+}
+
+interface TaskClaimExpiryMetricSnapshot {
+  cycles: number;
+  failedCycles: number;
+  expiredClaims: number;
+  reofferAttempts: number;
+  reofferedOffers: number;
+  reofferFailures: number;
 }
 
 export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = {}): ServerNextDevConfig {
@@ -277,6 +297,11 @@ export async function startServerNextDevServer(
         await realtimeRef?.emitMessageDelivered(delivery);
       }
     : undefined;
+  const onChannelCollaborationMessageAppended = async (
+    delivery: { teamId: string; channelId: string; messageId: string },
+  ) => {
+    await realtimeRef?.emitMessageDelivered(delivery);
+  };
   // #1084 workspace revision commit fan-out：真正新建 revision 后通知频道在线设备 materialize。
   // late-bind 同 #921——realtime 在 attachServerNextNamespaces 后才创建。
   const onWorkspaceRevisionCommitted = async (payload: WorkspaceRevisionCommittedPayload) => {
@@ -288,8 +313,18 @@ export async function startServerNextDevServer(
       taskClaimBroker: input.taskClaimBroker, serverWorkerPool: input.serverWorkerPool,
       serverWorkerAuthToken: input.serverWorkerAuthToken, reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined }
-    : createDefaultApp(config, input.Database, messageIngestionMode, messageTracerEnabled, onMessageTracerDelivered, onWorkspaceRevisionCommitted);
+    : createDefaultApp(
+        config,
+        input.Database,
+        messageIngestionMode,
+        messageTracerEnabled,
+        onMessageTracerDelivered,
+        onWorkspaceRevisionCommitted,
+        onChannelCollaborationMessageAppended,
+      );
   const app = appWithCleanup.app;
+  const taskClaimBroker = input.taskClaimBroker ?? appWithCleanup.taskClaimBroker;
+  const taskClaimExpiryMetrics = createTaskClaimExpiryMetrics();
   if (appWithCleanup.reconcileDisconnectedDevicesOnStart) {
     await app.reconcileDisconnectedDevices({ timestamp: Date.now() });
   }
@@ -324,6 +359,7 @@ export async function startServerNextDevServer(
             rollout: config.projectCollaborationRollout,
             metrics: config.projectCollaborationMetrics?.snapshot(),
           },
+          taskClaimExpiry: taskClaimExpiryMetrics.snapshot(),
           ...(documentBundleBackfill ? { documentBundleBackfill } : {}),
         }));
         return;
@@ -371,7 +407,7 @@ export async function startServerNextDevServer(
   const realtime = attachServerNextNamespaces(ioServer, app, {
     managementWorkerScheduler: input.managementWorkerScheduler ?? appWithCleanup.managementWorkerScheduler,
     serverWorkerScheduler: input.serverWorkerScheduler ?? appWithCleanup.serverWorkerScheduler,
-    taskClaimBroker: input.taskClaimBroker ?? appWithCleanup.taskClaimBroker,
+    taskClaimBroker,
     serverWorkerPool: input.serverWorkerPool ?? appWithCleanup.serverWorkerPool,
     serverWorkerAuthToken: input.serverWorkerAuthToken ?? appWithCleanup.serverWorkerAuthToken,
     projectCollaborationMetrics: config.projectCollaborationMetrics,
@@ -382,7 +418,7 @@ export async function startServerNextDevServer(
   realtimeRef = realtime; // #921 接通 outbox 投递 late-bind
   appWithCleanup.bindManagementDispatchEmitter?.((dispatchId) => realtime.dispatchRequest(dispatchId));
   appWithCleanup.bindTaskClaimEmitter?.(async (taskId, options) => {
-    await realtime.offerTaskClaims(taskId, options);
+    return realtime.offerTaskClaims(taskId, options);
   });
   await appWithCleanup.recoverProjectStages?.();
   const dispatchTimeoutInterval = startDispatchTimeoutScheduler(
@@ -395,6 +431,14 @@ export async function startServerNextDevServer(
     messageIngestionMode === 'durable-job',
     input.coordination ?? { intervalMs: 1000 },
   );
+  const taskClaimExpiryScheduler = taskClaimBroker
+    ? startTaskClaimExpiryScheduler(
+        taskClaimBroker,
+        realtime,
+        input.taskClaimExpiry ?? { intervalMs: 5_000, maxAutomaticReoffersPerTask: 1 },
+        taskClaimExpiryMetrics,
+      )
+    : null;
 
   await new Promise<void>((resolve) => {
     httpServer.listen(config.port, config.host, () => resolve());
@@ -491,6 +535,7 @@ export async function startServerNextDevServer(
         clearInterval(workspaceStagingCleanupInterval);
       }
       await coordinationScheduler?.stop();
+      await taskClaimExpiryScheduler?.stop();
       stopVersionRefresh();
       await webApp?.close();
       await new Promise<void>((resolve) => ioServer.close(() => resolve()));
@@ -619,6 +664,90 @@ function startCoordinationScheduler(
   };
   run();
   const interval = setInterval(run, config.intervalMs);
+  return {
+    async stop() {
+      stopped = true;
+      clearInterval(interval);
+      await running;
+    },
+  };
+}
+
+function createTaskClaimExpiryMetrics() {
+  const snapshot: TaskClaimExpiryMetricSnapshot = {
+    cycles: 0,
+    failedCycles: 0,
+    expiredClaims: 0,
+    reofferAttempts: 0,
+    reofferedOffers: 0,
+    reofferFailures: 0,
+  };
+  return {
+    recordCycle(expiredClaims: number, reofferAttempts: number, reofferedOffers: number) {
+      snapshot.cycles += 1;
+      snapshot.expiredClaims += expiredClaims;
+      snapshot.reofferAttempts += reofferAttempts;
+      snapshot.reofferedOffers += reofferedOffers;
+    },
+    recordFailedCycle() {
+      snapshot.cycles += 1;
+      snapshot.failedCycles += 1;
+    },
+    recordReofferFailure() {
+      snapshot.reofferFailures += 1;
+    },
+    snapshot(): TaskClaimExpiryMetricSnapshot {
+      return { ...snapshot };
+    },
+  };
+}
+
+function startTaskClaimExpiryScheduler(
+  broker: TaskClaimBroker,
+  realtime: ServerNextRealtime,
+  config: TaskClaimExpirySchedulerConfig,
+  metrics: ReturnType<typeof createTaskClaimExpiryMetrics>,
+): { stop(): Promise<void> } | null {
+  if (config.intervalMs <= 0) return null;
+  const maxAutomaticReoffers = config.maxAutomaticReoffersPerTask ?? 1;
+  let stopped = false;
+  let running: Promise<void> | null = null;
+  const run = () => {
+    if (stopped || running) return;
+    running = (async () => {
+      let expiredClaims: Awaited<ReturnType<ServerNextRealtime['expireTaskClaims']>>;
+      try {
+        // expireTaskClaims 先提交 Claim expiry/Task reopen，再广播可见过期状态。
+        expiredClaims = await realtime.expireTaskClaims();
+      } catch {
+        metrics.recordFailedCycle();
+        return;
+      }
+      let reofferAttempts = 0;
+      let reofferedOffers = 0;
+      for (const expired of expiredClaims) {
+        try {
+          if (!await broker.canAutoReofferExpiredChannelCollaborationClaim(expired, {
+            maxAutomaticReoffers,
+          })) continue;
+          reofferAttempts += 1;
+          const result = await realtime.offerTaskClaims(expired.taskId, {
+            allowedAgentIds: [expired.agentId],
+          });
+          reofferedOffers += result.offered;
+        } catch {
+          // 单个 Task 的恢复失败不阻塞同轮其他 Agent；下一次人工动作仍可按权威状态恢复。
+          metrics.recordReofferFailure();
+        }
+      }
+      metrics.recordCycle(expiredClaims.length, reofferAttempts, reofferedOffers);
+    })().finally(() => {
+      running = null;
+    });
+  };
+  run();
+  const interval = setInterval(run, config.intervalMs);
+  interval.unref();
   return {
     async stop() {
       stopped = true;
@@ -2149,6 +2278,9 @@ function createDefaultApp(
   messageTracerEnabled: boolean = false,
   onMessageTracerDelivered?: (delivery: { teamId: string; channelId: string; messageId: string }) => Promise<void> | void,
   onWorkspaceRevisionCommitted?: (payload: WorkspaceRevisionCommittedPayload) => Promise<void> | void,
+  onChannelCollaborationMessageAppended?: (
+    delivery: { teamId: string; channelId: string; messageId: string },
+  ) => Promise<void> | void,
 ): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
   // #1005：生产/dev host 始终用 dataDir 磁盘 staging，避免大文件塞 team SQLite BLOB。
@@ -2194,6 +2326,7 @@ function createDefaultApp(
       projectCollaborationRollout.managerAutoAdvance,
       serverWorker?.pool,
       { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
+      onChannelCollaborationMessageAppended,
     );
     const app = createServerNextUseCases({
       repositories,
@@ -2224,6 +2357,8 @@ function createDefaultApp(
           return [];
         }
       },
+      onChannelCollaborationTasksPublished: management.publishChannelCollaborationTasks,
+      onChannelCollaborationMessageAppended,
       ...(projectCollaborationRollout.managerAutoAdvance
         ? {
             onProjectFactsChanged: async (scope: { teamId: string; channelId: string }) => {
@@ -2309,6 +2444,7 @@ function createDefaultApp(
     projectCollaborationRollout.managerAutoAdvance,
     serverWorker?.pool,
     { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
+    onChannelCollaborationMessageAppended,
   );
   const app = createServerNextUseCases({
     repositories,
@@ -2337,6 +2473,8 @@ function createDefaultApp(
         return [];
       }
     },
+    onChannelCollaborationTasksPublished: management.publishChannelCollaborationTasks,
+    onChannelCollaborationMessageAppended,
     ...(projectCollaborationRollout.managerAutoAdvance
       ? {
           onProjectFactsChanged: async (scope: { teamId: string; channelId: string }) => {
@@ -2469,12 +2607,15 @@ function createDefaultManagementRuntime(
   projectStageAutoAdvanceEnabled: boolean,
   serverWorkerPool?: ServerWorkerPool,
   serverWorkerTuning?: { queueTimeoutMs?: number; leaseTtlMs?: number },
+  onChannelCollaborationMessageAppended?: (
+    delivery: { teamId: string; channelId: string; messageId: string },
+  ) => Promise<void> | void,
 ) {
   let dispatchEmitter: ((dispatchId: string) => Promise<void>) | undefined;
   let taskClaimEmitter: ((taskId: string, options?: {
     readonly allowedAgentIds?: readonly string[];
     readonly projectStageAuto?: boolean;
-  }) => Promise<void>) | undefined;
+  }) => Promise<{ readonly offered: number }>) | undefined;
   const kernel = createManagementKernel({
     repositories: repositories.management,
     unitOfWork: repositories.managementUnitOfWork,
@@ -2593,6 +2734,42 @@ function createDefaultManagementRuntime(
       throw error;
     }
   };
+  const invokeClaimedChannelCollaborationTask = async (claim: ProjectStageClaimGranted) => {
+    const task = await repositories.tasks.getById(claim.taskId);
+    if (!task?.tags.includes(CHANNEL_COLLABORATION_TASK_TAG)) return;
+    await recordChannelCollaborationClaim({
+      repositories,
+      clock,
+      ids,
+      claim,
+    });
+    const invoked = await projectStageInvocationGateway.invokeClaimedProjectStage({
+      managementRunId: claim.managementRunId,
+      idempotencyKey: [
+        'channel-collaboration',
+        claim.taskId,
+        claim.taskRevision,
+        claim.taskAttempt,
+        claim.claimLeaseId,
+      ].join(':'),
+      taskId: claim.taskId,
+      expectedTaskRevision: claim.taskRevision,
+      taskAttempt: claim.taskAttempt,
+      claimLeaseId: claim.claimLeaseId,
+      targetAgentId: claim.targetAgentId,
+      objective: claim.objective,
+      attachmentIds: [],
+    });
+    const view = invoked.view.activeDispatchId
+      ? invoked.view
+      : await projectStageInvocationGateway.retryClaimedProjectStage({
+          managementRunId: claim.managementRunId,
+          invocationId: invoked.view.id,
+        });
+    if (!view.activeDispatchId) throw new Error('MANAGEMENT_ACTIVE_DISPATCH_MISSING');
+    if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
+    await dispatchEmitter(view.activeDispatchId);
+  };
   projectStageAutoAdvance = createProjectStageAutoAdvance({
     repositories,
     broker: taskClaimBroker,
@@ -2607,6 +2784,65 @@ function createDefaultManagementRuntime(
   if (projectStageAutoAdvanceEnabled) {
     taskClaimBroker.bindProjectStageClaimGranted(invokeClaimedProjectStage);
   }
+  taskClaimBroker.bindTaskClaimGranted(invokeClaimedChannelCollaborationTask);
+  taskClaimBroker.bindTaskOfferResponseRecorded(async ({ taskId, response }) => {
+    if (response.kind === 'accepted') return;
+    const projected = await recordChannelCollaborationStatus({
+      repositories,
+      clock,
+      status: {
+        kind: 'offer_response',
+        taskId,
+        agentId: response.agentId,
+        offerId: response.offerId,
+        responseKind: response.kind,
+      },
+    });
+    if (projected?.created) {
+      await Promise.resolve(onChannelCollaborationMessageAppended?.({
+        teamId: projected.message.teamId,
+        channelId: projected.message.channelId,
+        messageId: projected.message.id,
+      })).catch(() => undefined);
+    }
+  });
+  taskClaimBroker.bindTaskAllocationBlockedRecorded(async ({ taskId, agentId }) => {
+    const projected = await recordChannelCollaborationStatus({
+      repositories,
+      clock,
+      status: {
+        kind: 'allocation_blocked',
+        taskId,
+        agentId,
+      },
+    });
+    if (projected?.created) {
+      await Promise.resolve(onChannelCollaborationMessageAppended?.({
+        teamId: projected.message.teamId,
+        channelId: projected.message.channelId,
+        messageId: projected.message.id,
+      })).catch(() => undefined);
+    }
+  });
+  taskClaimBroker.bindTaskClaimExpired(async (expired) => {
+    const projected = await recordChannelCollaborationStatus({
+      repositories,
+      clock,
+      status: {
+        kind: 'claim_expired',
+        taskId: expired.taskId,
+        agentId: expired.agentId,
+        claimLeaseId: expired.claimLeaseId,
+      },
+    });
+    if (projected?.created) {
+      await Promise.resolve(onChannelCollaborationMessageAppended?.({
+        teamId: projected.message.teamId,
+        channelId: projected.message.channelId,
+        messageId: projected.message.id,
+      })).catch(() => undefined);
+    }
+  });
   const executeManagementTool = createManagementToolExecutor({
     kernel,
     managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
@@ -2830,8 +3066,18 @@ function createDefaultManagementRuntime(
     bindTaskClaimEmitter(emit: (taskId: string, options?: {
       readonly allowedAgentIds?: readonly string[];
       readonly projectStageAuto?: boolean;
-    }) => Promise<void>) {
+    }) => Promise<{ readonly offered: number }>) {
       taskClaimEmitter = emit;
+    },
+    async publishChannelCollaborationTasks(taskIds: readonly string[]) {
+      if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
+      const deliveries = await Promise.allSettled(taskIds.map((taskId) => taskClaimEmitter!(taskId)));
+      const offered = deliveries.reduce((total, delivery) =>
+        delivery.status === 'fulfilled' ? total + delivery.value.offered : total, 0);
+      if (deliveries.every((delivery) => delivery.status === 'rejected')) {
+        throw new Error('TASK_CLAIM_OFFER_DELIVERY_UNAVAILABLE');
+      }
+      return { offered };
     },
   };
 }

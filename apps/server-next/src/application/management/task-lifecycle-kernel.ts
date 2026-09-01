@@ -111,7 +111,7 @@ function assertRevision(actual: number, expected: number): void {
  * #1196：在 lifecycle 事务内基于当前 delivery 的 current 版本复验逐文件审核门禁。
  * 没有必需文件的旧交付流程不受影响；只要当前包存在必需成员，就必须全部 approved。
  */
-async function inspectCurrentDeliveryFileReviewGate(
+export async function inspectCurrentDeliveryFileReviewGate(
   repos: Tx,
   input: {
     teamId: string;

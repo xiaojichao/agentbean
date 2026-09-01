@@ -20,7 +20,10 @@ import {
 } from './message-tracer-handlers.js';
 import { createMessageTracerCommandDispatcher } from './message-tracer-dispatcher.js';
 import {
+  CHANNEL_COLLABORATION_TASK_TAG,
   parseMessageTracerCommandEnvelopeV1,
+  parseChannelCollaborationTaskTriggerV1,
+  type ChannelCollaborationTaskTriggerV1,
   type MessageTracerCommandResponseV1,
   type TaskContinuationSourceMarkerV1,
 } from '../../../../packages/contracts/src/index.js';
@@ -153,6 +156,13 @@ import {
   type TaskLinkedRequestEvaluation,
 } from './task-linked-request-handler.js';
 import { createTaskLifecycleKernel } from './management/task-lifecycle-kernel.js';
+import {
+  completeChannelCollaborationSubtask,
+  createChannelCollaborationPromotionHooks,
+  inspectChannelCollaborationCompletionClaim,
+  recordChannelCollaborationStatus,
+  resumeChannelCollaborationAfterFileReview,
+} from './channel-collaboration-task-handler.js';
 import { resolveProjectStageExecutionGate } from './project-stage-execution-gate.js';
 import { createMemorySourceInvalidationService } from './memory-source-invalidation-service.js';
 import { createCollaborativeMemoryService, type MemoryView } from './collaborative-memory-service.js';
@@ -1289,6 +1299,8 @@ export interface SendMessageInput {
   threadId?: string;
   body: string;
   asTask?: boolean;
+  /** 仅由显式 composer 模式产生；普通聊天不得由 Server/模型推断。 */
+  collaborationTask?: ChannelCollaborationTaskTriggerV1;
   artifactIds?: string[];
   clientMessageId?: string;
   senderId?: string;
@@ -1307,6 +1319,15 @@ export interface SendMessageResult {
   task?: TaskDto;
   management?: ManagementRoutingResult;
   referenceSet?: ProjectReferenceSetDto;
+  collaborationTask?: {
+    readonly rootTaskId?: string;
+    readonly managementRunId?: string;
+    readonly subtaskIds: readonly string[];
+    readonly offerDelivery: 'offered' | 'partial' | 'pending' | 'blocked';
+    readonly offeredCount: number;
+    readonly targetCount: number;
+    readonly stableCode: string;
+  };
 }
 
 export interface AcceptDispatchInput {
@@ -1972,6 +1993,14 @@ export interface CreateServerNextUseCasesInput {
    * dev-server 注入；缺省（未接线测试环境）用简单可见性兜底（fail closed 语义由复验链兜底）。
    */
   resolveTaskLinkedEligibleAgentIds?: (taskId: string) => Promise<readonly string[]>;
+  /** Promotion commit 后把已发布的 targeted subtasks 投递给现有 TaskClaimBroker。 */
+  onChannelCollaborationTasksPublished?: (
+    taskIds: readonly string[],
+  ) => Promise<{ readonly offered: number }>;
+  /** 协作认领/PI 汇总消息落库后的轻量 realtime fetch 通知。 */
+  onChannelCollaborationMessageAppended?: (
+    delivery: { readonly teamId: string; readonly channelId: string; readonly messageId: string },
+  ) => Promise<void> | void;
   /**
    * #1059 候选 01/02 深化：OutputPackage 交付流水线深模块。缺省由 {repositories,
    * clock, ids} 内部构造；dev-server 可显式注入，以便切片 2 把 transport 改绑到该模块。
@@ -2010,6 +2039,57 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     ids,
     editingEnabled: input.channelFileRollout?.markdownEditing ?? true,
   });
+  const reconcileChannelCollaborationTaskAfterFileReview = async (taskId: string) => {
+    const projected = await resumeChannelCollaborationAfterFileReview({
+      repositories,
+      clock,
+      ids,
+      taskId,
+    });
+    if (projected.summaryCreated && projected.summaryMessage) {
+      await Promise.resolve(input.onChannelCollaborationMessageAppended?.({
+        teamId: projected.summaryMessage.teamId,
+        channelId: projected.summaryMessage.channelId,
+        messageId: projected.summaryMessage.id,
+      })).catch(() => undefined);
+    }
+  };
+  const reconcileChannelCollaborationPackageAfterFileReview = async (review: {
+    teamId: string;
+    channelId: string;
+    packageId: string;
+  }) => {
+    const projection = await repositories.outputPackages.getPackageById({
+      teamId: review.teamId,
+      packageId: review.packageId,
+    });
+    if (!projection || projection.package.channelId !== review.channelId) return;
+    await reconcileChannelCollaborationTaskAfterFileReview(projection.package.taskId);
+  };
+  const reconcileChannelCollaborationVersionAfterFileReview = async (review: {
+    teamId: string;
+    channelId: string;
+    versionId: string;
+  }) => {
+    const packageRecords = await repositories.outputPackages.listPackagesByChannel({
+      teamId: review.teamId,
+      channelId: review.channelId,
+      limit: Number.MAX_SAFE_INTEGER,
+    });
+    const taskIds = new Set<string>();
+    for (const record of packageRecords) {
+      const projection = await repositories.outputPackages.getPackageById({
+        teamId: review.teamId,
+        packageId: record.packageId,
+      });
+      if (projection?.members.some((member) => member.artifactVersionId === review.versionId)) {
+        taskIds.add(record.taskId);
+      }
+    }
+    for (const taskId of taskIds) {
+      await reconcileChannelCollaborationTaskAfterFileReview(taskId);
+    }
+  };
   // #1064：Task-linked @Agent 请求的 eligibility 解析。dev-server 注入 broker
   // resolveCandidates；缺省用简单可见性兜底（未接线测试环境；fail closed 由复验链保证）。
   const resolveTaskLinkedEligibleAgentIds = input.resolveTaskLinkedEligibleAgentIds
@@ -5541,6 +5621,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async sendMessage(messageInput) {
       if (messageIngestionMode === 'legacy') return sendLegacyMessage(messageInput);
       if (messageIngestionMode === 'message-tracer') return sendMessageViaMessageTracer(messageInput);
+      let collaborationTask: ChannelCollaborationTaskTriggerV1 | undefined;
+      if (messageInput.collaborationTask !== undefined) {
+        try {
+          collaborationTask = parseChannelCollaborationTaskTriggerV1(messageInput.collaborationTask);
+        } catch {
+          return makeFailure('VALIDATION_ERROR', 'CHANNEL_COLLABORATION_TASK_TRIGGER_INVALID');
+        }
+        if (messageInput.threadId || messageInput.asTask === true) {
+          return makeFailure('VALIDATION_ERROR', 'CHANNEL_COLLABORATION_TASK_CONTEXT_INVALID');
+        }
+      }
       if ((messageInput.selections?.length ?? 0) > 0
         && !projectCollaborationRollout.bundleSelection) {
         projectCollaborationMetrics.recordMutationFailure('disabled');
@@ -5558,6 +5649,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       if (channel.visibility === 'private' && !channel.humanMemberIds.includes(messageInput.userId)) {
         return makeFailure('FORBIDDEN', 'User cannot view channel');
+      }
+      if (collaborationTask && channel.kind !== 'channel') {
+        return makeFailure('VALIDATION_ERROR', 'CHANNEL_COLLABORATION_TASK_CHANNEL_REQUIRED');
       }
 
       const now = clock.now();
@@ -5740,6 +5834,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
               ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
               ...(messageInput.asTask === true ? { asTask: true } : {}),
+              ...(collaborationTask ? { collaborationTask } : {}),
               ...(mentions.length ? { mentions } : {}),
               ...(continuationSource.kind === 'valid'
                 ? { taskContinuationSource: continuationSource.marker }
@@ -5823,6 +5918,129 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           outcome.taskLinked.context,
           outcome.taskLinked.evaluation,
         );
+      }
+
+      if (collaborationTask) {
+        const candidates = visibleAgents
+          .filter((agent) => channel.agentMemberIds.includes(agent.id))
+          .map((agent) => ({ agentId: agent.id, agentName: agent.name }));
+        const hooks = createChannelCollaborationPromotionHooks({
+          requesterId: messageInput.userId,
+          objective: messageInput.body.trim(),
+          candidates,
+          ids,
+        });
+        const promotionHandler = createPromotionGateHandler({
+          teamId: messageInput.teamId,
+          requesterId: messageInput.userId,
+          unitOfWork: repositories.taskCoordinationUnitOfWork,
+          clock,
+          ids,
+          onAppliedInTransaction: hooks.onAppliedInTransaction,
+          onConvergedInTransaction: hooks.onConvergedInTransaction,
+        });
+        let promotion;
+        let promotionFailureCode = 'CHANNEL_COLLABORATION_PROMOTION_PENDING';
+        try {
+          promotion = await promotionHandler.promoteToTask({
+            schemaVersion: 1,
+            commandName: 'promote-to-task',
+            commandSchemaVersion: 1,
+            idempotencyKey: `channel-collaboration:${messageInput.teamId}:${messageInput.clientMessageId ?? outcome.message.id}`,
+            causationRef: { kind: 'message', id: outcome.message.id },
+          }, {
+            triggerKind: 'human-structured',
+            channelId: messageInput.channelId,
+            rootMessageId: outcome.message.id,
+            objectiveSnapshot: {
+              schemaVersion: 1,
+              objective: messageInput.body.trim(),
+              scope: `channel:${messageInput.channelId}:all-channel-agents`,
+              riskLevel: 'low',
+            },
+            freshnessBasis: {
+              schemaVersion: 1,
+              sourceLineage: { kind: 'message', id: outcome.message.id },
+            },
+            ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+          });
+        } catch {
+          promotionFailureCode = 'CHANNEL_COLLABORATION_PROMOTION_FAILED';
+          promotion = null;
+        }
+        let projected = hooks.getResult();
+        if (!projected && promotion?.result?.rootTaskId && promotion.result.managementRunId) {
+          const replayRootTaskId = promotion.result.rootTaskId;
+          const coordinations = await repositories.taskCoordination.coordinations
+            .listByManagementRun(promotion.result.managementRunId);
+          projected = {
+            rootTaskId: replayRootTaskId,
+            managementRunId: promotion.result.managementRunId,
+            subtaskIds: coordinations
+              .filter((coordination) => coordination.nodeKind === 'subtask'
+                && coordination.parentTaskId === replayRootTaskId)
+              .map((coordination) => coordination.taskId)
+              .sort(),
+          };
+        }
+        const rootTask = projected
+          ? await repositories.tasks.getById(projected.rootTaskId)
+          : null;
+        let offeredCount = 0;
+        let offerDelivery: 'offered' | 'partial' | 'pending' | 'blocked' = projected?.subtaskIds.length
+          ? 'pending'
+          : 'blocked';
+        if (projected?.subtaskIds.length && input.onChannelCollaborationTasksPublished) {
+          try {
+            const delivery = await input.onChannelCollaborationTasksPublished(projected.subtaskIds);
+            offeredCount = delivery.offered;
+            offerDelivery = offeredCount === projected.subtaskIds.length
+              ? 'offered'
+              : offeredCount > 0 ? 'partial' : 'blocked';
+          } catch {
+            // Promotion 已持久化，但 Offer 尚未可靠发布。明确返回可重试失败；客户端以同一
+            // clientMessageId 重放时会投影既有 Task，并再次进入发布路径。
+            return makeFailure(
+              'INTERNAL_ERROR',
+              'CHANNEL_COLLABORATION_OFFER_PUBLICATION_PENDING',
+            );
+          }
+        }
+        const message = {
+          ...outcome.message,
+          meta: {
+            ...outcome.message.meta,
+            ...(projected ? { taskId: projected.rootTaskId } : {}),
+          },
+          ...(outcome.artifacts.length > 0
+            ? { artifacts: outcome.artifacts.map(toArtifactDto) }
+            : {}),
+          ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
+        };
+        if (message.id) {
+          void bindMessageEpochBestEffort(
+            message.teamId,
+            message.id,
+            messageInput.clientMessageId ?? null,
+          );
+        }
+        return makeSuccess({
+          message,
+          dispatches: [],
+          ...(rootTask ? { task: rootTask } : {}),
+          collaborationTask: {
+            ...(projected ? {
+              rootTaskId: projected.rootTaskId,
+              managementRunId: projected.managementRunId,
+            } : {}),
+            subtaskIds: projected?.subtaskIds ?? [],
+            offerDelivery,
+            offeredCount,
+            targetCount: projected?.subtaskIds.length ?? 0,
+            stableCode: promotion?.stableCode ?? promotionFailureCode,
+          },
+          ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
+        });
       }
 
       // Replay: return already-created dispatches/tasks without re-executing side effects.
@@ -8816,6 +9034,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!review || !projection) {
           return makeFailure('CONFLICT', 'Recorded artifact review result is no longer available');
         }
+        if (review.decision === 'approved') {
+          try {
+            await reconcileChannelCollaborationVersionAfterFileReview({
+              teamId: projectInput.teamId,
+              channelId: projectInput.channelId,
+              versionId: review.versionId,
+            });
+          } catch {
+            return makeFailure('INTERNAL_ERROR', 'Channel collaboration review reconciliation pending');
+          }
+        }
         return makeSuccess({ ...projection, review: projectArtifactReviewDto(review), replayed: true });
       }
       if (channel.archivedAt != null) {
@@ -8868,6 +9097,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
       } catch {
         // 审核事实已经持久化；推进器失败由阶段投影显示等待原因，不回滚人工决定。
+      }
+      if (result.review.decision === 'approved') {
+        try {
+          await reconcileChannelCollaborationVersionAfterFileReview({
+            teamId: projectInput.teamId,
+            channelId: projectInput.channelId,
+            versionId: result.review.versionId,
+          });
+        } catch {
+          return makeFailure('INTERNAL_ERROR', 'Channel collaboration review reconciliation pending');
+        }
       }
       return makeSuccess({
         ...projection,
@@ -9158,6 +9398,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           : {}),
         ...(reviewInput.saveRevision ? { saveRevision: reviewInput.saveRevision } : {}),
       });
+      if ((result.kind === 'applied' || result.kind === 'replayed')
+        && reviewInput.decision === 'approved') {
+        try {
+          await reconcileChannelCollaborationPackageAfterFileReview(reviewInput);
+        } catch {
+          return makeFailure('INTERNAL_ERROR', 'Channel collaboration review reconciliation pending');
+        }
+      }
       return packageReviewCommandAck(repositories, result, 'review');
     },
 
@@ -9174,6 +9422,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         comment: reviewInput.comment,
         idempotencyKey: reviewInput.idempotencyKey,
       });
+      if ((result.kind === 'applied' || result.kind === 'replayed')
+        && reviewInput.decision === 'approved') {
+        try {
+          await reconcileChannelCollaborationPackageAfterFileReview(reviewInput);
+        } catch {
+          return makeFailure('INTERNAL_ERROR', 'Channel collaboration review reconciliation pending');
+        }
+      }
       return packageBatchReviewCommandAck(result);
     },
 
@@ -9191,6 +9447,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         expectedCollectionRevision: reviewInput.expectedCollectionRevision,
         ...(reviewInput.saveRevision ? { saveRevision: reviewInput.saveRevision } : {}),
       });
+      if ((result.kind === 'applied' || result.kind === 'replayed')
+        && reviewInput.decision === 'approved') {
+        try {
+          await reconcileChannelCollaborationPackageAfterFileReview(reviewInput);
+        } catch {
+          return makeFailure('INTERNAL_ERROR', 'Channel collaboration review reconciliation pending');
+        }
+      }
       return packageReviewCommandAck(repositories, result, 'finalize');
     },
 
@@ -11378,6 +11642,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             }
             replayUsesPublishIdEnrichment = true;
           }
+          if (replayUsesPublishIdEnrichment && replayAttempt) {
+            const replayInvocation = await repositories.management.invocations.getById(
+              replayAttempt.invocationId,
+            );
+            const replayTaskId = replayInvocation?.intent.taskContext?.taskId;
+            const replayTask = replayTaskId ? await repositories.tasks.getById(replayTaskId) : null;
+            if (replayTask?.tags.includes(CHANNEL_COLLABORATION_TASK_TAG)) {
+              return makeFailure(
+                'CONFLICT',
+                'Channel collaboration result cannot add a late OutputPackage publish',
+              );
+            }
+          }
           const replayStoredProposals = replayHandoff?.result?.collaborationProposals;
           if (!replayFingerprint && replayHandoff?.result && JSON.stringify(replayStoredProposals ?? [])
             !== JSON.stringify(replayNormalizedProposals)) {
@@ -11457,6 +11734,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                     : {}),
                   dispatchResultFingerprint: resultFingerprint,
                   ...(replayWorkspaceRunCreateId ? { workspaceRunId: replayWorkspaceRunCreateId } : {}),
+                  ...(resultInput.workspaceRun?.publishId
+                    ? { outputPackagePublishId: resultInput.workspaceRun.publishId }
+                    : {}),
                 },
               });
             } catch {
@@ -11768,6 +12048,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                           : {}),
                         ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
                         workspaceRunId: recoveryWorkspaceRunId,
+                        ...(resultInput.workspaceRun.publishId
+                          ? { outputPackagePublishId: resultInput.workspaceRun.publishId }
+                          : {}),
                       },
                     })
                   : null);
@@ -11984,6 +12267,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const managedHandoff = managedAttempt
         ? await repositories.management.handoffs.getByInvocationId(managedAttempt.invocationId)
         : null;
+      const channelCollaborationTaskContext = managedInvocation?.intent.taskContext;
+      if (channelCollaborationTaskContext) {
+        const claimGate = await inspectChannelCollaborationCompletionClaim({
+          repositories,
+          now,
+          taskId: channelCollaborationTaskContext.taskId,
+          taskRevision: channelCollaborationTaskContext.taskRevision,
+          taskAttempt: channelCollaborationTaskContext.taskAttempt,
+          claimLeaseId: channelCollaborationTaskContext.claimLeaseId,
+          agentId: resultInput.agentId,
+        });
+        if (claimGate === 'rejected') {
+          return makeFailure('CONFLICT', 'Channel collaboration result belongs to a stale Claim');
+        }
+      }
       if (resultInput.projectDocumentInputSetResult) {
         const validation = await validateProjectDocumentInputSetResultProposal({
           repositories,
@@ -12080,6 +12378,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             : {}),
           ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
           ...(workspaceRunId ? { workspaceRunId } : {}),
+          ...(resultInput.workspaceRun?.publishId
+            ? { outputPackagePublishId: resultInput.workspaceRun.publishId }
+            : {}),
           ...(inlinePackageCard ? { outputPackageCard: inlinePackageCard } : {}),
           dispatchResultFingerprint: resultFingerprint,
         },
@@ -12275,7 +12576,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
           startedAt: managedAttempt.startedAt, completedAt: now,
           ...(!resultSucceeded ? { error: completion.error ?? workspaceRunFailureError(resultInput.workspaceRun) } : {}) };
-        await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
+        const collaborationSummary = await recordManagedDispatchTerminal(
+          repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
           dispatchId: completed.dispatch.id,
           status: completion.terminal,
           artifactIds: artifacts.map((artifact) => artifact.id),
@@ -12283,7 +12585,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(message ? { deliveryMessageId: message.id } : {}),
           actorId: resultInput.agentId,
           ...(!resultSucceeded ? { errorCode: completion.error ?? workspaceRunFailureError(resultInput.workspaceRun) } : {}),
-        });
+          },
+        );
+        if (collaborationSummary) {
+          await Promise.resolve(input.onChannelCollaborationMessageAppended?.({
+            teamId: collaborationSummary.teamId,
+            channelId: collaborationSummary.channelId,
+            messageId: collaborationSummary.id,
+          })).catch(() => undefined);
+        }
       }
       await markAgentOnlineIfIdle(repositories, {
         agentId: resultInput.agentId,
@@ -12370,12 +12680,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const originMessage = await repositories.messages.getById(failed.dispatch.messageId);
       const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
       if (managedAttempt) {
-        await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
+        const collaborationStatus = await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
           dispatchId: failed.dispatch.id,
           status: 'failed',
           actorId: errorInput.agentId,
           errorCode: errorInput.error,
         });
+        if (collaborationStatus) {
+          await Promise.resolve(input.onChannelCollaborationMessageAppended?.({
+            teamId: collaborationStatus.teamId,
+            channelId: collaborationStatus.channelId,
+            messageId: collaborationStatus.id,
+          })).catch(() => undefined);
+        }
       }
 
       return makeSuccess({
@@ -16135,10 +16452,10 @@ async function recordManagedDispatchTerminal(
     artifactIds?: readonly string[];
     result?: AgentInvocationResultDto;
   },
-): Promise<void> {
+): Promise<MessageRecord | null> {
   const attempt = await repositories.management.dispatchAttempts.getByDispatchId(input.dispatchId);
   if (!attempt) {
-    return;
+    return null;
   }
   const invocation = await repositories.management.invocations.getById(attempt.invocationId);
   if (!invocation) {
@@ -16159,7 +16476,7 @@ async function recordManagedDispatchTerminal(
         idempotencyKey: `handoff-root-delivery:${handoff.id}:${input.dispatchId}`,
       });
     }
-    return;
+    return null;
   }
   const taskContext = invocation.intent.taskContext;
   const coordination = taskContext
@@ -16168,13 +16485,49 @@ async function recordManagedDispatchTerminal(
   if (coordination?.nodeKind === 'subtask'
     && coordination.managementRunId === invocation.managementRunId) {
     if (input.status !== 'succeeded') {
-      await taskKernel.recordInvocationFailure({
+      const failure = await taskKernel.recordInvocationFailure({
         managementRunId: invocation.managementRunId,
         invocationId: invocation.id,
         reasonCode: input.errorCode ?? `INVOCATION_${input.status.toUpperCase()}`,
       });
+      if (failure.disposition === 'ignored' || failure.disposition === 'stale') {
+        return null;
+      }
+      if ((input.status === 'failed' || input.status === 'timed_out') && taskContext) {
+        const projected = await recordChannelCollaborationStatus({
+          repositories,
+          clock,
+          status: {
+            kind: 'invocation_failed',
+            managementRunId: invocation.managementRunId,
+            taskId: taskContext.taskId,
+            agentId: invocation.intent.targetAgentId,
+            invocationId: invocation.id,
+            reasonCode: input.errorCode ?? 'INVOCATION_FAILED',
+          },
+        });
+        return projected?.created ? projected.message : null;
+      }
+      return null;
     }
-    return;
+    if (!input.deliveryMessageId || !taskContext) return null;
+    const projected = await completeChannelCollaborationSubtask({
+      repositories,
+      clock,
+      ids,
+      completion: {
+        managementRunId: invocation.managementRunId,
+        taskId: taskContext.taskId,
+        taskRevision: taskContext.taskRevision,
+        taskAttempt: taskContext.taskAttempt,
+        claimLeaseId: taskContext.claimLeaseId,
+        invocationId: invocation.id,
+        agentId: invocation.intent.targetAgentId,
+        deliveryMessageId: input.deliveryMessageId,
+        summary: input.result?.body ?? 'Agent 已完成频道协作子任务',
+      },
+    });
+    return projected.summaryCreated ? projected.summaryMessage : null;
   }
   await kernel.recordInvocationTerminal({
     managementRunId: invocation.managementRunId,
@@ -16184,6 +16537,7 @@ async function recordManagedDispatchTerminal(
     ...(input.actorId ? { actorId: input.actorId } : {}),
     ...(input.errorCode ? { errorCode: input.errorCode } : {}),
   });
+  return null;
 }
 
 async function submitRootDeliveryFromHandoff(
@@ -16336,7 +16690,7 @@ function projectReferenceRequestFingerprint(
   input: Pick<
     SendMessageInput,
     'userId' | 'teamId' | 'channelId' | 'messageId' | 'threadId' | 'body'
-    | 'asTask' | 'artifactIds' | 'meta' | 'selections'
+    | 'asTask' | 'collaborationTask' | 'artifactIds' | 'meta' | 'selections'
   >,
 ): string {
   return createHash('sha256').update(stableSerialize({
@@ -16347,6 +16701,7 @@ function projectReferenceRequestFingerprint(
     threadId: input.threadId ?? null,
     body: input.body,
     asTask: input.asTask === true,
+    collaborationTask: input.collaborationTask ?? null,
     artifactIds: input.artifactIds ?? [],
     meta: input.meta ?? null,
     selections: input.selections ?? [],
@@ -16357,7 +16712,7 @@ function legacyProjectReferenceRequestFingerprint(
   input: Pick<
     SendMessageInput,
     'userId' | 'teamId' | 'channelId' | 'messageId' | 'threadId' | 'body'
-    | 'asTask' | 'artifactIds' | 'meta' | 'selections'
+    | 'asTask' | 'collaborationTask' | 'artifactIds' | 'meta' | 'selections'
   >,
 ): string {
   return createHash('sha256').update(JSON.stringify({
@@ -16368,6 +16723,7 @@ function legacyProjectReferenceRequestFingerprint(
     threadId: input.threadId ?? null,
     body: input.body,
     asTask: input.asTask === true,
+    collaborationTask: input.collaborationTask ?? null,
     artifactIds: input.artifactIds ?? [],
     meta: input.meta ?? null,
     selections: input.selections ?? [],
@@ -16379,7 +16735,7 @@ function projectReferenceRequestFingerprintMatches(
   input: Pick<
     SendMessageInput,
     'userId' | 'teamId' | 'channelId' | 'messageId' | 'threadId' | 'body'
-    | 'asTask' | 'artifactIds' | 'meta' | 'selections'
+    | 'asTask' | 'collaborationTask' | 'artifactIds' | 'meta' | 'selections'
   >,
 ): boolean {
   return storedFingerprint === projectReferenceRequestFingerprint(input)

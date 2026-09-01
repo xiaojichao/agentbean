@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { CHANNEL_COLLABORATION_TASK_TAG } from '../../../../../packages/contracts/src/index.js';
 import type {
   TaskClaimAcquireAckV1,
   TaskClaimAcquireV1,
@@ -167,6 +168,22 @@ export interface ProjectStageClaimGranted {
   readonly objective: string;
 }
 
+export type TaskClaimGranted = ProjectStageClaimGranted;
+
+export interface TaskOfferResponseRecorded {
+  readonly taskId: string;
+  readonly response: TaskOfferResponseRecordDto;
+}
+
+export interface TaskAllocationBlockedRecorded {
+  readonly taskId: string;
+  readonly agentId: string;
+}
+
+export interface TaskClaimDeviceBinding {
+  readonly deviceId: string;
+}
+
 export interface TaskClaimBroker {
   resolveCandidates(taskId: string, options?: {
     readonly dependencyTaskIds?: readonly string[];
@@ -180,7 +197,7 @@ export interface TaskClaimBroker {
     readonly allowedAgentIds?: readonly string[];
     readonly projectStageAuto?: boolean;
   }): Promise<readonly TaskClaimOfferV1[]>;
-  acquire(input: TaskClaimAcquireV1): Promise<TaskClaimAcquireAckV1>;
+  acquire(input: TaskClaimAcquireV1, binding?: TaskClaimDeviceBinding): Promise<TaskClaimAcquireAckV1>;
   renew(input: TaskClaimRenewV1): Promise<TaskClaimRenewAckV1>;
   release(input: TaskClaimReleaseV1): Promise<TaskClaimReleaseAckV1>;
   /**
@@ -189,6 +206,14 @@ export interface TaskClaimBroker {
    */
   relinquish(input: TaskClaimRelinquishV1): Promise<TaskClaimRelinquishAckV1>;
   expireClaims(): Promise<readonly TaskClaimExpiredV1[]>;
+  /**
+   * 已过期频道协作 Claim 是否仍满足一次有界自动 re-offer。只读权威 Task/Run/Lease/Offer，
+   * 不创建 Offer；Host scheduler 据此决定是否调用 prepareOffers。
+   */
+  canAutoReofferExpiredChannelCollaborationClaim(
+    expired: TaskClaimExpiredV1,
+    options?: { readonly maxAutomaticReoffers?: number },
+  ): Promise<boolean>;
   disconnectDevice(deviceId: string): void;
   reconnectDevice(deviceId: string): void;
   /** #712 切片 C-1：持久化一个结构化 Task Offer（PI → Agent，状态 open）。 */
@@ -200,11 +225,23 @@ export interface TaskClaimBroker {
    */
   publishOffer(input: TaskOfferPublishInput): Promise<TaskOfferRecord>;
   /** #712 切片 C-1：处理 Agent 对 Offer 的显式响应（AC#2/AC#4/AC#5/AC#6）。 */
-  respondToOffer(input: TaskOfferRespondInput): Promise<TaskOfferRespondResult>;
+  respondToOffer(input: TaskOfferRespondInput, binding?: TaskClaimDeviceBinding): Promise<TaskOfferRespondResult>;
   /** #829：自动阶段 Offer 形成 Claim 后，接通 Server 内部 Invocation 创建。 */
   bindProjectStageClaimGranted(
     handler: (claim: ProjectStageClaimGranted) => Promise<void>,
   ): void;
+  /** 普通 targeted subtask claim 成立后，best-effort 启动既有 Invocation/Dispatch。 */
+  bindTaskClaimGranted(handler: (claim: TaskClaimGranted) => Promise<void>): void;
+  /** Offer 的非接受响应已持久化后，best-effort 投影可见状态。 */
+  bindTaskOfferResponseRecorded(
+    handler: (record: TaskOfferResponseRecorded) => Promise<void>,
+  ): void;
+  /** targeted Offer 无法发布后，best-effort 投影可见 allocation_blocked 状态。 */
+  bindTaskAllocationBlockedRecorded(
+    handler: (record: TaskAllocationBlockedRecorded) => Promise<void>,
+  ): void;
+  /** Claim 过期及 Task reopen 已提交后，best-effort 投影可见状态。 */
+  bindTaskClaimExpired(handler: (expired: TaskClaimExpiredV1) => Promise<void>): void;
 }
 
 export interface CreateTaskClaimBrokerInput {
@@ -236,6 +273,12 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
   const taskTails = new Map<string, Promise<void>>();
   let onProjectStageClaimGranted:
     ((claim: ProjectStageClaimGranted) => Promise<void>) | undefined;
+  let onTaskClaimGranted: ((claim: TaskClaimGranted) => Promise<void>) | undefined;
+  let onTaskOfferResponseRecorded:
+    ((record: TaskOfferResponseRecorded) => Promise<void>) | undefined;
+  let onTaskAllocationBlockedRecorded:
+    ((record: TaskAllocationBlockedRecorded) => Promise<void>) | undefined;
+  let onTaskClaimExpired: ((expired: TaskClaimExpiredV1) => Promise<void>) | undefined;
 
   // #710：候选硬过滤优先用 Team Agent Exposure 公开 capability（active 能力减去 Team restriction）。
   // 过渡兼容（计划 §8：旧代码先降为兼容层，切片 E 强制前保留）：无 active manifest 时回退到
@@ -306,7 +349,10 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       const missingCapabilities = coordination.requiredCapabilities
         .filter((capability) => !explicitCapabilities.has(capability.toLowerCase()));
       if (missingCapabilities.length > 0) diagnostics.push('CAPABILITY_MISSING');
-      if (task.channelId && (!taskChannel || !channelAllowsAgent(taskChannel, agent.id))) {
+      const taskChannelAllowsAgent = task.tags.includes(CHANNEL_COLLABORATION_TASK_TAG)
+        ? Boolean(taskChannel?.agentMemberIds.includes(agent.id))
+        : channelAllowsAgent(taskChannel, agent.id);
+      if (task.channelId && !taskChannelAllowsAgent) {
         diagnostics.push('TASK_CHANNEL_FORBIDDEN');
       }
       if (dependencyTasks.some((dependency) => !dependency || dependency.status !== 'done')) {
@@ -441,6 +487,36 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       if (isTargeted) {
         const decision = await resolveTargetedOfferKind(task, coordination, resolution);
         if (decision.kind === 'normal') {
+          const persisted = (await input.repositories.taskCoordination.offers.listByTask(taskId))
+            .find((offer) => offer.agentId === decision.agentId
+              && offer.status === 'open'
+              && offer.taskRevision === resolution.taskRevision
+              && offer.taskAttempt === resolution.taskAttempt
+              && offer.offerExpiresAt > now);
+          if (persisted) {
+            const stored: StoredOffer = {
+              schemaVersion: 1,
+              offerId: persisted.id,
+              deviceId: decision.deviceId,
+              taskId,
+              taskRevision: resolution.taskRevision,
+              taskAttempt: resolution.taskAttempt,
+              agentId: decision.agentId,
+              requiredCapabilities: [...coordination.requiredCapabilities],
+              offerExpiresAt: persisted.offerExpiresAt,
+              manifestRevision: persisted.manifestRevision,
+              ancestorAgentIds: resolution.ancestorAgentIds,
+              projectStageAuto: persisted.objective.constraints.includes(PROJECT_STAGE_AUTO_CONSTRAINT),
+            };
+            offers.set(stored.offerId, stored);
+            const {
+              ancestorAgentIds: _ancestorAgentIds,
+              projectStageAuto: _projectStageAuto,
+              manifestRevision: _manifestRevision,
+              ...wireOffer
+            } = stored;
+            return [wireOffer];
+          }
           const offerId = input.ids.nextId();
           let manifestRevision = 0;
           try {
@@ -478,6 +554,44 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             });
           } catch (error) {
             if (!(error instanceof Error && error.message === 'TASK_CLAIM_REQUIREMENT_CONFIRMATION_INVALID')) throw error;
+          }
+        }
+        if (decision.kind === 'no_offer' && task.tags.includes(CHANNEL_COLLABORATION_TASK_TAG)) {
+          const suggestion = desensitizeAllocationSuggestion({
+            cause: 'no_qualified_candidate',
+            candidates: resolution.candidates.map((item) => ({
+              hasRequiredCapabilities: !item.diagnosticCodes.includes('CAPABILITY_MISSING'),
+              channelForbidden: item.diagnosticCodes.includes('TASK_CHANNEL_FORBIDDEN'),
+            })),
+          });
+          await input.repositories.taskCoordinationUnitOfWork.run(async (repositories) => {
+            try {
+              await appendTaskClaimEvent(repositories.management, {
+                managementRunId: coordination.managementRunId,
+                type: 'allocation-blocked',
+                actorKind: 'system',
+                actorId: 'system',
+                idempotencyKey: `allocation-blocked:${taskId}:${resolution.taskRevision}`,
+                payload: {
+                  taskId,
+                  taskRevision: resolution.taskRevision,
+                  cause: 'no_qualified_candidate',
+                  suggestionKind: suggestion.kind,
+                  ...(suggestion.kind === 'escalate_external_capability'
+                    ? { externalAgentCount: suggestion.externalAgentCount }
+                    : {}),
+                },
+              }, input.clock.now(), input.ids);
+            } catch (error) {
+              if (!(error instanceof ManagementConflictError
+                && error.code === 'MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT')) throw error;
+            }
+          });
+          if (task.assigneeId) {
+            await notifyTaskAllocationBlockedRecorded(onTaskAllocationBlockedRecorded, {
+              taskId: task.id,
+              agentId: task.assigneeId,
+            });
           }
         }
         // no_offer（hard_gate_failed / explicit_unsatisfied / target_not_candidate）→ 不发 Offer（allocation_blocked）。
@@ -593,7 +707,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         ...offer
       }) => offer);
     },
-    async acquire(payload) {
+    async acquire(payload, binding) {
       let offer = offers.get(payload.offerId);
       // #948-B ADR-0064：Map miss → 持久化兜底（kernel UoW 内原子创建的 offer 在 prepareOffers
       // 填充 Map 之前或之后都可能到达——hydrate 前需从持久化读，hydrate 后直接命中 Map）。
@@ -628,6 +742,9 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         }
       }
       if (!offer || offer.agentId !== payload.agentId) return failure('INVALID_REQUEST', 'TASK_CLAIM_OFFER_INVALID', false);
+      if (binding && offer.deviceId !== binding.deviceId) {
+        return failure('INVALID_REQUEST', 'TASK_CLAIM_DEVICE_MISMATCH', false);
+      }
       if (input.clock.now() >= offer.offerExpiresAt) {
         offers.delete(offer.offerId);
         return failure('UNAVAILABLE', 'TASK_CLAIM_OFFER_EXPIRED', true);
@@ -823,6 +940,16 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               targetAgentId: result.lease.agentId,
               objective: result.task.description ?? result.task.title,
             });
+          } else {
+            await notifyTaskClaimGranted(onTaskClaimGranted, {
+              managementRunId: result.coordination.managementRunId,
+              taskId: result.task.id,
+              taskRevision: result.task.revision,
+              taskAttempt: result.coordination.attempt,
+              claimLeaseId: result.lease.id,
+              targetAgentId: result.lease.agentId,
+              objective: result.task.description ?? result.task.title,
+            });
           }
           return response;
         } catch (error) {
@@ -939,6 +1066,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       });
     },
     expireClaims,
+    canAutoReofferExpiredChannelCollaborationClaim,
     disconnectDevice(deviceId) {
       disconnectedDevices.add(deviceId);
       for (const [offerId, offer] of offers) if (offer.deviceId === deviceId) offers.delete(offerId);
@@ -1027,11 +1155,21 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       };
       return input.repositories.taskCoordination.offers.create(record);
     },
-    async respondToOffer(payload) {
+    async respondToOffer(payload, binding) {
       const offerStore = input.repositories.taskCoordination.offers;
       const offer = await offerStore.getById(payload.offerId);
       if (!offer || offer.agentId !== payload.agentId) {
         return { kind: 'not_accepted', reason: 'offer_invalid', diagnosticCode: 'TASK_CLAIM_OFFER_INVALID' };
+      }
+      if (binding) {
+        const agent = await input.repositories.agents.getById(offer.agentId);
+        if (!agent?.deviceId || agent.deviceId !== binding.deviceId) {
+          return {
+            kind: 'not_accepted',
+            reason: 'offer_invalid',
+            diagnosticCode: 'TASK_CLAIM_DEVICE_MISMATCH',
+          };
+        }
       }
       const now = input.clock.now();
       const validity = await computeOfferValidity(input.repositories, offer, now);
@@ -1067,9 +1205,14 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
           id: offer.id, expectedStatus: 'open', status: payload.kind, response, now,
         });
         // decline 路径无「并发赢家」语义；CAS 失败=offer 已被他者置终态 → not_accepted。
-        return updated
-          ? { kind: 'response_recorded', status: payload.kind }
-          : { kind: 'not_accepted', reason: 'offer_invalid', diagnosticCode: 'TASK_CLAIM_OFFER_NOT_OPEN' };
+        if (!updated) {
+          return { kind: 'not_accepted', reason: 'offer_invalid', diagnosticCode: 'TASK_CLAIM_OFFER_NOT_OPEN' };
+        }
+        await notifyTaskOfferResponseRecorded(onTaskOfferResponseRecorded, {
+          taskId: offer.taskId,
+          response,
+        });
+        return { kind: 'response_recorded', status: payload.kind };
       }
 
       // accepted
@@ -1347,6 +1490,16 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               targetAgentId: result.lease.agentId,
               objective: result.task.description ?? result.task.title,
             });
+          } else {
+            await notifyTaskClaimGranted(onTaskClaimGranted, {
+              managementRunId: result.coordination.managementRunId,
+              taskId: result.task.id,
+              taskRevision: result.task.revision,
+              taskAttempt: result.coordination.attempt,
+              claimLeaseId: result.lease.id,
+              targetAgentId: result.lease.agentId,
+              objective: result.task.description ?? result.task.title,
+            });
           }
           return response;
         } catch (error) {
@@ -1365,12 +1518,24 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
     bindProjectStageClaimGranted(handler) {
       onProjectStageClaimGranted = handler;
     },
+    bindTaskClaimGranted(handler) {
+      onTaskClaimGranted = handler;
+    },
+    bindTaskOfferResponseRecorded(handler) {
+      onTaskOfferResponseRecorded = handler;
+    },
+    bindTaskAllocationBlockedRecorded(handler) {
+      onTaskAllocationBlockedRecorded = handler;
+    },
+    bindTaskClaimExpired(handler) {
+      onTaskClaimExpired = handler;
+    },
   };
 
   async function expireClaims(): Promise<readonly TaskClaimExpiredV1[]> {
     const now = input.clock.now();
     for (const [offerId, offer] of offers) if (now >= offer.offerExpiresAt) offers.delete(offerId);
-    return input.repositories.taskCoordinationUnitOfWork.run(async (repositories) => {
+    const expired = await input.repositories.taskCoordinationUnitOfWork.run(async (repositories) => {
       const expired: TaskClaimExpiredV1[] = [];
       for (const lease of await repositories.coordination.claimLeases.listActive()) {
         if (now < lease.expiresAt) continue;
@@ -1418,6 +1583,70 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       }
       return expired;
     });
+    for (const claim of expired) {
+      await notifyTaskClaimExpired(onTaskClaimExpired, claim);
+    }
+    return expired;
+  }
+
+  async function canAutoReofferExpiredChannelCollaborationClaim(
+    expired: TaskClaimExpiredV1,
+    options?: { readonly maxAutomaticReoffers?: number },
+  ): Promise<boolean> {
+    const maxAutomaticReoffers = options?.maxAutomaticReoffers ?? 1;
+    if (!Number.isInteger(maxAutomaticReoffers) || maxAutomaticReoffers <= 0) return false;
+    const [task, coordination, lease] = await Promise.all([
+      input.repositories.tasks.getById(expired.taskId),
+      input.repositories.taskCoordination.coordinations.getByTaskId(expired.taskId),
+      input.repositories.taskCoordination.claimLeases.getById(expired.claimLeaseId),
+    ]);
+    if (!task?.tags.includes(CHANNEL_COLLABORATION_TASK_TAG)
+      || task.status !== 'todo'
+      || task.assigneeId !== expired.agentId
+      || !coordination
+      || coordination.nodeKind !== 'subtask'
+      || !lease
+      || lease.status !== 'expired'
+      || lease.taskId !== task.id
+      || lease.agentId !== expired.agentId
+      || lease.taskRevision !== task.revision
+      || lease.taskRevision !== coordination.taskRevision
+      || lease.taskAttempt !== coordination.attempt) {
+      return false;
+    }
+    const [run, latest, offers, events] = await Promise.all([
+      input.repositories.management.runs.getById(coordination.managementRunId),
+      input.repositories.taskCoordination.claimLeases.getLatest({
+        taskId: task.id,
+        taskRevision: task.revision,
+        taskAttempt: coordination.attempt,
+      }),
+      input.repositories.taskCoordination.offers.listByTask(task.id),
+      input.repositories.management.events.list(coordination.managementRunId),
+    ]);
+    // 兄弟 Task 失败可能让 Run 等待 Agent/人类，但不应阻断仍为 todo 的独立频道协作子 Task 恢复。
+    // in_review 与终态保持 fail-closed，避免已进入汇总/收口后重新启动执行。
+    if (!run || !['queued', 'running', 'waiting_for_agents', 'waiting_for_user', 'recovering'].includes(run.status)
+      || latest?.id !== lease.id || latest.status !== 'expired') {
+      return false;
+    }
+    const currentRoundOffers = offers.filter((offer) =>
+      offer.agentId === expired.agentId
+      && offer.taskRevision === task.revision
+      && offer.taskAttempt === coordination.attempt);
+    if (currentRoundOffers.some((offer) =>
+      offer.status === 'open' && offer.offerExpiresAt > input.clock.now())) {
+      return false;
+    }
+    const acceptedOffers = currentRoundOffers.filter((offer) => offer.status === 'accepted').length;
+    // legacy Agent 没有 active manifest 时 Offer 只存在于 broker 内存，不能仅靠持久化 Offer 计数。
+    // claim-invalidated 是同事务提交的 durable fence；两者取较大值，既覆盖 legacy，也避免重启后失忆。
+    const expiredClaims = events.filter(({ event }) =>
+      event.type === 'claim-invalidated'
+      && event.payload.taskId === task.id
+      && event.payload.reasonCode === 'TASK_CLAIM_EXPIRED').length;
+    const automaticReoffersUsed = Math.max(0, Math.max(acceptedOffers, expiredClaims) - 1);
+    return automaticReoffersUsed < maxAutomaticReoffers;
   }
 }
 
@@ -1430,6 +1659,54 @@ async function notifyProjectStageClaimGranted(
     await handler(claim);
   } catch {
     // Claim 已提交，不能因后续派发失败伪装成 Agent 接受失败；后续重算仍会看到待创建 Invocation。
+  }
+}
+
+async function notifyTaskClaimGranted(
+  handler: ((claim: TaskClaimGranted) => Promise<void>) | undefined,
+  claim: TaskClaimGranted,
+): Promise<void> {
+  if (!handler) return;
+  try {
+    await handler(claim);
+  } catch {
+    // Claim 已提交；Invocation 可由后续恢复重建，不能回写成 acceptance 失败。
+  }
+}
+
+async function notifyTaskOfferResponseRecorded(
+  handler: ((record: TaskOfferResponseRecorded) => Promise<void>) | undefined,
+  record: TaskOfferResponseRecorded,
+): Promise<void> {
+  if (!handler) return;
+  try {
+    await handler(record);
+  } catch {
+    // Offer response 已提交；可见状态投影失败不能把持久化响应伪装成未接受。
+  }
+}
+
+async function notifyTaskAllocationBlockedRecorded(
+  handler: ((record: TaskAllocationBlockedRecorded) => Promise<void>) | undefined,
+  record: TaskAllocationBlockedRecorded,
+): Promise<void> {
+  if (!handler) return;
+  try {
+    await handler(record);
+  } catch {
+    // allocation-blocked 事件已提交；可见状态投影失败不能回滚权威分配事实。
+  }
+}
+
+async function notifyTaskClaimExpired(
+  handler: ((expired: TaskClaimExpiredV1) => Promise<void>) | undefined,
+  expired: TaskClaimExpiredV1,
+): Promise<void> {
+  if (!handler) return;
+  try {
+    await handler(expired);
+  } catch {
+    // Lease 过期与 Task reopen 已提交；投影可由后续重算恢复，不能回滚权威事实。
   }
 }
 

@@ -146,6 +146,57 @@ describe('AgentBean Next browser smoke script', () => {
     expect(cliSource).not.toContain('await runAgentBeanNextBrowserSmoke({');
   });
 
+  test('频道协作聚焦 browser gate 覆盖真实开关、三 Agent Claim、PI 汇总与恢复指标', () => {
+    const source = readFileSync(new URL('../../../scripts/smoke-agentbean-next-browser.mjs', import.meta.url), 'utf8');
+    const start = source.indexOf('export async function exerciseWebUiChannelCollaborationSmoke');
+    const end = source.indexOf('export function summarizeBrowserSmoke', start);
+    const smoke = source.slice(start, end);
+    const runner = readFileSync(new URL('../../../scripts/smoke-channel-collaboration-browser.mjs', import.meta.url), 'utf8');
+
+    expect(start).toBeGreaterThan(-1);
+    expect(smoke).toContain('chat-channel-collaboration-toggle');
+    expect(smoke).toContain('AGENT_EVENTS.taskClaim.offer');
+    expect(smoke).toContain('AGENT_EVENTS.taskClaim.respond');
+    expect(smoke).toContain('Device ${daemon.deviceId} received another Agent');
+    expect(smoke).toContain('PI 汇总：');
+    expect(smoke).toContain('chat-thread-panel');
+    expect(source).toContain('channel-collaboration-recovery-metrics');
+    expect(runner).toContain('runAgentBeanChannelCollaborationBrowserSmoke');
+  });
+
+  test('频道协作恢复 browser gate 覆盖拒绝、执行失败、Claim 过期与有界重派', () => {
+    const source = readFileSync(new URL('../../../scripts/smoke-agentbean-next-browser.mjs', import.meta.url), 'utf8');
+    const start = source.indexOf('export async function exerciseWebUiChannelCollaborationRecoverySmoke');
+    const end = source.indexOf('export function summarizeBrowserSmoke', start);
+    const smoke = source.slice(start, end);
+    const runner = readFileSync(new URL('../../../scripts/smoke-channel-collaboration-recovery-browser.mjs', import.meta.url), 'utf8');
+
+    expect(start).toBeGreaterThan(-1);
+    expect(smoke).toContain("kind: 'rejected'");
+    expect(smoke).toContain('AGENT_EVENTS.dispatch.error');
+    expect(smoke).toContain('expired Claim to be reoffered once');
+    expect(smoke).toContain("summaryVisible: text.includes('PI 汇总：')");
+    expect(source).toContain('channel-collaboration-recovery-counts');
+    expect(runner).toContain('runAgentBeanChannelCollaborationRecoveryBrowserSmoke');
+  });
+
+  test('频道协作重启 browser gate 复用 SQLite 身份并核对消息与重派幂等', () => {
+    const source = readFileSync(new URL('../../../scripts/smoke-agentbean-next-browser.mjs', import.meta.url), 'utf8');
+    const start = source.indexOf('export async function exerciseWebUiChannelCollaborationRestartSmoke');
+    const end = source.indexOf('export function summarizeBrowserSmoke', start);
+    const smoke = source.slice(start, end);
+    const runner = readFileSync(new URL('../../../scripts/smoke-channel-collaboration-restart-browser.mjs', import.meta.url), 'utf8');
+
+    expect(start).toBeGreaterThan(-1);
+    expect(smoke).toContain('await restartServer()');
+    expect(smoke).toContain('sameDevice: reconnectedDaemon.deviceId === originalDaemon.deviceId');
+    expect(smoke).toContain('claimMessageCount: count');
+    expect(smoke).toContain('expiredMessageCount: count');
+    expect(source).toContain('channel-collaboration-restart-reoffer-once');
+    expect(source).toContain('channel-collaboration-restart-recovery-counts');
+    expect(runner).toContain('runAgentBeanChannelCollaborationRestartBrowserSmoke');
+  });
+
   test('频道 Tasks browser smoke 覆盖统一项目工作台（空泳道）、深链回落与设置入口', () => {
     const source = readFileSync(new URL('../../../scripts/smoke-agentbean-next-browser.mjs', import.meta.url), 'utf8');
     const start = source.indexOf('export async function exerciseWebUiChannelNoProjectFactsSmoke');

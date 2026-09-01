@@ -114,6 +114,40 @@ describe('PI Manager 系统消息可见性（ADR-0066）', () => {
     }))).toBe(false);
   });
 
+  test('保留频道协作 PI 汇总可见（根任务已进入待验收）', () => {
+    expect(shouldHideSystemMessage(message({
+      id: 'collaboration-summary-1',
+      senderId: 'system',
+      threadId: 'root-1',
+      body: 'PI 汇总：2 个频道 Agent 均已完成定向子任务，等待你验收。',
+      meta: {
+        kind: 'channel-collaboration-summary',
+        managementRunId: 'run-1',
+        taskId: 'task-1',
+        contributingInvocationIds: ['inv-1', 'inv-2'],
+      },
+      metaJson: null,
+    }))).toBe(false);
+  });
+
+  test('保留频道协作异常状态可见（拒绝、过期、失败需要恢复）', () => {
+    expect(shouldHideSystemMessage(message({
+      id: 'collaboration-status-1',
+      senderId: 'system',
+      threadId: 'root-1',
+      body: 'Alpha 执行失败，子任务已回到待处理。',
+      meta: {
+        kind: 'channel-collaboration-status',
+        status: 'invocation_failed',
+        managementRunId: 'run-1',
+        taskId: 'task-1',
+        agentId: 'agent-1',
+        recoveryAction: 'retry-or-human',
+      },
+      metaJson: null,
+    }))).toBe(false);
+  });
+
   test('被隐藏的 PI 系统消息不计入 Thread 回复数（从 visibleMessages 派生）', () => {
     const root = message({
       id: 'root-1', senderKind: 'human', senderId: 'user-1',
