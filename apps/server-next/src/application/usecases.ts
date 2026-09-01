@@ -2295,6 +2295,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           revision: route.analysis.messageRevision,
         },
       };
+      const revalidateTargetRuntimeConnection = () => {
+        if (targetDeviceIds.some((deviceId) => input.isDeviceRuntimeDisconnected?.(deviceId) === true)) {
+          throw new Error('MESSAGE_ROUTE_TARGET_UNAVAILABLE');
+        }
+      };
       let promotion;
       if (route.intentSource === 'pi') {
         const stopped = await assertTeamPiCommandsAllowed(route.analysis.teamId);
@@ -2318,9 +2323,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             if (currentRollout) {
               throw new Error('MESSAGE_ROUTE_SEMANTIC_ROLLOUT_FRESHNESS_CONFLICT');
             }
-            if (targetDeviceIds.some((deviceId) => input.isDeviceRuntimeDisconnected?.(deviceId) === true)) {
-              throw new Error('MESSAGE_ROUTE_TARGET_UNAVAILABLE');
-            }
+            revalidateTargetRuntimeConnection();
           },
           onAppliedInTransaction: hooks.onAppliedInTransaction,
           onConvergedInTransaction: hooks.onConvergedInTransaction,
@@ -2332,8 +2335,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           unitOfWork: repositories.taskCoordinationUnitOfWork,
           clock,
           ids,
-          onAppliedInTransaction: hooks.onAppliedInTransaction,
-          onConvergedInTransaction: hooks.onConvergedInTransaction,
+          onAppliedInTransaction: async (context) => {
+            revalidateTargetRuntimeConnection();
+            await hooks.onAppliedInTransaction(context);
+          },
+          onConvergedInTransaction: async (context) => {
+            revalidateTargetRuntimeConnection();
+            await hooks.onConvergedInTransaction(context);
+          },
         }).promoteToTask({
           schemaVersion: 1,
           commandName: 'promote-to-task',

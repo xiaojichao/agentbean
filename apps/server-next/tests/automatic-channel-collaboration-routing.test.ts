@@ -130,9 +130,12 @@ describe('automatic channel collaboration routing (#1270)', () => {
     const ids = { nextId: () => `auto-route-${++id}` };
     const clock = { now: () => ++now };
     const broker = createTaskClaimBroker({ repositories, ids, clock, offerTtlMs: 60_000 });
+    let disconnectOnPromotionRevalidation = false;
+    let runtimeDisconnectChecks = 0;
     const app = createServerNextUseCases({
       repositories, ids, clock,
-      isDeviceRuntimeDisconnected: broker.isDeviceDisconnected,
+      isDeviceRuntimeDisconnected: (deviceId) => broker.isDeviceDisconnected(deviceId)
+        || (disconnectOnPromotionRevalidation && ++runtimeDisconnectChecks > 3),
       onChannelCollaborationTasksPublished: async (taskIds) => {
         let offered = 0;
         for (const taskId of taskIds) offered += (await broker.prepareOffers(taskId)).length;
@@ -188,6 +191,22 @@ describe('automatic channel collaboration routing (#1270)', () => {
     });
     expect((await app.listTasks({ userId, teamId, channelId }))).toMatchObject({ ok: true, tasks: [] });
     broker.reconnectDevice(hello.device.id);
+
+    disconnectOnPromotionRevalidation = true;
+    runtimeDisconnectChecks = 0;
+    const disconnectRaceFallback = await app.sendMessage({
+      userId, teamId, channelId, clientMessageId: 'natural-collaboration-disconnect-race',
+      body: '各位，请分别介绍一下自己吧',
+    });
+    expect(disconnectRaceFallback.ok).toBe(true);
+    if (!disconnectRaceFallback.ok) return;
+    await waitForRouteResolution(repositories, disconnectRaceFallback.message.id);
+    await expect(repositories.channelCoordinationUnitOfWork.run((tx) =>
+      tx.routes.getByMessageId(disconnectRaceFallback.message.id))).resolves.toMatchObject({
+      status: 'deferred', diagnosticCode: 'MESSAGE_ROUTE_TARGET_UNAVAILABLE', linkedTaskId: null,
+    });
+    expect((await app.listTasks({ userId, teamId, channelId }))).toMatchObject({ ok: true, tasks: [] });
+    disconnectOnPromotionRevalidation = false;
 
     const sent = await app.sendMessage({
       userId, teamId, channelId, clientMessageId: 'natural-collaboration',
