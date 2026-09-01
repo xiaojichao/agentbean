@@ -433,6 +433,7 @@ describe('channel collaboration task', () => {
     await expect(repositories.management.runs.getById(sent.collaborationTask.managementRunId!))
       .resolves.toMatchObject({ status: 'running' });
 
+    const alphaRunStartedAt = now;
     const alphaCompleted = await app.receiveDispatchResult({
       dispatchId: alphaDispatchId,
       agentId: alpha.id,
@@ -443,6 +444,11 @@ describe('channel collaboration task', () => {
         mimeType: 'text/markdown',
         sizeBytes: 12,
       }],
+      workspaceRun: {
+        status: 'succeeded',
+        startedAt: alphaRunStartedAt,
+        completedAt: alphaRunStartedAt,
+      },
     });
     expect(alphaCompleted).toMatchObject({
       ok: true,
@@ -453,6 +459,27 @@ describe('channel collaboration task', () => {
       },
     });
     await expect(repositories.tasks.getById(alphaTask.id)).resolves.toMatchObject({ status: 'done' });
+    await expect(app.receiveDispatchResult({
+      dispatchId: alphaDispatchId,
+      agentId: alpha.id,
+      body: '我是 Alpha，负责频道协作任务。',
+      artifacts: [{
+        id: 'alpha-inline-artifact',
+        filename: 'alpha-note.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 12,
+      }],
+      workspaceRun: {
+        publishId: 'alpha-late-publish',
+        status: 'succeeded',
+        startedAt: alphaRunStartedAt,
+        completedAt: alphaRunStartedAt,
+      },
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+      message: 'Accepted channel collaboration result cannot add an OutputPackage publish',
+    });
     await expect(repositories.tasks.getById(betaTask.id)).resolves.toMatchObject({ status: 'todo' });
     await expect(repositories.tasks.getById(sent.collaborationTask.rootTaskId)).resolves.toMatchObject({
       status: 'in_progress',

@@ -20,6 +20,7 @@ import {
 } from './message-tracer-handlers.js';
 import { createMessageTracerCommandDispatcher } from './message-tracer-dispatcher.js';
 import {
+  CHANNEL_COLLABORATION_TASK_TAG,
   parseMessageTracerCommandEnvelopeV1,
   parseChannelCollaborationTaskTriggerV1,
   type ChannelCollaborationTaskTriggerV1,
@@ -11640,6 +11641,20 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               return makeFailure('CONFLICT', 'Dispatch result does not match the first terminal report');
             }
             replayUsesPublishIdEnrichment = true;
+          }
+          if (replayUsesPublishIdEnrichment && replayAttempt) {
+            const replayInvocation = await repositories.management.invocations.getById(
+              replayAttempt.invocationId,
+            );
+            const replayTaskId = replayInvocation?.intent.taskContext?.taskId;
+            const replayTask = replayTaskId ? await repositories.tasks.getById(replayTaskId) : null;
+            if (replayTask?.tags.includes(CHANNEL_COLLABORATION_TASK_TAG)
+              && (replayTask.status === 'done' || replayTask.status === 'closed')) {
+              return makeFailure(
+                'CONFLICT',
+                'Accepted channel collaboration result cannot add an OutputPackage publish',
+              );
+            }
           }
           const replayStoredProposals = replayHandoff?.result?.collaborationProposals;
           if (!replayFingerprint && replayHandoff?.result && JSON.stringify(replayStoredProposals ?? [])
