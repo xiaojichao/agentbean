@@ -6,6 +6,7 @@
  * supersede 原子性由 AgentExposureUnitOfWork 保证：publish = supersedeActive(旧) + activate(新) 同事务。
  */
 import type {
+  AgentAutoAcceptPolicyDto,
   AgentExposureAvailabilityDto,
   AgentExposureCapabilityDto,
   AgentExposureConstraintDto,
@@ -14,6 +15,8 @@ import type {
   ID,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
+
+export type AgentAutoAcceptPolicyRecord = AgentAutoAcceptPolicyDto;
 
 export interface AgentExposureManifestRecord {
   readonly id: ID;
@@ -103,6 +106,26 @@ export interface AgentExposureRepositories {
       readonly now: UnixMs;
     }): Promise<AgentExposureRestrictionRecord>;
     getByTeamAgent(teamId: ID, agentId: ID): Promise<AgentExposureRestrictionRecord | null>;
+  };
+  readonly autoAcceptPolicies: {
+    upsert(input: {
+      readonly id: ID;
+      readonly teamId: ID;
+      readonly agentId: ID;
+      readonly manifestId: ID;
+      readonly manifestRevision: number;
+      readonly enabled: boolean;
+      readonly allowedCapabilityIds: readonly ID[];
+      readonly allowUnspecifiedCapabilities: boolean;
+      readonly allowedRiskLevels: AgentAutoAcceptPolicyDto['allowedRiskLevels'];
+      readonly allowFrozenProjectInputs: boolean;
+      readonly requireCompletePreview: boolean;
+      readonly maxActiveClaims: number;
+      readonly validUntil: UnixMs | null;
+      readonly updatedBy: ID;
+      readonly now: UnixMs;
+    }): Promise<AgentAutoAcceptPolicyRecord>;
+    getByTeamAgent(teamId: ID, agentId: ID): Promise<AgentAutoAcceptPolicyRecord | null>;
   };
 }
 

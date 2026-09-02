@@ -25,6 +25,7 @@ import type {
 } from './channel-coordination-unit-of-work.js';
 import type { CommandReceiptRecord } from './message-tracer-repositories.js';
 import type { MessageRecord } from './repositories.js';
+import { shouldCreateMessageRouteAnalysis } from '../../../../packages/domain/src/index.js';
 
 // #921 切片 C：Message tracer command handler（send-message）。
 // 这是与 usecases.ts sendMessage 平行的 command 路径：以具名 command + envelope 经 coordination UoW
@@ -319,7 +320,35 @@ export function createSendMessageCommandHandler(deps: SendMessageCommandHandlerD
         createdAt: now,
       });
 
-      // 不调用 tx.jobs.create —— 与 usecases.ts modern 路径的核心区别（ADR-0069 场景 1）。
+      if (shouldCreateMessageRouteAnalysis({
+        senderKind: input.senderKind,
+        channelKind: channel.kind,
+        threadId,
+        hasAgentMention: input.mentions?.some((mention) => mention.kind === 'agent') ?? false,
+        hasTaskLinkage: input.taskContinuationSource !== undefined,
+      })) {
+        await tx.routes.create({
+          id: deps.ids.nextId(),
+          teamId,
+          channelId: input.channelId,
+          messageId,
+          messageRevision: 1,
+          status: 'pending',
+          attempt: 0,
+          nextRetryAt: null,
+          routeKind: null,
+          intentSource: null,
+          riskLevel: null,
+          targetAgentIds: [],
+          requiredCapabilityIds: [],
+          linkedTaskId: null,
+          diagnosticCode: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
+      // 不调用 tx.jobs.create；#1270 用 routes 的可恢复状态替代 legacy coordination job dual-write。
 
       return buildResponse('send-message', 'applied', 'MESSAGE_APPLIED', 'none', {
         receipt,

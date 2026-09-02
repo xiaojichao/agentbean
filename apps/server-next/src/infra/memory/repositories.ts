@@ -398,6 +398,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             inbox: messageTracer.inbox,
             commandReceipts: messageTracer.commandReceipts,
             outbox: messageTracer.outbox,
+            routes: messageTracer.routes,
           });
         } catch (error) {
           messages.clear();
@@ -445,6 +446,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             workspaceRuns: repositories.workspaceRuns,
             dispatches: repositories.dispatches,
             coordination: taskCoordination,
+            agentExposure: agentExposure.repositories,
             management: managementRepositories,
             channels: repositories.channels,
             promotion,

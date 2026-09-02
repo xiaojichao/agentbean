@@ -1,4 +1,5 @@
 import type { ID, UnixMs } from './common.js';
+import type { CapabilityEvidenceDto, CapabilityRegistryReferenceDto } from './capability.js';
 import type { ChannelCoordinationRiskLevel } from './pi-coordination.js';
 import type { FrozenProjectInputItemDto } from './frozen-project-input.js';
 
@@ -27,6 +28,13 @@ export type AgentExposureManifestStatus =
 export interface AgentExposureCapabilityDto {
   readonly name: string;
   readonly description: string;
+  /**
+   * 新 revision 由 Server 生成；optional 仅用于读取 #1270 之前的历史 Manifest。
+   * PI/Agent 输入中的同名字段会被忽略，不能自报 registry identity。
+   */
+  readonly registry?: CapabilityRegistryReferenceDto;
+  /** Server 根据扫描候选与 owner review 写入；不得包含 sourcePath 或原始 descriptor。 */
+  readonly evidence?: readonly CapabilityEvidenceDto[];
 }
 
 /**
@@ -179,6 +187,96 @@ export interface GetAgentExposureActiveInput {
 export interface GetAgentTeamCoverageInput {
   readonly userId: ID;
   readonly teamId: ID;
+}
+
+/**
+ * Server/PI 查询当前 Team 或 Channel 的限域 Capability Directory。
+ * userId 仅用于用户态读取授权；Server 内部 PI 调用不需要伪造用户身份。
+ */
+export interface GetAgentCapabilityDirectoryInput {
+  readonly teamId: ID;
+  readonly channelId?: ID;
+  readonly userId?: ID;
+}
+
+export interface AgentCapabilityDirectoryCapabilityDto {
+  readonly registry: CapabilityRegistryReferenceDto;
+  readonly name: string;
+  readonly description: string;
+  readonly evidence: readonly CapabilityEvidenceDto[];
+}
+
+export interface AgentCapabilityDirectoryEntryDto {
+  readonly agentId: ID;
+  readonly agentName: string;
+  readonly manifestId: ID;
+  readonly manifestRevision: number;
+  readonly available: boolean;
+  readonly capabilities: readonly AgentCapabilityDirectoryCapabilityDto[];
+  readonly skills: readonly AgentExposureSkillDto[];
+  /** 当前 manifest revision 上被 Team policy 收紧的公开名称，仅供解释，不进入匹配集合。 */
+  readonly disabledCapabilities: readonly string[];
+  readonly disabledSkills: readonly string[];
+  readonly constraints: readonly AgentExposureConstraintDto[];
+}
+
+export interface AgentCapabilityDirectoryDto {
+  readonly teamId: ID;
+  readonly channelId: ID | null;
+  readonly generatedAt: UnixMs;
+  readonly entries: readonly AgentCapabilityDirectoryEntryDto[];
+}
+
+/**
+ * Agent owner 对 Server 的机器接受预授权。它不是 Claim，也不赋予 PI 代表 Agent 接受任务的权限；
+ * Server 仅在 Offer 完整落库后按本策略复验，并继续走 accepted Offer → 原子 Claim/Lease。
+ * 策略绑定 active Manifest revision，能力公开范围变化后自动失效，避免旧授权漂移到新能力集。
+ */
+export interface AgentAutoAcceptPolicyDto {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly agentId: ID;
+  readonly manifestId: ID;
+  readonly manifestRevision: number;
+  /** 同 team+agent 下每次 owner 更新单调递增。 */
+  readonly revision: number;
+  readonly enabled: boolean;
+  /** 允许自动接受的 Registry capability id；不接受自由文本能力名。 */
+  readonly allowedCapabilityIds: readonly ID[];
+  /** 无 requiredCapabilities 的通用低风险工作是否可自动接受。 */
+  readonly allowUnspecifiedCapabilities: boolean;
+  readonly allowedRiskLevels: readonly TaskOfferRiskLevel[];
+  /** 冻结了项目文件/版本输入的 Offer 是否可自动接受。 */
+  readonly allowFrozenProjectInputs: boolean;
+  /** true 时 Offer 必须至少含一项结构化 deliverable。 */
+  readonly requireCompletePreview: boolean;
+  /** 同一 Agent 同时持有的 active Claim 上限。 */
+  readonly maxActiveClaims: number;
+  /** null = 长期有效；到期后 fail closed。 */
+  readonly validUntil: UnixMs | null;
+  readonly updatedBy: ID;
+  readonly createdAt: UnixMs;
+  readonly updatedAt: UnixMs;
+}
+
+export interface UpsertAgentAutoAcceptPolicyInput {
+  readonly userId: ID;
+  readonly teamId: ID;
+  readonly agentId: ID;
+  readonly enabled: boolean;
+  readonly allowedCapabilityIds: readonly ID[];
+  readonly allowUnspecifiedCapabilities?: boolean;
+  readonly allowedRiskLevels: readonly TaskOfferRiskLevel[];
+  readonly allowFrozenProjectInputs?: boolean;
+  readonly requireCompletePreview?: boolean;
+  readonly maxActiveClaims: number;
+  readonly validUntil?: UnixMs | null;
+}
+
+export interface GetAgentAutoAcceptPolicyInput {
+  readonly userId: ID;
+  readonly teamId: ID;
+  readonly agentId: ID;
 }
 
 export interface UpsertAgentExposureRestrictionInput {

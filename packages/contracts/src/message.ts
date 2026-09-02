@@ -92,6 +92,8 @@ export const HIDDEN_SYSTEM_MESSAGE_KINDS = [
   'task-created',
   'management-status',
   'artifact-version-revision',
+  // #1270 之后不再生成；保留过滤以免历史“PI 汇总”重新出现在讨论串。
+  'channel-collaboration-summary',
 ] as const;
 
 /**
@@ -101,7 +103,7 @@ export const HIDDEN_SYSTEM_MESSAGE_KINDS = [
  * ADR-0066：PI Manager 是内部编排运行时，不以成员/头像/聊天气泡/typing 出现。
  * 隐藏：task-created（已由 Task 卡片代表）、management-status（PI 运行时噪音）、
  * PI 协调输出（meta.coordination，由 channel-coordination-coordinator 落库）、
- * artifact-version-revision（文件包版本状态变化，真相在 Files/Task，不进聊天流；
+ * artifact-version-revision / 历史 channel-collaboration-summary（状态真相在 Files/Task，不进聊天流；
  * 含历史落库消息的防御过滤）。
  * 保留可见：management-question（PI 向用户提问，需回应）、management-delivery（交付物，需验收）。
  */

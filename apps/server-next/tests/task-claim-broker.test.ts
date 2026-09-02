@@ -912,6 +912,75 @@ describe('Task Offer publishOffer（#712 切片 C-2b-i：组合+持久化完整 
 });
 
 describe('Task Offer respondToOffer（#712 切片 C-1：显式接受事务接线）', () => {
+  test('#1270: owner 预授权命中后 prepareOffers 自动 accepted，并沿同一事务创建唯一 Claim', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    await harness.repositories.agentExposure.autoAcceptPolicies.upsert({
+      id: 'policy-agent-1', teamId: 'team-1', agentId: 'agent-1',
+      manifestId: 'manifest-agent-1', manifestRevision: 1, enabled: true,
+      allowedCapabilityIds: ['capability:v1:code-review'], allowUnspecifiedCapabilities: false,
+      allowedRiskLevels: ['low'], allowFrozenProjectInputs: false, requireCompletePreview: true,
+      maxActiveClaims: 1, validUntil: null, updatedBy: 'user-1', now: 10,
+    });
+
+    await expect(harness.broker.prepareOffers('task-a')).resolves.toEqual([]);
+    const [offer] = await harness.repositories.taskCoordination.offers.listByTask('task-a');
+    expect(offer).toMatchObject({ status: 'accepted', response: { kind: 'accepted' } });
+    await expect(harness.repositories.taskCoordination.claimLeases.listActive())
+      .resolves.toEqual([expect.objectContaining({ agentId: 'agent-1', status: 'active' })]);
+    await expect(harness.repositories.tasks.getById('task-a'))
+      .resolves.toMatchObject({ status: 'in_progress', assigneeId: 'agent-1' });
+  });
+
+  test('#1270: 策略未授权 required capability 时保留 open Offer 给 Agent 显式响应', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    await harness.repositories.agentExposure.autoAcceptPolicies.upsert({
+      id: 'policy-agent-1', teamId: 'team-1', agentId: 'agent-1',
+      manifestId: 'manifest-agent-1', manifestRevision: 1, enabled: true,
+      allowedCapabilityIds: [], allowUnspecifiedCapabilities: false,
+      allowedRiskLevels: ['low'], allowFrozenProjectInputs: false, requireCompletePreview: true,
+      maxActiveClaims: 1, validUntil: null, updatedBy: 'user-1', now: 10,
+    });
+
+    const offers = await harness.broker.prepareOffers('task-a');
+    expect(offers).toHaveLength(1);
+    await expect(harness.repositories.taskCoordination.offers.getById(offers[0]!.offerId))
+      .resolves.toMatchObject({ status: 'open' });
+    await expect(harness.repositories.taskCoordination.claimLeases.listActive()).resolves.toEqual([]);
+  });
+
+  test('#1270: 候选集出现自动认领赢家后，同轮手动 Offer 原子收口为 overtaken', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await seedAgent(harness.repositories, 'agent-2', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1', 'agent-2'], updatedAt: 10 } });
+    await harness.repositories.agentExposure.autoAcceptPolicies.upsert({
+      id: 'policy-agent-2', teamId: 'team-1', agentId: 'agent-2',
+      manifestId: 'manifest-agent-2', manifestRevision: 1, enabled: true,
+      allowedCapabilityIds: ['capability:v1:code-review'], allowUnspecifiedCapabilities: false,
+      allowedRiskLevels: ['low'], allowFrozenProjectInputs: false, requireCompletePreview: true,
+      maxActiveClaims: 1, validUntil: null, updatedBy: 'user-1', now: 10,
+    });
+
+    await expect(harness.broker.prepareOffers('task-a')).resolves.toEqual([]);
+    const offers = await harness.repositories.taskCoordination.offers.listByTask('task-a');
+    expect(offers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agentId: 'agent-1', status: 'overtaken', response: null }),
+      expect.objectContaining({
+        agentId: 'agent-2', status: 'accepted', response: expect.objectContaining({ kind: 'accepted' }),
+      }),
+    ]));
+    expect(offers.some((offer) => offer.status === 'open')).toBe(false);
+    await expect(harness.repositories.taskCoordination.claimLeases.listActive())
+      .resolves.toEqual([expect.objectContaining({ agentId: 'agent-2', status: 'active' })]);
+  });
+
   test('accepted 在同事务创建 Claim/Lease：offer=accepted + lease 存在 + task in_progress (AC#4)', async () => {
     const harness = await createHarness();
     await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
@@ -1007,6 +1076,37 @@ describe('Task Offer respondToOffer（#712 切片 C-1：显式接受事务接线
     expect(granted).toHaveLength(1);
     expect(overtaken).toHaveLength(1);
     expect(await harness.repositories.taskCoordination.claimLeases.listActive()).toHaveLength(1);
+    const persistedOffers = await harness.repositories.taskCoordination.offers.listByTask('task-a');
+    expect(persistedOffers.filter((offer) => offer.status === 'accepted')).toHaveLength(1);
+    expect(persistedOffers.filter((offer) => offer.status === 'overtaken')).toHaveLength(1);
+    expect(persistedOffers.some((offer) => offer.status === 'open')).toBe(false);
+    const losingOffer = persistedOffers.find((offer) => offer.status === 'overtaken')!;
+    await expect(harness.broker.acquire({
+      schemaVersion: 1, offerId: losingOffer.id, agentId: losingOffer.agentId,
+    })).resolves.toMatchObject({ ok: false, diagnosticCode: 'TASK_CLAIM_OFFER_INVALID' });
+  });
+
+  test('候选集收口只影响当前 task revision/attempt，不改写其他轮次 Offer', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await seedAgent(harness.repositories, 'agent-2', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1', 'agent-2'], updatedAt: 10 } });
+    const winner = await publishOffer(harness, 'agent-1', { id: 'offer-current-winner' });
+    const sibling = await publishOffer(harness, 'agent-2', { id: 'offer-current-sibling' });
+    await harness.repositories.taskCoordination.offers.create({
+      ...sibling,
+      id: 'offer-other-attempt',
+      taskAttempt: sibling.taskAttempt + 1,
+    });
+
+    await expect(harness.broker.respondToOffer({
+      offerId: winner.id, agentId: winner.agentId, kind: 'accepted',
+    })).resolves.toMatchObject({ kind: 'claim_granted' });
+    await expect(harness.repositories.taskCoordination.offers.getById(sibling.id))
+      .resolves.toMatchObject({ status: 'overtaken' });
+    await expect(harness.repositories.taskCoordination.offers.getById('offer-other-attempt'))
+      .resolves.toMatchObject({ status: 'open', taskAttempt: sibling.taskAttempt + 1 });
   });
 
   test('accepted 但 Offer 已过期 → not_accepted，不创 Lease (AC#5)', async () => {

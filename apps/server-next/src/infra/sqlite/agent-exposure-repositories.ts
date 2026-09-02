@@ -1,4 +1,5 @@
 import type {
+  AgentAutoAcceptPolicyDto,
   AgentExposureAvailabilityDto,
   AgentExposureCapabilityDto,
   AgentExposureConstraintDto,
@@ -6,6 +7,7 @@ import type {
   AgentExposureSkillDto,
 } from '../../../../../packages/contracts/src/index.js';
 import type {
+  AgentAutoAcceptPolicyRecord,
   AgentExposureManifestRecord,
   AgentExposureRepositories,
   AgentExposureRestrictionRecord,
@@ -125,6 +127,31 @@ function mapRestriction(row: Record<string, unknown> | undefined): AgentExposure
   };
 }
 
+function mapAutoAcceptPolicy(row: Record<string, unknown> | undefined): AgentAutoAcceptPolicyRecord | null {
+  if (!row) return null;
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    agentId: sqliteText(row, 'agent_id'),
+    manifestId: sqliteText(row, 'manifest_id'),
+    manifestRevision: sqliteInt(row, 'manifest_revision'),
+    revision: sqliteInt(row, 'revision'),
+    enabled: sqliteInt(row, 'enabled') === 1,
+    allowedCapabilityIds: parseStringArray(sqliteNullableText(row, 'allowed_capability_ids_json')),
+    allowUnspecifiedCapabilities: sqliteInt(row, 'allow_unspecified_capabilities') === 1,
+    allowedRiskLevels: parseStringArray(sqliteNullableText(row, 'allowed_risk_levels_json'))
+      .filter((value): value is AgentAutoAcceptPolicyDto['allowedRiskLevels'][number] =>
+        value === 'low' || value === 'high'),
+    allowFrozenProjectInputs: sqliteInt(row, 'allow_frozen_project_inputs') === 1,
+    requireCompletePreview: sqliteInt(row, 'require_complete_preview') === 1,
+    maxActiveClaims: sqliteInt(row, 'max_active_claims'),
+    validUntil: sqliteNullableInt(row, 'valid_until'),
+    updatedBy: sqliteText(row, 'updated_by'),
+    createdAt: sqliteInt(row, 'created_at'),
+    updatedAt: sqliteInt(row, 'updated_at'),
+  };
+}
+
 const MANIFEST_COLUMNS = `id, team_id, agent_id, revision, status, capabilities_json, skills_json,
   constraints_json, availability_json, valid_from, valid_until, published_by, published_at,
   superseded_by_id, created_by, created_at, updated_at`;
@@ -210,6 +237,46 @@ export function createSqliteAgentExposureRepositories(db: SqliteDatabase): Agent
       },
       async getByTeamAgent(teamId, agentId) {
         return mapRestriction(db.prepare(`SELECT * FROM team_agent_exposure_restrictions WHERE team_id = ? AND agent_id = ?`).get(teamId, agentId) as Record<string, unknown> | undefined);
+      },
+    },
+    autoAcceptPolicies: {
+      async upsert(input) {
+        db.prepare(`INSERT INTO agent_auto_accept_policies (
+            id, team_id, agent_id, manifest_id, manifest_revision, revision, enabled,
+            allowed_capability_ids_json, allow_unspecified_capabilities,
+            allowed_risk_levels_json, allow_frozen_project_inputs, require_complete_preview, max_active_claims,
+            valid_until, updated_by, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(team_id, agent_id) DO UPDATE SET
+            manifest_id = excluded.manifest_id,
+            manifest_revision = excluded.manifest_revision,
+            revision = agent_auto_accept_policies.revision + 1,
+            enabled = excluded.enabled,
+            allowed_capability_ids_json = excluded.allowed_capability_ids_json,
+            allow_unspecified_capabilities = excluded.allow_unspecified_capabilities,
+            allowed_risk_levels_json = excluded.allowed_risk_levels_json,
+            allow_frozen_project_inputs = excluded.allow_frozen_project_inputs,
+            require_complete_preview = excluded.require_complete_preview,
+            max_active_claims = excluded.max_active_claims,
+            valid_until = excluded.valid_until,
+            updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at`)
+          .run(
+            input.id, input.teamId, input.agentId, input.manifestId, input.manifestRevision,
+            input.enabled ? 1 : 0, JSON.stringify(input.allowedCapabilityIds),
+            input.allowUnspecifiedCapabilities ? 1 : 0, JSON.stringify(input.allowedRiskLevels),
+            input.allowFrozenProjectInputs ? 1 : 0, input.requireCompletePreview ? 1 : 0,
+            input.maxActiveClaims,
+            input.validUntil ?? null, input.updatedBy, input.now, input.now,
+          );
+        return mapAutoAcceptPolicy(db.prepare(
+          'SELECT * FROM agent_auto_accept_policies WHERE team_id = ? AND agent_id = ?',
+        ).get(input.teamId, input.agentId) as Record<string, unknown> | undefined)!;
+      },
+      async getByTeamAgent(teamId, agentId) {
+        return mapAutoAcceptPolicy(db.prepare(
+          'SELECT * FROM agent_auto_accept_policies WHERE team_id = ? AND agent_id = ?',
+        ).get(teamId, agentId) as Record<string, unknown> | undefined);
       },
     },
   };

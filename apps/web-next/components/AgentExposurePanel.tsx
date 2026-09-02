@@ -8,16 +8,41 @@ import {
   validateDraftForm,
   type ExposureDraftFormState,
 } from '@/lib/agent-exposure-form';
-import type { AgentExposureRestrictionDto } from '@agentbean/contracts';
+import type { AgentAutoAcceptPolicyDto, AgentExposureRestrictionDto } from '@agentbean/contracts';
 
 interface ActiveProjection {
+  readonly manifestId: string;
   readonly revision: number;
-  readonly capabilities: readonly { name: string; description: string }[];
+  readonly capabilities: readonly {
+    name: string;
+    description: string;
+    registry?: { capabilityId: string; registryVersion: 1 };
+  }[];
   readonly skills: readonly { name: string; description: string }[];
   readonly constraints: readonly { kind: string; description: string }[];
   readonly availability: { status: string; reason?: string };
   readonly validUntil: number | null;
 }
+
+interface AutoAcceptDraft {
+  readonly enabled: boolean;
+  readonly allowedCapabilityIds: readonly string[];
+  readonly allowUnspecifiedCapabilities: boolean;
+  readonly allowedRiskLevels: readonly ('low' | 'high')[];
+  readonly allowFrozenProjectInputs: boolean;
+  readonly requireCompletePreview: boolean;
+  readonly maxActiveClaims: number;
+}
+
+const DEFAULT_AUTO_ACCEPT_DRAFT: AutoAcceptDraft = {
+  enabled: false,
+  allowedCapabilityIds: [],
+  allowUnspecifiedCapabilities: true,
+  allowedRiskLevels: ['low'],
+  allowFrozenProjectInputs: false,
+  requireCompletePreview: true,
+  maxActiveClaims: 1,
+};
 
 /**
  * #710 Agent Exposure 面板（AC#5）。
@@ -37,6 +62,8 @@ export function AgentExposurePanel({
 }) {
   const [active, setActive] = useState<ActiveProjection | null>(null);
   const [restriction, setRestriction] = useState<AgentExposureRestrictionDto | null>(null);
+  const [autoPolicy, setAutoPolicy] = useState<AgentAutoAcceptPolicyDto | null>(null);
+  const [autoDraft, setAutoDraft] = useState<AutoAcceptDraft>(DEFAULT_AUTO_ACCEPT_DRAFT);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<ExposureDraftFormState>(EMPTY_DRAFT_FORM);
   const [busy, setBusy] = useState(false);
@@ -48,9 +75,13 @@ export function AgentExposurePanel({
     Promise.all([
       agentExposureEvents().getActive(teamId, agentId),
       agentExposureEvents().listRevisions(teamId, agentId),
-    ]).then(([activeResult, listResult]) => {
+      canManage
+        ? agentExposureEvents().getAutoAcceptPolicy(teamId, agentId)
+        : Promise.resolve({ ok: true, policy: null }),
+    ]).then(([activeResult, listResult, policyResult]) => {
       if (!live) return;
       setActive(activeResult.ok && activeResult.projection ? {
+        manifestId: activeResult.projection.manifestId,
         revision: activeResult.projection.revision,
         capabilities: activeResult.projection.capabilities,
         skills: activeResult.projection.skills,
@@ -59,6 +90,23 @@ export function AgentExposurePanel({
         validUntil: activeResult.projection.validUntil,
       } : null);
       setRestriction(listResult.ok ? (listResult.activeRestriction ?? null) : null);
+      const policy = policyResult.ok ? (policyResult.policy ?? null) : null;
+      setAutoPolicy(policy);
+      setAutoDraft(policy ? {
+        enabled: policy.enabled,
+        allowedCapabilityIds: policy.allowedCapabilityIds,
+        allowUnspecifiedCapabilities: policy.allowUnspecifiedCapabilities,
+        allowedRiskLevels: policy.allowedRiskLevels,
+        allowFrozenProjectInputs: policy.allowFrozenProjectInputs,
+        requireCompletePreview: policy.requireCompletePreview,
+        maxActiveClaims: policy.maxActiveClaims,
+      } : {
+        ...DEFAULT_AUTO_ACCEPT_DRAFT,
+        allowedCapabilityIds: activeResult.ok && activeResult.projection
+          ? activeResult.projection.capabilities.flatMap((capability) =>
+              capability.registry ? [capability.registry.capabilityId] : [])
+          : [],
+      });
       setDraft(draftFormFromProjection(activeResult.ok && activeResult.projection ? {
         capabilities: activeResult.projection.capabilities,
         skills: activeResult.projection.skills,
@@ -68,7 +116,7 @@ export function AgentExposurePanel({
       setLoading(false);
     });
     return () => { live = false; };
-  }, [teamId, agentId]);
+  }, [teamId, agentId, canManage]);
 
   const reload = async () => {
     const [activeResult, listResult] = await Promise.all([
@@ -76,6 +124,7 @@ export function AgentExposurePanel({
       agentExposureEvents().listRevisions(teamId, agentId),
     ]);
     setActive(activeResult.ok && activeResult.projection ? {
+      manifestId: activeResult.projection.manifestId,
       revision: activeResult.projection.revision,
       capabilities: activeResult.projection.capabilities,
       skills: activeResult.projection.skills,
@@ -84,6 +133,22 @@ export function AgentExposurePanel({
       validUntil: activeResult.projection.validUntil,
     } : null);
     setRestriction(listResult.ok ? (listResult.activeRestriction ?? null) : null);
+    if (canManage) {
+      const policyResult = await agentExposureEvents().getAutoAcceptPolicy(teamId, agentId);
+      const policy = policyResult.ok ? (policyResult.policy ?? null) : null;
+      setAutoPolicy(policy);
+      if (policy) {
+        setAutoDraft({
+          enabled: policy.enabled,
+          allowedCapabilityIds: policy.allowedCapabilityIds,
+          allowUnspecifiedCapabilities: policy.allowUnspecifiedCapabilities,
+          allowedRiskLevels: policy.allowedRiskLevels,
+          allowFrozenProjectInputs: policy.allowFrozenProjectInputs,
+          requireCompletePreview: policy.requireCompletePreview,
+          maxActiveClaims: policy.maxActiveClaims,
+        });
+      }
+    }
   };
 
   const publish = async () => {
@@ -132,6 +197,34 @@ export function AgentExposurePanel({
       setMessage({ ok: true, text: '已更新 Team 收紧' });
     } else {
       setMessage({ ok: false, text: result.error ?? result.message ?? '收紧失败（仅可禁用已公开 operation）' });
+    }
+  };
+
+  const saveAutoAccept = async () => {
+    if (!Number.isInteger(autoDraft.maxActiveClaims)
+      || autoDraft.maxActiveClaims < 1 || autoDraft.maxActiveClaims > 100) {
+      setMessage({ ok: false, text: '并发认领上限必须是 1–100 的整数' });
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    const result = await agentExposureEvents().upsertAutoAcceptPolicy({
+      teamId,
+      agentId,
+      enabled: autoDraft.enabled,
+      allowedCapabilityIds: [...autoDraft.allowedCapabilityIds],
+      allowUnspecifiedCapabilities: autoDraft.allowUnspecifiedCapabilities,
+      allowedRiskLevels: [...autoDraft.allowedRiskLevels],
+      allowFrozenProjectInputs: autoDraft.allowFrozenProjectInputs,
+      requireCompletePreview: autoDraft.requireCompletePreview,
+      maxActiveClaims: autoDraft.maxActiveClaims,
+    });
+    setBusy(false);
+    if (result.ok && result.policy) {
+      setAutoPolicy(result.policy);
+      setMessage({ ok: true, text: `自动认领策略已保存（revision ${result.policy.revision}）` });
+    } else {
+      setMessage({ ok: false, text: result.error ?? result.message ?? '自动认领策略保存失败' });
     }
   };
 
@@ -214,10 +307,147 @@ export function AgentExposurePanel({
           </div>
         </div>
       )}
+      {canManage && active && (
+        <AutoAcceptEditor
+          active={active}
+          policy={autoPolicy}
+          value={autoDraft}
+          disabled={busy}
+          onChange={setAutoDraft}
+          onSave={saveAutoAccept}
+        />
+      )}
       {!canManage && <p className="text-xs text-neutral-400">仅 Agent 拥有者可发布或撤回 Exposure。</p>}
 
       {message && <div className={`mt-3 text-sm ${message.ok ? 'text-emerald-600' : 'text-red-600'}`}>{message.text}</div>}
     </section>
+  );
+}
+
+function AutoAcceptEditor({
+  active,
+  policy,
+  value,
+  disabled,
+  onChange,
+  onSave,
+}: {
+  active: ActiveProjection;
+  policy: AgentAutoAcceptPolicyDto | null;
+  value: AutoAcceptDraft;
+  disabled: boolean;
+  onChange: (next: AutoAcceptDraft) => void;
+  onSave: () => void;
+}) {
+  const capabilities = active.capabilities.flatMap((capability) => capability.registry
+    ? [{ id: capability.registry.capabilityId, name: capability.name }]
+    : []);
+  const stale = Boolean(policy
+    && (policy.manifestId !== active.manifestId || policy.manifestRevision !== active.revision));
+  const toggleCapability = (capabilityId: string) => {
+    const selected = new Set(value.allowedCapabilityIds);
+    if (selected.has(capabilityId)) selected.delete(capabilityId); else selected.add(capabilityId);
+    onChange({ ...value, allowedCapabilityIds: [...selected] });
+  };
+
+  return (
+    <div className="mt-4 border-t border-neutral-200 pt-4" data-smoke="agent-auto-accept-policy">
+      <div className="mb-1 text-xs font-medium text-neutral-600">自动认领策略</div>
+      <p className="mb-3 text-xs text-neutral-400">
+        一次授权后，Server 会对匹配的低风险 Offer 复验并原子认领；每条消息无需再选择协作模式。
+      </p>
+      {stale && (
+        <p className="mb-2 text-xs text-amber-600" data-smoke="agent-auto-accept-stale">
+          当前策略绑定旧 Exposure revision，请重新保存后才会自动认领。
+        </p>
+      )}
+      <label className="mb-2 flex items-center gap-2 text-xs text-neutral-700">
+        <input
+          type="checkbox"
+          checked={value.enabled}
+          onChange={(event) => onChange({ ...value, enabled: event.target.checked })}
+        />
+        启用自动认领
+      </label>
+      {capabilities.length > 0 && (
+        <div className="mb-2">
+          <div className="text-xs text-neutral-500">允许的公开能力</div>
+          <div className="flex flex-wrap gap-2">
+            {capabilities.map((capability) => (
+              <label key={capability.id} className="flex items-center gap-1 text-xs text-neutral-700">
+                <input
+                  type="checkbox"
+                  checked={value.allowedCapabilityIds.includes(capability.id)}
+                  onChange={() => toggleCapability(capability.id)}
+                />
+                {capability.name}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="flex items-center gap-2 text-xs text-neutral-700">
+          <input
+            type="checkbox"
+            checked={value.allowUnspecifiedCapabilities}
+            onChange={(event) => onChange({ ...value, allowUnspecifiedCapabilities: event.target.checked })}
+          />
+          接受未声明能力要求的低风险任务
+        </label>
+        <label className="flex items-center gap-2 text-xs text-neutral-700">
+          <input
+            type="checkbox"
+            checked={value.allowedRiskLevels.includes('high')}
+            onChange={(event) => onChange({
+              ...value,
+              allowedRiskLevels: event.target.checked ? ['low', 'high'] : ['low'],
+            })}
+          />
+          允许高风险任务（仍受 Server 门禁）
+        </label>
+        <label className="flex items-center gap-2 text-xs text-neutral-700">
+          <input
+            type="checkbox"
+            checked={value.allowFrozenProjectInputs}
+            onChange={(event) => onChange({ ...value, allowFrozenProjectInputs: event.target.checked })}
+          />
+          允许带冻结项目输入
+        </label>
+        <label className="flex items-center gap-2 text-xs text-neutral-700">
+          <input
+            type="checkbox"
+            checked={value.requireCompletePreview}
+            onChange={(event) => onChange({ ...value, requireCompletePreview: event.target.checked })}
+          />
+          要求完整交付预览
+        </label>
+      </div>
+      <label className="mt-2 flex items-center gap-2 text-xs text-neutral-700">
+        并发认领上限
+        <input
+          type="number"
+          min={1}
+          max={100}
+          value={value.maxActiveClaims}
+          onChange={(event) => onChange({ ...value, maxActiveClaims: Number(event.target.value) })}
+          className="w-20 rounded border border-neutral-300 px-2 py-1 text-xs"
+        />
+      </label>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onSave}
+        className="mt-3 rounded border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 disabled:opacity-50"
+      >
+        保存自动认领策略
+      </button>
+      {policy && !stale && (
+        <span className="ml-2 text-xs text-neutral-400">
+          policy revision {policy.revision} · Exposure revision {policy.manifestRevision}
+        </span>
+      )}
+    </div>
   );
 }
 

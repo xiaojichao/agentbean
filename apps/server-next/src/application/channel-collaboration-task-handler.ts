@@ -21,6 +21,17 @@ export interface ChannelCollaborationAgentCandidate {
   readonly agentName: string;
 }
 
+export interface ChannelCollaborationSubtaskSpec {
+  readonly title: string;
+  readonly objective: string;
+  readonly targetAgentId: string;
+  /** TaskClaimBroker 当前以公开 capability name 做严格匹配。 */
+  readonly requiredCapabilities: readonly string[];
+  readonly acceptanceCriteria: readonly string[];
+  /** 当前 subtask 列表中上游节点的 zero-based indexes；仅允许引用更早节点。 */
+  readonly dependsOnSubtaskIndexes?: readonly number[];
+}
+
 export interface ChannelCollaborationPromotionResult {
   readonly rootTaskId: string;
   readonly managementRunId: string;
@@ -46,6 +57,8 @@ export function createChannelCollaborationPromotionHooks(input: {
   readonly requesterId: string;
   readonly objective: string;
   readonly candidates: readonly ChannelCollaborationAgentCandidate[];
+  /** PI 已分解时使用这些 Server 校验后的定向子任务；省略时保持 collective fan-out。 */
+  readonly subtasks?: readonly ChannelCollaborationSubtaskSpec[];
   readonly ids: { nextId(): string };
 }) {
   let result: ChannelCollaborationPromotionResult | undefined;
@@ -88,13 +101,30 @@ export function createChannelCollaborationPromotionHooks(input: {
     const subtaskIds: string[] = [];
     const candidates = [...input.candidates].sort((left, right) =>
       left.agentId.localeCompare(right.agentId));
-    for (const [index, candidate] of candidates.entries()) {
-      const taskId = input.ids.nextId();
+    const candidateById = new Map(candidates.map((candidate) => [candidate.agentId, candidate]));
+    const subtasks: readonly ChannelCollaborationSubtaskSpec[] = input.subtasks ?? candidates.map((candidate) => ({
+      title: `${candidate.agentName}：${input.objective}`,
+      objective: input.objective,
+      targetAgentId: candidate.agentId,
+      requiredCapabilities: [],
+      acceptanceCriteria: [`${candidate.agentName} 已在根消息讨论串提交独立响应`],
+    }));
+    const plannedTaskIds = subtasks.map(() => input.ids.nextId());
+    for (const [index, subtask] of subtasks.entries()) {
+      const candidate = candidateById.get(subtask.targetAgentId);
+      if (!candidate) throw new Error('CHANNEL_COLLABORATION_SUBTASK_TARGET_NOT_FOUND');
+      const dependencyIndexes = subtask.dependsOnSubtaskIndexes ?? [];
+      if (new Set(dependencyIndexes).size !== dependencyIndexes.length
+        || dependencyIndexes.some((dependencyIndex) => !Number.isInteger(dependencyIndex)
+          || dependencyIndex < 0 || dependencyIndex >= index)) {
+        throw new Error('CHANNEL_COLLABORATION_SUBTASK_DEPENDENCY_INVALID');
+      }
+      const taskId = plannedTaskIds[index]!;
       const task = await context.repositories.tasks.create({
         id: taskId,
         teamId: rootTask.teamId,
-        title: `${candidate.agentName}：${input.objective}`,
-        description: input.objective,
+        title: subtask.title,
+        description: subtask.objective,
         status: 'todo',
         creatorId: input.requesterId,
         assigneeId: candidate.agentId,
@@ -114,7 +144,7 @@ export function createChannelCollaborationPromotionHooks(input: {
         nodeKind: 'subtask',
         reviewPolicy: 'manager',
         claimPolicy: 'targeted',
-        requiredCapabilities: [],
+        requiredCapabilities: [...subtask.requiredCapabilities],
         requiredSkills: [],
         preferredSkills: [],
         outputSlots: [],
@@ -126,14 +156,23 @@ export function createChannelCollaborationPromotionHooks(input: {
         createdAt: context.now,
         updatedAt: context.now,
       });
-      await context.repositories.coordination.criteria.create({
-        id: input.ids.nextId(),
-        taskId: task.id,
-        description: `${candidate.agentName} 已在根消息讨论串提交独立响应`,
-        evidenceRequired: false,
-        introducedRevision: task.revision,
-        position: 0,
-      });
+      for (const dependencyIndex of dependencyIndexes) {
+        await context.repositories.coordination.dependencies.create({
+          taskId: task.id,
+          dependencyTaskId: plannedTaskIds[dependencyIndex]!,
+          taskRevision: task.revision,
+        });
+      }
+      for (const [criterionIndex, description] of subtask.acceptanceCriteria.entries()) {
+        await context.repositories.coordination.criteria.create({
+          id: input.ids.nextId(),
+          taskId: task.id,
+          description,
+          evidenceRequired: false,
+          introducedRevision: task.revision,
+          position: criterionIndex,
+        });
+      }
       await appendTaskEvent(context.repositories, {
         managementRunId: context.managementRunId,
         type: 'task-created',
@@ -155,7 +194,7 @@ export function createChannelCollaborationPromotionHooks(input: {
         payload: {
           taskId: task.id,
           taskRevision: task.revision,
-          requiredCapabilities: [],
+          requiredCapabilities: [...subtask.requiredCapabilities],
         },
       }, context.now, input.ids, `channel-collaboration:published:${task.id}`);
       subtaskIds.push(task.id);
@@ -470,8 +509,9 @@ export interface CompleteChannelCollaborationSubtaskInput {
 
 /**
  * 协作模式的 completion projector：Agent 的成功回复本身就是当前客观 criterion 的证据。
- * Server 以 PI manager 身份记录 delivery/acceptance；全部叶子完成后在原讨论串写一条
- * 确定性汇总消息，并把 root/run 推进到 in_review，最终接受/打回仍只属于 Human。
+ * Server 记录 delivery/acceptance；全部叶子完成后引用最后一条真实 Agent 交付，把
+ * root/run 推进到 in_review。状态由 Task/System activity 表达，不生成 PI 汇总气泡；
+ * 最终接受/打回仍只属于 Human。
  */
 export async function completeChannelCollaborationSubtask(input: {
   readonly repositories: ServerNextRepositories;
@@ -741,29 +781,10 @@ export async function completeChannelCollaborationSubtask(input: {
         },
       }, now, input.ids, `channel-collaboration:root-started:${run.id}`);
     }
-    const summaryMessageId = `channel-collaboration-summary:${run.id}`;
-    let summaryMessage = await repositories.messages.getById(summaryMessageId);
-    const summaryCreated = !summaryMessage;
-    if (!summaryMessage) {
-      summaryMessage = await repositories.messages.append({
-        id: summaryMessageId,
-        teamId: run.teamId,
-        channelId: run.channelId,
-        threadId: run.rootMessageId,
-        senderKind: 'system',
-        senderId: 'system',
-        body: `PI 汇总：${subtaskFacts.length} 个频道 Agent 均已完成定向子任务，独立结果已回到本讨论串，等待你验收。`,
-        createdAt: now,
-        meta: {
-          kind: 'channel-collaboration-summary',
-          managementRunId: run.id,
-          taskId: rootTask.id,
-          contributingInvocationIds,
-          replyScope: 'thread',
-          parentMessageId: run.rootMessageId,
-        },
-      });
-    }
+    // 根交付引用最后一个真实 Agent 交付消息；状态变化由 Task/System activity 投影表达。
+    // 不再伪造一条“PI 汇总”系统消息占据用户讨论串。
+    const summaryMessage = deliveryMessage;
+    const summaryCreated = false;
     if (rootTask.status === 'in_progress') {
       const reviewed = await repositories.tasks.update({
         taskId: rootTask.id,

@@ -16,6 +16,9 @@ import {
   makeFailure,
   makeSuccess,
   type Ack,
+  type AgentAutoAcceptPolicyDto,
+  type AgentCapabilityDirectoryDto,
+  type AgentCapabilityDirectoryEntryDto,
   type AgentExposureActiveProjectionDto,
   type AgentExposureAvailabilityDto,
   type AgentExposureCapabilityDto,
@@ -27,21 +30,27 @@ import {
   type AgentTeamCoverageEntryDto,
   type CreateAgentExposureDraftInput,
   type GetAgentExposureActiveInput,
+  type GetAgentAutoAcceptPolicyInput,
+  type GetAgentCapabilityDirectoryInput,
   type GetAgentTeamCoverageInput,
   type ID,
   type ListAgentExposureRevisionsInput,
   type PublishAgentExposureInput,
   type RevokeAgentExposureInput,
   type UpdateAgentExposureDraftInput,
+  type UpsertAgentAutoAcceptPolicyInput,
   type UpsertAgentExposureRestrictionInput,
+  type UnixMs,
 } from '../../../../packages/contracts/src/index.js';
 import {
+  bindAgentExposureCapability,
   evaluatePublishWindow,
   evaluateRestriction,
+  materializeAgentExposureCapability,
   parseAgentExposureContent,
 } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureRepositories, AgentExposureUnitOfWork } from './agent-exposure-repositories.js';
-import type { AgentRecord } from './repositories.js';
+import type { AgentRecord, ChannelRecord, DeviceRecord } from './repositories.js';
 
 export interface AgentExposureServiceRepositories {
   readonly agentExposure: AgentExposureRepositories;
@@ -49,6 +58,15 @@ export interface AgentExposureServiceRepositories {
   readonly agents: {
     getById(agentId: ID): Promise<AgentRecord | null>;
     listVisibleInTeam(teamId: ID): Promise<AgentRecord[]>;
+  };
+  readonly devices: {
+    getById(deviceId: ID): Promise<DeviceRecord | null>;
+  };
+  readonly claimLeases: {
+    listActive(): Promise<readonly { readonly agentId: ID; readonly expiresAt: UnixMs }[]>;
+  };
+  readonly channels: {
+    getById(channelId: ID): Promise<ChannelRecord | null>;
   };
   readonly teams: {
     getMemberRole(teamId: ID, userId: ID): Promise<'owner' | 'admin' | 'member' | null>;
@@ -61,6 +79,8 @@ export interface AgentExposureServiceDependencies {
   readonly canManageAgent: (input: { userId: ID; agentId: ID }) => Promise<boolean>;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
+  /** Socket runtime disconnect fence；持久化 device.status 尚未来得及更新时也必须 fail closed。 */
+  readonly isDeviceRuntimeDisconnected?: (deviceId: ID) => boolean;
   /**
    * #946：active manifest 被新 revision 替代后回调，撤销绑定旧 revision 的 execution grant
    * （manifest-superseded）。跨域（exposure→task-coordination）best-effort，在 publish 事务外
@@ -83,7 +103,8 @@ function toManifestDto(
     agentId: record.agentId,
     revision: record.revision,
     status: record.status,
-    capabilities: record.capabilities,
+    capabilities: record.capabilities.map((capability) =>
+      materializeAgentExposureCapability(capability, record.publishedAt ?? record.createdAt)),
     skills: record.skills,
     constraints: record.constraints,
     availability: record.availability,
@@ -102,7 +123,8 @@ function toProjection(record: AgentExposureManifestLike): AgentExposureActivePro
     manifestId: record.id,
     agentId: record.agentId,
     revision: record.revision,
-    capabilities: record.capabilities,
+    capabilities: record.capabilities.map((capability) =>
+      materializeAgentExposureCapability(capability, record.publishedAt ?? record.createdAt)),
     skills: record.skills,
     constraints: record.constraints,
     availability: record.availability,
@@ -158,6 +180,19 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
   const repo = repositories.agentExposure;
   const uow = repositories.agentExposureUnitOfWork;
 
+  function bindCapabilities(
+    capabilities: readonly Pick<AgentExposureCapabilityDto, 'name' | 'description'>[],
+    agent: AgentRecord,
+    recordedAt: number,
+  ): readonly AgentExposureCapabilityDto[] {
+    return capabilities.map((capability) => bindAgentExposureCapability({
+      capability,
+      deterministicCandidates: agent.scannedCapabilities ?? [],
+      summarizedCandidates: agent.scannedCapabilitiesSummarized ?? [],
+      recordedAt,
+    }));
+  }
+
   /** 懒过期：active 但 validUntil<=now → 标记 expired。best-effort，失败不阻塞读。 */
   async function refreshExpiry(teamId: ID, agentId: ID, now: number): Promise<void> {
     const active = await repo.manifests.getActiveByTeamAgent(teamId, agentId);
@@ -206,7 +241,7 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
       agentId: input.agentId,
       revision,
       status: 'draft',
-      capabilities: parsed.content.capabilities,
+      capabilities: bindCapabilities(parsed.content.capabilities, agent, now),
       skills: parsed.content.skills,
       constraints: parsed.content.constraints,
       availability: parsed.content.availability,
@@ -235,14 +270,15 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
       validUntil: input.validUntil,
     });
     if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
+    const now = clock.now();
     const updated = await repo.manifests.updateContent({
       id: input.manifestId,
-      capabilities: parsed.content.capabilities,
+      capabilities: bindCapabilities(parsed.content.capabilities, agent, now),
       skills: parsed.content.skills,
       constraints: parsed.content.constraints,
       availability: parsed.content.availability,
       validUntil: parsed.content.validUntil,
-      now: clock.now(),
+      now,
     });
     if (!updated) return makeFailure('NOT_FOUND', 'Draft manifest not found');
     return makeSuccess({ manifest: toManifestDto(updated) });
@@ -356,6 +392,62 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
     return makeSuccess({ restriction: toRestrictionDto(saved) });
   }
 
+  async function upsertAutoAcceptPolicy(
+    input: UpsertAgentAutoAcceptPolicyInput,
+  ): Promise<Ack<{ policy: AgentAutoAcceptPolicyDto }>> {
+    const agent = await requireAgentOwner(input.userId, input.teamId, input.agentId);
+    if (!agent) return makeFailure('FORBIDDEN', 'Only the agent owner can configure auto-accept');
+    const now = clock.now();
+    const active = await resolveActive(input.teamId, input.agentId, now);
+    if (!active) return makeFailure('NOT_FOUND', 'No active manifest for auto-accept policy');
+    if (!Number.isInteger(input.maxActiveClaims) || input.maxActiveClaims < 1 || input.maxActiveClaims > 100) {
+      return makeFailure('VALIDATION_ERROR', 'maxActiveClaims must be an integer between 1 and 100');
+    }
+    const allowedRiskLevels = [...new Set(input.allowedRiskLevels)];
+    if (allowedRiskLevels.length === 0
+      || allowedRiskLevels.some((risk) => risk !== 'low' && risk !== 'high')) {
+      return makeFailure('VALIDATION_ERROR', 'allowedRiskLevels must contain low or high');
+    }
+    if (input.validUntil !== undefined && input.validUntil !== null && input.validUntil <= now) {
+      return makeFailure('VALIDATION_ERROR', 'validUntil must be in the future');
+    }
+    const activeCapabilityIds = new Set(active.capabilities.map((capability) =>
+      materializeAgentExposureCapability(capability, active.publishedAt ?? active.createdAt)
+        .registry.capabilityId));
+    const allowedCapabilityIds = [...new Set(input.allowedCapabilityIds)];
+    if (allowedCapabilityIds.some((capabilityId) => !activeCapabilityIds.has(capabilityId))) {
+      return makeFailure('VALIDATION_ERROR', 'Auto-accept capabilities must be in the active manifest');
+    }
+    const saved = await repo.autoAcceptPolicies.upsert({
+      id: ids.nextId(),
+      teamId: input.teamId,
+      agentId: input.agentId,
+      manifestId: active.id,
+      manifestRevision: active.revision,
+      enabled: input.enabled,
+      allowedCapabilityIds,
+      allowUnspecifiedCapabilities: input.allowUnspecifiedCapabilities === true,
+      allowedRiskLevels,
+      allowFrozenProjectInputs: input.allowFrozenProjectInputs === true,
+      requireCompletePreview: input.requireCompletePreview !== false,
+      maxActiveClaims: input.maxActiveClaims,
+      validUntil: input.validUntil ?? null,
+      updatedBy: input.userId,
+      now,
+    });
+    return makeSuccess({ policy: saved });
+  }
+
+  async function getAutoAcceptPolicy(
+    input: GetAgentAutoAcceptPolicyInput,
+  ): Promise<Ack<{ policy: AgentAutoAcceptPolicyDto | null }>> {
+    const agent = await requireAgentOwner(input.userId, input.teamId, input.agentId);
+    if (!agent) return makeFailure('FORBIDDEN', 'Only the agent owner can view auto-accept policy');
+    return makeSuccess({
+      policy: await repo.autoAcceptPolicies.getByTeamAgent(input.teamId, input.agentId),
+    });
+  }
+
   async function getTeamCoverage(
     input: GetAgentTeamCoverageInput,
   ): Promise<Ack<{ coverage: AgentTeamCoverageDto }>> {
@@ -384,6 +476,98 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
     return makeSuccess({ coverage: { teamId: input.teamId, entries } });
   }
 
+  async function getCapabilityDirectory(
+    input: GetAgentCapabilityDirectoryInput,
+  ): Promise<Ack<{ directory: AgentCapabilityDirectoryDto }>> {
+    if (input.userId !== undefined) {
+      const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
+      if (!role) return makeFailure('FORBIDDEN', 'Not a team member');
+    }
+
+    let channelAgentIds: ReadonlySet<ID> | null = null;
+    if (input.channelId !== undefined) {
+      const channel = await repositories.channels.getById(input.channelId);
+      if (!channel
+        || channel.teamId !== input.teamId
+        || (channel.archivedAt !== null && channel.archivedAt !== undefined)) {
+        return makeFailure('NOT_FOUND', 'Channel not found');
+      }
+      if (input.userId !== undefined
+        && channel.visibility === 'private'
+        && !channel.humanMemberIds.includes(input.userId)) {
+        return makeFailure('FORBIDDEN', 'Not a channel member');
+      }
+      channelAgentIds = new Set(channel.agentMemberIds);
+    }
+
+    const now = clock.now();
+    const agentsInScope = (await repositories.agents.listVisibleInTeam(input.teamId))
+      .filter((agent) => channelAgentIds === null || channelAgentIds.has(agent.id))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const entries: AgentCapabilityDirectoryEntryDto[] = [];
+    const activeClaimCountByAgent = new Map<ID, number>();
+    for (const claim of await repositories.claimLeases.listActive()) {
+      if (claim.expiresAt <= now) continue;
+      activeClaimCountByAgent.set(claim.agentId, (activeClaimCountByAgent.get(claim.agentId) ?? 0) + 1);
+    }
+    for (const agent of agentsInScope) {
+      const active = await resolveActive(input.teamId, agent.id, now);
+      if (!active) continue;
+      const device = agent.deviceId ? await repositories.devices.getById(agent.deviceId) : null;
+      const runtimeDeviceConnected = agent.deviceId
+        ? deps.isDeviceRuntimeDisconnected?.(agent.deviceId) !== true
+        : false;
+      const autoAcceptPolicy = await repo.autoAcceptPolicies.getByTeamAgent(input.teamId, agent.id);
+      const hasCapacity = !autoAcceptPolicy?.enabled
+        || (activeClaimCountByAgent.get(agent.id) ?? 0) < autoAcceptPolicy.maxActiveClaims;
+      const restriction = await repo.restrictions.getByTeamAgent(input.teamId, agent.id);
+      const currentRestriction = restriction?.manifestId === active.id ? restriction : null;
+      const disabledCapabilities = new Set(
+        (currentRestriction?.disabledCapabilities ?? []).map((name) => name.toLowerCase()),
+      );
+      const disabledSkills = new Set(
+        (currentRestriction?.disabledSkills ?? []).map((name) => name.toLowerCase()),
+      );
+      entries.push({
+        agentId: agent.id,
+        agentName: agent.name,
+        manifestId: active.id,
+        manifestRevision: active.revision,
+        available: active.availability.status === 'available'
+          && agent.status === 'online'
+          && device?.status === 'online'
+          && runtimeDeviceConnected
+          && hasCapacity,
+        capabilities: active.capabilities
+          .filter((capability) => !disabledCapabilities.has(capability.name.toLowerCase()))
+          .map((capability) => {
+            const bound = materializeAgentExposureCapability(
+              capability,
+              active.publishedAt ?? active.createdAt,
+            );
+            return {
+              registry: bound.registry,
+              name: bound.name,
+              description: bound.description,
+              evidence: bound.evidence,
+            };
+          }),
+        skills: active.skills.filter((skill) => !disabledSkills.has(skill.name.toLowerCase())),
+        disabledCapabilities: currentRestriction?.disabledCapabilities ?? [],
+        disabledSkills: currentRestriction?.disabledSkills ?? [],
+        constraints: active.constraints,
+      });
+    }
+    return makeSuccess({
+      directory: {
+        teamId: input.teamId,
+        channelId: input.channelId ?? null,
+        generatedAt: now,
+        entries,
+      },
+    });
+  }
+
   return {
     createDraft,
     updateDraft,
@@ -392,7 +576,10 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
     listRevisions,
     getActiveProjection,
     upsertRestriction,
+    upsertAutoAcceptPolicy,
+    getAutoAcceptPolicy,
     getTeamCoverage,
+    getCapabilityDirectory,
   };
 }
 

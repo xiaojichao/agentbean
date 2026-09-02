@@ -18,6 +18,11 @@ import type {
   MessageTracerOutboxRecord,
   MessageTracerOutboxRepository,
   MessageTracerRepositories,
+  MessageRouteAnalysisRecord,
+  MessageRouteAnalysisRepository,
+  MessageRouteAnalysisStatus,
+  MessageRouteIntentSource,
+  MessageRouteKind,
 } from '../../application/message-tracer-repositories.js';
 
 // #921 切片 B：Message tracer 的 SQLite 持久化实现。
@@ -94,6 +99,26 @@ interface OutboxRow {
   delivered_at: number | null;
   attempts: number;
   created_at: number;
+}
+
+interface RouteRow {
+  id: string;
+  team_id: string;
+  channel_id: string;
+  message_id: string;
+  message_revision: number;
+  status: MessageRouteAnalysisStatus;
+  attempt: number;
+  next_retry_at: number | null;
+  route_kind: MessageRouteKind | null;
+  intent_source: MessageRouteIntentSource | null;
+  risk_level: 'low' | 'high' | null;
+  target_agent_ids_json: string;
+  required_capability_ids_json: string;
+  linked_task_id: string | null;
+  diagnostic_code: string | null;
+  created_at: number;
+  updated_at: number;
 }
 
 function mapInboxItem(row: InboxItemRow | undefined): InboxItemRecord | null {
@@ -180,6 +205,29 @@ function mapOutbox(row: OutboxRow | undefined): MessageTracerOutboxRecord | null
     deliveredAt: row.delivered_at,
     attempts: row.attempts,
     createdAt: row.created_at,
+  };
+}
+
+function mapRoute(row: RouteRow | undefined): MessageRouteAnalysisRecord | null {
+  if (!row) return null;
+  return {
+    id: row.id,
+    teamId: row.team_id,
+    channelId: row.channel_id,
+    messageId: row.message_id,
+    messageRevision: row.message_revision,
+    status: row.status,
+    attempt: row.attempt,
+    nextRetryAt: row.next_retry_at,
+    routeKind: row.route_kind,
+    intentSource: row.intent_source,
+    riskLevel: row.risk_level,
+    targetAgentIds: JSON.parse(row.target_agent_ids_json) as string[],
+    requiredCapabilityIds: JSON.parse(row.required_capability_ids_json) as string[],
+    linkedTaskId: row.linked_task_id,
+    diagnosticCode: row.diagnostic_code,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -421,10 +469,71 @@ export function createSqliteMessageTracerOutboxRepository(teamDb: SqliteDatabase
   };
 }
 
+export function createSqliteMessageRouteAnalysisRepository(teamDb: SqliteDatabase): MessageRouteAnalysisRepository {
+  const columns = `id, team_id, channel_id, message_id, message_revision, status, attempt,
+    next_retry_at, route_kind, intent_source, risk_level, target_agent_ids_json,
+    required_capability_ids_json, linked_task_id, diagnostic_code, created_at, updated_at`;
+  return {
+    async create(input) {
+      teamDb.prepare(`INSERT INTO message_route_analyses (
+          ${columns}
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(
+          input.id, input.teamId, input.channelId, input.messageId, input.messageRevision,
+          input.status, input.attempt, input.nextRetryAt, input.routeKind, input.intentSource,
+          input.riskLevel, JSON.stringify(input.targetAgentIds), JSON.stringify(input.requiredCapabilityIds),
+          input.linkedTaskId, input.diagnosticCode, input.createdAt, input.updatedAt,
+        );
+      return input;
+    },
+    async getById(id) {
+      return mapRoute(teamDb.prepare(`SELECT ${columns} FROM message_route_analyses WHERE id = ?`)
+        .get(id) as RouteRow | undefined);
+    },
+    async getByMessageId(messageId) {
+      return mapRoute(teamDb.prepare(`SELECT ${columns} FROM message_route_analyses WHERE message_id = ?`)
+        .get(messageId) as RouteRow | undefined);
+    },
+    async listRunnable(input) {
+      return (teamDb.prepare(`SELECT ${columns} FROM message_route_analyses
+        WHERE status = 'pending'
+          OR (status = 'deferred' AND (next_retry_at IS NULL OR next_retry_at <= ?))
+          OR (status = 'running' AND updated_at <= ?)
+        ORDER BY created_at, id LIMIT ?`).all(input.now, input.runningBefore, input.limit) as RouteRow[])
+        .map((row) => mapRoute(row)!).filter(Boolean);
+    },
+    async claimForProcessing(input) {
+      const result = teamDb.prepare(`UPDATE message_route_analyses
+        SET status = 'running', attempt = attempt + 1, next_retry_at = NULL, updated_at = ?
+        WHERE id = ? AND (
+          status = 'pending'
+          OR (status = 'deferred' AND (next_retry_at IS NULL OR next_retry_at <= ?))
+          OR (status = 'running' AND updated_at <= ?)
+        )`).run(input.now, input.id, input.now, input.runningBefore) as { changes?: number };
+      if (!result.changes) return null;
+      return this.getById(input.id);
+    },
+    async update(input) {
+      const result = teamDb.prepare(`UPDATE message_route_analyses SET
+        status = ?, next_retry_at = ?, route_kind = ?, intent_source = ?, risk_level = ?,
+        target_agent_ids_json = ?, required_capability_ids_json = ?, linked_task_id = ?,
+        diagnostic_code = ?, updated_at = ?
+        WHERE id = ? AND status = ?`).run(
+        input.status, input.nextRetryAt, input.routeKind, input.intentSource, input.riskLevel,
+        JSON.stringify(input.targetAgentIds), JSON.stringify(input.requiredCapabilityIds),
+        input.linkedTaskId, input.diagnosticCode, input.now, input.id, input.expectedStatus,
+      ) as { changes?: number };
+      if (!result.changes) return null;
+      return this.getById(input.id);
+    },
+  };
+}
+
 export function createSqliteMessageTracerRepositories(teamDb: SqliteDatabase): MessageTracerRepositories {
   return {
     inbox: createSqliteMessageInboxRepository(teamDb),
     commandReceipts: createSqliteCommandReceiptRepository(teamDb),
     outbox: createSqliteMessageTracerOutboxRepository(teamDb),
+    routes: createSqliteMessageRouteAnalysisRepository(teamDb),
   };
 }

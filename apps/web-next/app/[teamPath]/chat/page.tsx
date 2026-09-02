@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispa
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Bookmark, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, ChevronRight, Smile, ChevronDown, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { ALL_CHANNEL_AGENTS_COLLABORATION_TRIGGER_V1, WEB_EVENTS, type ArtifactDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDeliveryOverviewV1, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDeliveryOverviewV1, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -345,7 +345,6 @@ export default function ChatPage() {
     chatTabParam === 'tasks' || chatTabParam === 'files' ? chatTabParam : 'chat'
   ));
   const [asTask, setAsTask] = useState(false);
-  const [channelCollaboration, setChannelCollaboration] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
   const [showEditChannel, setShowEditChannel] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
@@ -1751,18 +1750,13 @@ export default function ChatPage() {
     const channelId = activeChannel;
     const body = input.trim();
     const artifactIds = artifacts.map((a) => a.id);
-    // 切到 DM 后协作开关会被隐藏；发送时仍需 fail closed，不能把频道模式残留带入私信。
-    const collaborationMode = channelCollaboration && !isDm;
-    const createTask = asTask || collaborationMode;
+    const createTask = asTask;
     const mentions = extractMentions(body, visibleMentionMembers);
     const clientMessageId = createClientMessageId('chat');
     setSendingMessage(true);
     getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, clientMessageId,
       body: body || (artifacts.length > 0 ? '附件' : '项目引用'), asTask, artifactIds,
       selections: projectReferenceSelections,
-      ...(collaborationMode
-        ? { collaborationTask: ALL_CHANNEL_AGENTS_COLLABORATION_TRIGGER_V1 }
-        : {}),
       ...(mentions.length ? { meta: { mentions } } : {}),
     }, (res?: SendMessageAck) => {
       setSendingMessage(false);
@@ -1775,7 +1769,6 @@ export default function ChatPage() {
           setPendingAttachments([]);
           setProjectReferenceSelections([]);
           setAsTask(false);
-          setChannelCollaboration(false);
         }
         return;
       }
@@ -2878,13 +2871,7 @@ export default function ChatPage() {
                       <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传附件"><Paperclip size={16} /></button>
                     </div>
                     <div className="flex items-center gap-2" data-smoke="chat-composer-right-actions">
-                      <label className="flex cursor-pointer items-center gap-1 text-neutral-400 hover:text-neutral-600" data-smoke="chat-as-task-toggle"><input type="checkbox" checked={asTask} onChange={(e) => { setAsTask(e.target.checked); if (e.target.checked) setChannelCollaboration(false); }} className="rounded border-neutral-300" /><span className="text-xs">作为任务</span></label>
-                      {!isDm && (
-                        <label className="flex cursor-pointer items-center gap-1 text-neutral-400 hover:text-neutral-600" data-smoke="chat-channel-collaboration-toggle" title="为频道内每个 Agent 创建一个定向子任务，由 Agent 接受后分别执行">
-                          <input type="checkbox" checked={channelCollaboration} onChange={(e) => { setChannelCollaboration(e.target.checked); if (e.target.checked) setAsTask(false); }} className="rounded border-neutral-300" />
-                          <span className="text-xs">频道 Agent 协作</span>
-                        </label>
-                      )}
+                      <label className="flex cursor-pointer items-center gap-1 text-neutral-400 hover:text-neutral-600" data-smoke="chat-as-task-toggle"><input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} className="rounded border-neutral-300" /><span className="text-xs">作为任务</span></label>
                       <button data-smoke="chat-message-send" onClick={sendMessage} disabled={sendingMessage || uploading || hasUploadingAttachments(pendingAttachments) || hasFailedAttachments(pendingAttachments) || (!input.trim() && readyArtifacts(pendingAttachments).length === 0 && projectReferenceSelections.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
                     </div>
                   </div>

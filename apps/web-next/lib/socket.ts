@@ -35,6 +35,7 @@ import type {
   PromotionGateCommandResponseV1,
 } from '@agentbean/contracts';
 import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
+import type { AgentAutoAcceptPolicyDto, AgentCapabilityDirectoryDto } from '@agentbean/contracts';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
   assertArtifactUploadWithinLimit,
@@ -405,6 +406,18 @@ export interface AgentExposureRestrictionResult {
   error?: string;
   message?: string;
 }
+export interface AgentCapabilityDirectoryResult {
+  ok: boolean;
+  directory?: AgentCapabilityDirectoryDto;
+  error?: string;
+  message?: string;
+}
+export interface AgentAutoAcceptPolicyResult {
+  ok: boolean;
+  policy?: AgentAutoAcceptPolicyDto | null;
+  error?: string;
+  message?: string;
+}
 export interface AgentMemoryProjectionResult {
   ok: boolean;
   projection?: AgentMemoryProjectionDto;
@@ -475,6 +488,23 @@ export function agentExposureEvents(socket: Socket = getWebSocket()) {
       disabledCapabilities: string[]; disabledSkills: string[];
     }): Promise<AgentExposureRestrictionResult> {
       return emitWithTimeout(socket, WEB_EVENTS.agentExposure.upsertRestriction, payload);
+    },
+    getCapabilityDirectory(teamId: string, channelId?: string): Promise<AgentCapabilityDirectoryResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.agentExposure.getCapabilityDirectory, {
+        teamId,
+        ...(channelId ? { channelId } : {}),
+      });
+    },
+    upsertAutoAcceptPolicy(payload: {
+      teamId: string; agentId: string; enabled: boolean;
+      allowedCapabilityIds: string[]; allowUnspecifiedCapabilities: boolean;
+      allowedRiskLevels: ('low' | 'high')[]; allowFrozenProjectInputs: boolean;
+      requireCompletePreview: boolean; maxActiveClaims: number; validUntil?: number | null;
+    }): Promise<AgentAutoAcceptPolicyResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.agentExposure.upsertAutoAcceptPolicy, payload);
+    },
+    getAutoAcceptPolicy(teamId: string, agentId: string): Promise<AgentAutoAcceptPolicyResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.agentExposure.getAutoAcceptPolicy, { teamId, agentId });
     },
   };
 }

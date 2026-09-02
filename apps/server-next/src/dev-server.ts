@@ -2357,6 +2357,7 @@ function createDefaultApp(
           return [];
         }
       },
+      isDeviceRuntimeDisconnected: (deviceId) => taskClaimBroker.isDeviceDisconnected(deviceId),
       onChannelCollaborationTasksPublished: management.publishChannelCollaborationTasks,
       onChannelCollaborationMessageAppended,
       ...(projectCollaborationRollout.managerAutoAdvance
@@ -2473,6 +2474,7 @@ function createDefaultApp(
         return [];
       }
     },
+    isDeviceRuntimeDisconnected: (deviceId) => taskClaimBroker.isDeviceDisconnected(deviceId),
     onChannelCollaborationTasksPublished: management.publishChannelCollaborationTasks,
     onChannelCollaborationMessageAppended,
     ...(projectCollaborationRollout.managerAutoAdvance

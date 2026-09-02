@@ -2,6 +2,7 @@ export * from './common.js';
 export * from './auth.js';
 export * from './team.js';
 export * from './agent.js';
+export * from './capability.js';
 export * from './device.js';
 export * from './channel.js';
 export * from './message.js';

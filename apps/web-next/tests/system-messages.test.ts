@@ -114,7 +114,7 @@ describe('PI Manager 系统消息可见性（ADR-0066）', () => {
     }))).toBe(false);
   });
 
-  test('保留频道协作 PI 汇总可见（根任务已进入待验收）', () => {
+  test('隐藏历史频道协作 PI 汇总，验收状态改由 Task/System activity 表达', () => {
     expect(shouldHideSystemMessage(message({
       id: 'collaboration-summary-1',
       senderId: 'system',
@@ -127,7 +127,7 @@ describe('PI Manager 系统消息可见性（ADR-0066）', () => {
         contributingInvocationIds: ['inv-1', 'inv-2'],
       },
       metaJson: null,
-    }))).toBe(false);
+    }))).toBe(true);
   });
 
   test('保留频道协作异常状态可见（拒绝、过期、失败需要恢复）', () => {

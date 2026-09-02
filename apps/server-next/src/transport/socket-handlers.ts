@@ -308,6 +308,9 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.agentExposure.getActive, app, 'getAgentExposureActive', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.agentExposure.upsertRestriction, app, 'upsertAgentExposureRestriction', afterAgentExposureMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.agentExposure.getTeamCoverage, app, 'getAgentTeamCoverage', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.agentExposure.getCapabilityDirectory, app, 'getAgentCapabilityDirectory', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.agentExposure.upsertAutoAcceptPolicy, app, 'upsertAgentAutoAcceptPolicy', afterAgentExposureMutation, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.agentExposure.getAutoAcceptPolicy, app, 'getAgentAutoAcceptPolicy', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.team.delete, app, 'deleteTeam', async (payload, result) => {
     updateAuthenticatedCurrentTeam(options.authenticatedUser, result, 'fallbackTeam');
     await afterTeamMutation(payload, result);

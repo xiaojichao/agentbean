@@ -201,8 +201,56 @@ export interface MessageTracerOutboxRepository {
   incrementAttempts(input: { id: ID }): Promise<void>;
 }
 
+export type MessageRouteAnalysisStatus = 'pending' | 'running' | 'deferred' | 'resolved' | 'failed' | 'superseded';
+export type MessageRouteKind = 'chat_only' | 'direct_agent' | 'collaboration' | 'complex_task' | 'clarification';
+export type MessageRouteIntentSource = 'pi' | 'deterministic_fallback';
+
+/** #1270：未指派频道消息的可恢复分析事实。Message 成功不依赖分析成功。 */
+export interface MessageRouteAnalysisRecord {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly channelId: ID;
+  readonly messageId: ID;
+  readonly messageRevision: number;
+  readonly status: MessageRouteAnalysisStatus;
+  readonly attempt: number;
+  readonly nextRetryAt: UnixMs | null;
+  readonly routeKind: MessageRouteKind | null;
+  readonly intentSource: MessageRouteIntentSource | null;
+  readonly riskLevel: 'low' | 'high' | null;
+  readonly targetAgentIds: readonly ID[];
+  readonly requiredCapabilityIds: readonly ID[];
+  readonly linkedTaskId: ID | null;
+  readonly diagnosticCode: string | null;
+  readonly createdAt: UnixMs;
+  readonly updatedAt: UnixMs;
+}
+
+export interface MessageRouteAnalysisRepository {
+  create(input: MessageRouteAnalysisRecord): Promise<MessageRouteAnalysisRecord>;
+  getById(id: ID): Promise<MessageRouteAnalysisRecord | null>;
+  getByMessageId(messageId: ID): Promise<MessageRouteAnalysisRecord | null>;
+  listRunnable(input: { now: UnixMs; runningBefore: UnixMs; limit: number }): Promise<MessageRouteAnalysisRecord[]>;
+  claimForProcessing(input: { id: ID; now: UnixMs; runningBefore: UnixMs }): Promise<MessageRouteAnalysisRecord | null>;
+  update(input: {
+    readonly id: ID;
+    readonly expectedStatus: MessageRouteAnalysisStatus;
+    readonly status: MessageRouteAnalysisStatus;
+    readonly nextRetryAt: UnixMs | null;
+    readonly routeKind: MessageRouteKind | null;
+    readonly intentSource: MessageRouteIntentSource | null;
+    readonly riskLevel: 'low' | 'high' | null;
+    readonly targetAgentIds: readonly ID[];
+    readonly requiredCapabilityIds: readonly ID[];
+    readonly linkedTaskId: ID | null;
+    readonly diagnosticCode: string | null;
+    readonly now: UnixMs;
+  }): Promise<MessageRouteAnalysisRecord | null>;
+}
+
 export interface MessageTracerRepositories {
   readonly inbox: MessageInboxRepository;
   readonly commandReceipts: CommandReceiptRepository;
   readonly outbox: MessageTracerOutboxRepository;
+  readonly routes: MessageRouteAnalysisRepository;
 }

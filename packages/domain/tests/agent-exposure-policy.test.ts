@@ -22,6 +22,19 @@ describe('parseAgentExposureContent', () => {
     }
   });
 
+  test('drops client-supplied Registry/Evidence authority fields', () => {
+    const result = parseAgentExposureContent({
+      capabilities: [{
+        ...cap('code-review'),
+        registry: { capabilityId: 'client-forged', registryVersion: 1 },
+        evidence: [{ source: 'runtime_verification', status: 'runtime_verified' }],
+      }],
+      skills: [],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.content.capabilities).toEqual([cap('code-review')]);
+  });
+
   test('requires at least one capability', () => {
     const result = parseAgentExposureContent({ capabilities: [], skills: [] });
     expect(result).toEqual({ ok: false, code: AGENT_EXPOSURE_ERROR.EMPTY_CAPABILITIES, message: expect.any(String) });
