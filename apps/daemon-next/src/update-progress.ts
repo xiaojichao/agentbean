@@ -51,6 +51,9 @@ function displayWidth(text: string): number {
   return width;
 }
 
+/** 窄于该列数的终端放不下最窄进度条（~24 列）+ 可读任务行，退回顺序输出。 */
+const MIN_LIVE_BAR_COLUMNS = 36;
+
 /**
  * Keep the task line within one physical terminal row. paint() moves the
  * cursor up exactly two rows to reach the bar, which only lands on the bar
@@ -78,7 +81,12 @@ export function createUpdateProgress(input: CreateUpdateProgressInput = {}): Upd
       process.stderr.write(chunk);
     });
   const isTTY = input.isTTY ?? Boolean(process.stderr.isTTY);
-  const columns = () => Math.max(40, Math.min(input.columns ?? process.stderr.columns ?? 80, 120));
+  // Real terminal width (no floor): clamping to a wider value would wrap the
+  // bar/task on narrow split panes and break the two-row move-back.
+  const columns = () => Math.min(input.columns ?? process.stderr.columns ?? 80, 120);
+  // Below this width neither the narrowest bar (~24 cols) nor a readable task
+  // line fits without wrapping, so fall back to sequential lines.
+  const useLiveBar = isTTY && columns() >= MIN_LIVE_BAR_COLUMNS;
 
   let total = 0;
   let current = 0;
@@ -97,7 +105,7 @@ export function createUpdateProgress(input: CreateUpdateProgressInput = {}): Upd
   }
 
   function paint(): void {
-    if (!isTTY || finished) return;
+    if (!useLiveBar || finished) return;
     const task = fitSingleLine(`正在执行：${detailLine || activeLabel || '…'}`, columns());
     const bar = renderBar();
     if (!live) {
@@ -116,7 +124,7 @@ export function createUpdateProgress(input: CreateUpdateProgressInput = {}): Upd
   }
 
   function endLive(): void {
-    if (!isTTY || !live) return;
+    if (!useLiveBar || !live) return;
     write(SHOW_CURSOR);
     live = false;
   }
@@ -128,24 +136,21 @@ export function createUpdateProgress(input: CreateUpdateProgressInput = {}): Upd
       current = 0;
       activeLabel = '';
       detailLine = '';
-      if (title) {
-        if (isTTY) stdout(title);
-        else stdout(title);
-      }
-      if (isTTY) paint();
+      if (title) stdout(title);
+      if (useLiveBar) paint();
     },
     step(label) {
       if (finished) return;
       current = Math.min(total, current + 1);
       activeLabel = label;
       detailLine = label;
-      if (isTTY) paint();
+      if (useLiveBar) paint();
       else stdout(`[${current}/${total}] ${label}`);
     },
     detail(message) {
       if (finished) return;
       detailLine = message;
-      if (isTTY) paint();
+      if (useLiveBar) paint();
       else stdout(`  → ${message}`);
     },
     done(message) {

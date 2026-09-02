@@ -199,3 +199,52 @@ describe('createUpdateProgress 任务行单行不变量（Codex P2）', () => {
     expect(screen.line(2)).toBe('');
   });
 });
+
+describe('createUpdateProgress 窄终端降级（Codex P2 第二轮）', () => {
+  // <36 列的分屏终端里最窄 bar（~24 列）也放不下；退回顺序行输出，
+  // 避免按被 clamp 的列数截断后任务行依然折行、重绘再次错位。
+
+  test('20 列终端退回顺序行输出，不写任何 ANSI', () => {
+    const printed: string[] = [];
+    const writes: string[] = [];
+    const progress = createUpdateProgress({
+      isTTY: true,
+      columns: 20,
+      write: (chunk) => writes.push(chunk),
+      stdout: (message) => printed.push(message),
+      stderr: (message) => printed.push(`ERR:${message}`),
+    });
+
+    progress.begin(3, 'AgentBean 更新 0.3.54 → 0.3.55');
+    progress.step('停止 Device Service');
+    progress.detail('bootout LaunchAgent…');
+
+    expect(writes.join('')).toBe('');
+    expect(printed).toEqual([
+      'AgentBean 更新 0.3.54 → 0.3.55',
+      '[1/3] 停止 Device Service',
+      '  → bootout LaunchAgent…',
+    ]);
+  });
+
+  test('36 列边界仍走 live bar，任务行按真实列数截断不折行', () => {
+    const screen = new Screen(36);
+    const progress = createUpdateProgress({
+      isTTY: true,
+      columns: 36,
+      write: (chunk) => screen.write(chunk),
+      stdout: () => {},
+      stderr: () => {},
+    });
+
+    progress.begin(5, 'AgentBean 更新 0.3.54 → 0.3.55');
+    progress.step('备份当前安装');
+    progress.detail(`快照 → ${'/opt/agentbean/'.repeat(8)}`);
+
+    // 36 列下 bar 宽 = max(12, 36-28) = 12。
+    expect(screen.line(0)).toBe(`[${'█'.repeat(2)}${'░'.repeat(10)}] 1/5  20%`);
+    expect(screen.line(1).endsWith('…')).toBe(true);
+    expect(displayWidth(screen.line(1))).toBeLessThanOrEqual(36);
+    expect(screen.line(2)).toBe('');
+  });
+});
