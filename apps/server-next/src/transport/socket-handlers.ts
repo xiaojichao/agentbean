@@ -21,6 +21,10 @@ import {
   type TaskClaimRespondV1,
 } from '../../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases, ImportProjectChannelWorkspaceInput, MaterializeProjectChannelWorkspaceInput } from '../application/usecases.js';
+import {
+  createMessageSocketHandlers,
+  type MessageSocketHandlerOptions,
+} from './message-socket-handlers.js';
 
 export interface AuthenticatedUserIdentity {
   hasToken: boolean;
@@ -68,36 +72,6 @@ type DeviceRenameSocketInput = {
 };
 const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
 
-type SendMessageAckMessage = {
-  id?: string;
-  teamId?: string;
-  channelId?: string;
-  threadId?: string;
-  senderId?: string;
-  body: string;
-};
-
-type SendMessageAck = {
-  ok: true;
-  message: SendMessageAckMessage;
-  dispatches: SendMessageDispatchAck[];
-  coalescedDispatchId?: string;
-};
-
-type SendMessageDispatchAck = {
-  id: string;
-  teamId: string;
-  channelId: string;
-  messageId: string;
-  agentId: string;
-  requestId: string;
-};
-
-interface PendingDispatchRequest {
-  dispatchId: string;
-  timer?: ReturnType<typeof setTimeout>;
-}
-
 // deviceScan 下发 request 的统一契约（hello 首推与 web-path 共用）。
 export interface DeviceScanEmitRequest {
   requestId: string;
@@ -133,38 +107,27 @@ export interface ScanDescriptorForwardResult {
   error?: string;
 }
 
-export interface WebSocketHandlerOptions {
+export interface WebSocketHandlerOptions extends MessageSocketHandlerOptions {
   authenticatedUser?: AuthenticatedUserProvider;
-  dispatch?(request: DispatchRequestDto & { id: string }): void;
-  shouldUseDispatchClaim?(request: DispatchRequestDto & { id: string }): boolean;
-  dispatchRequestCoalesceMs?: number;
   dispatchCancel?(request: DispatchRequestDto & { id: string }): void;
   dispatchStatus?(dispatch: unknown): void;
-  connectedAgentDeviceIds?(): string[];
-  dispatchClaimDeviceIds?(): string[];
   deviceScan?(request: DeviceScanEmitRequest): void;
   deviceSelectDirectory?(request: { deviceId: string }): Promise<{ ok: boolean; path?: string; error?: string }>;
   deviceListDirectory?(request: { deviceId: string; path: string }): Promise<ListDirectoryForwardResult>;
   deviceReadFile?(request: { deviceId: string; teamId: string; channelId: string; revisionId: string; path: string }): Promise<ReadFileForwardResult>;
   deviceScanDescriptor?(request: { deviceId: string; cwd: string; adapterKind: string }): Promise<ScanDescriptorForwardResult>;
-  afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
-  afterMessagePin?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceInviteComplete?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceMutation?(payload: unknown, result: unknown): Promise<void> | void;
   /** 设备删除成功后触发：用于向在线 daemon 下发 device:removed 并断开其 socket。 */
   afterDeviceDelete?(payload: unknown, result: unknown): Promise<void> | void;
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
-  afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentExposureMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterPiPolicyMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTeamMutation?(payload: unknown, result: unknown): Promise<void> | void;
-  afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterProjectMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterProjectArtifactMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterProjectDocumentBundleMutation?(payload: unknown, result: unknown): Promise<void> | void;
-  afterProjectReferencesUpdated?(payload: unknown, result: unknown): Promise<void> | void;
   afterMemberMutation?(payload: unknown, result: unknown): Promise<void> | void;
-  afterMemoryMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
 export interface AgentSocketHandlerOptions {
@@ -206,50 +169,6 @@ export function registerWebSocketHandlers(
   app: ServerNextUseCases,
   options: WebSocketHandlerOptions = {},
 ): void {
-  const dispatchRequestCoalesceMs = Math.max(0, options.dispatchRequestCoalesceMs ?? 0);
-  const pendingDispatchRequests = new Map<string, PendingDispatchRequest>();
-  const scheduleDispatchRequest = (dispatch: SendMessageDispatchAck) => {
-    if (!options.dispatch) {
-      return;
-    }
-    if (dispatchRequestCoalesceMs <= 0) {
-      requestDispatchEmission(app, options, dispatch.id);
-      return;
-    }
-    const pending = {
-      dispatchId: dispatch.id,
-    };
-    pendingDispatchRequests.set(dispatch.id, pending);
-    resetPendingDispatchRequestTimer(pendingDispatchRequests, pending, dispatchRequestCoalesceMs, () => {
-      requestDispatchEmission(app, options, dispatch.id);
-    });
-    void emitDispatchClaimWakeIfSupported(app, options, pendingDispatchRequests, pending).catch((error) => {
-      console.error(
-        '[server-next] dispatch claim wake emission failed:',
-        error instanceof Error ? error.stack ?? error.message : error,
-      );
-    });
-  };
-  const extendPendingDispatchRequest = (dispatchId: string | undefined) => {
-    if (dispatchRequestCoalesceMs <= 0 || !dispatchId) {
-      return;
-    }
-    const pending = pendingDispatchRequests.get(dispatchId);
-    if (!pending) {
-      return;
-    }
-    resetPendingDispatchRequestTimer(pendingDispatchRequests, pending, dispatchRequestCoalesceMs, () => {
-      requestDispatchEmission(app, options, pending.dispatchId);
-    });
-  };
-  const cancelPendingDispatchRequest = (dispatchId: string) => {
-    const pending = pendingDispatchRequests.get(dispatchId);
-    if (!pending) {
-      return;
-    }
-    clearTimeout(pending.timer);
-    pendingDispatchRequests.delete(dispatchId);
-  };
   bind(socket, WEB_EVENTS.auth.register, app, 'registerUser');
   bind(socket, WEB_EVENTS.auth.login, app, 'loginUser');
   bind(socket, WEB_EVENTS.auth.whoami, app, 'whoami');
@@ -889,40 +808,15 @@ export function registerWebSocketHandlers(
       ack?.(socketErrorAck(error, WEB_EVENTS.admin.transferDeviceOwner));
     }
   });
-  bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', async (_payload, result) => {
-    await options.afterMessageSend?.(_payload, result);
-    if (isSendMessageAck(result) && result.referenceSet) {
-      await options.afterProjectReferencesUpdated?.(_payload, result);
-    }
-    if (isSendMessageAck(result) && result.task) {
-      await options.afterTaskMutation?.(_payload, result);
-    }
-    // afterAgentMutation（全量 refreshAgentSubscribers 扇出）仅在确实产生 dispatch
-    //（即写入了 busy）时触发；普通聊天消息不得引发 agent 状态推送（性能回归）。
-    if (isSendMessageAck(result) && result.dispatches.length > 0) {
-      await options.afterAgentMutation?.(_payload, result);
-    }
-    if (!options.dispatch || !isSendMessageAck(result)) {
-      return;
-    }
-    extendPendingDispatchRequest(result.coalescedDispatchId);
-    for (const dispatch of result.dispatches) {
-      scheduleDispatchRequest(dispatch);
-    }
-  }, {
-    authenticatedUser: options.authenticatedUser,
-    augmentInput(input) {
-      const connectedAgentDeviceIds = options.connectedAgentDeviceIds?.() ?? [];
-      const dispatchClaimDeviceIds = options.dispatchClaimDeviceIds?.() ?? [];
-      return {
-        ...(input as Record<string, unknown>),
-        connectedAgentDeviceIds,
-        dispatchClaimDeviceIds,
-      };
+  const messageHandlers = createMessageSocketHandlers({
+    bind(event, execute, afterResult, messageOptions) {
+      bindUseCase(socket, event, execute, afterResult, {
+        authenticatedUser: options.authenticatedUser,
+        augmentInput: messageOptions?.augmentInput,
+      });
     },
-  });
-  // #921 Message tracer command 路径（默认关闭：app.dispatchMessageTracerCommand 在 flag 关闭时返回 disabled）。
-  bind(socket, WEB_EVENTS.message.messageTracer.command, app, 'dispatchMessageTracerCommand', undefined, { authenticatedUser: options.authenticatedUser });
+  }, app, options);
+  messageHandlers.registerIngress();
   // #929 System activity command/query（audience-scoped projection / attention / change feed）。
   bind(socket, WEB_EVENTS.systemActivity.command, app, 'dispatchSystemActivityCommand', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.systemActivity.query, app, 'dispatchSystemActivityQuery', undefined, { authenticatedUser: options.authenticatedUser });
@@ -930,24 +824,7 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.piAuthorityCutover.query, app, 'dispatchPiAuthorityCutoverQuery', undefined, { authenticatedUser: options.authenticatedUser });
   // #1014 Task remediation 具名 command（retry-attempt 等）。
   bind(socket, WEB_EVENTS.taskRemediation.command, app, 'dispatchTaskRemediationCommand', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.message.search, app, 'searchMessages', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.message.context, app, 'getMessageContext', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.message.react, app, 'reactMessage', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.message.save, app, 'saveMessage', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.message.listSaved, app, 'listSavedMessages', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.message.pin, app, 'pinMessage', (payload, result) => options.afterMessagePin?.(payload, result), { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.message.listPinned, app, 'listPinnedMessages', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.message.edit, app, 'editMessage', async (payload, result) => {
-    await options.afterMessageSend?.(payload, result);
-  }, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.message.delete, app, 'deleteMessage', async (payload, result) => {
-    await options.afterMessageSend?.(payload, result);
-    await options.afterMemoryMutation?.(payload, result);
-  }, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.message.convertToTask, app, 'convertMessageToTask', async (payload, result) => {
-    await options.afterTaskMutation?.(payload, result);
-    await options.afterMessageSend?.(payload, result);
-  }, { authenticatedUser: options.authenticatedUser });
+  messageHandlers.registerOperations();
   bind(socket, WEB_EVENTS.member.updateRole, app, 'updateMemberRole', (payload, result) => options.afterMemberMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.member.remove, app, 'removeMember', (payload, result) => options.afterMemberMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.member.transferOwner, app, 'transferOwner', (payload, result) => options.afterMemberMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
@@ -1013,7 +890,7 @@ export function registerWebSocketHandlers(
     await options.afterAgentMutation?.(_payload, result);
     await options.afterTaskMutation?.(_payload, result);
     options.dispatchStatus?.(result.dispatch);
-    cancelPendingDispatchRequest(result.dispatch.id);
+    messageHandlers.cancelPendingDispatch(result.dispatch.id);
     if (!options.dispatchCancel) {
       return;
     }
@@ -1030,7 +907,7 @@ export function registerWebSocketHandlers(
     await options.afterTaskMutation?.(_payload, result);
     for (const dispatch of result.dispatches) {
       options.dispatchStatus?.(dispatch);
-      cancelPendingDispatchRequest(dispatch.id);
+      messageHandlers.cancelPendingDispatch(dispatch.id);
       if (!options.dispatchCancel) {
         continue;
       }
@@ -1282,12 +1159,24 @@ function bind(
   afterResult?: (payload: unknown, result: unknown) => Promise<void> | void,
   options: BindOptions = {},
 ): void {
+  bindUseCase(socket, event, async (input) => {
+    const method = app[methodName] as (input: unknown) => Promise<unknown>;
+    return method(input);
+  }, afterResult, options);
+}
+
+function bindUseCase(
+  socket: SocketLike,
+  event: string,
+  execute: (input: unknown) => Promise<unknown>,
+  afterResult?: (payload: unknown, result: unknown) => Promise<void> | void,
+  options: BindOptions = {},
+): void {
   socket.on(event, async (payload, ack) => {
     try {
-      const method = app[methodName] as (input: unknown) => Promise<unknown>;
       const baseInput = await withAuthenticatedUserId(payload, options);
       const input = options.augmentInput ? await options.augmentInput(baseInput) : baseInput;
-      const result = await method(input);
+      const result = await execute(input);
       ack?.(result);
       await afterResult?.(input, result);
     } catch (error) {
@@ -1527,82 +1416,6 @@ function isDeviceScanAck(result: unknown): result is {
     (result as { ok?: unknown }).ok === true &&
     typeof request?.requestId === 'string' &&
     typeof request?.deviceId === 'string'
-  );
-}
-
-async function emitDispatchRequest(
-  app: ServerNextUseCases,
-  options: Pick<WebSocketHandlerOptions, 'dispatch'>,
-  dispatchId: string,
-): Promise<void> {
-  if (!options.dispatch) {
-    return;
-  }
-  const request = await app.getDispatchRequest({ dispatchId });
-  if (request.ok) {
-    options.dispatch(request.request);
-  }
-}
-
-async function emitDispatchClaimWakeIfSupported(
-  app: ServerNextUseCases,
-  options: Pick<WebSocketHandlerOptions, 'dispatch' | 'shouldUseDispatchClaim'>,
-  pendingDispatchRequests: Map<string, PendingDispatchRequest>,
-  pending: PendingDispatchRequest,
-): Promise<void> {
-  if (!options.dispatch || !options.shouldUseDispatchClaim) {
-    return;
-  }
-  const result = await app.getDispatchRequest({ dispatchId: pending.dispatchId, purpose: 'route' });
-  if (!result.ok || !options.shouldUseDispatchClaim(result.request)) {
-    return;
-  }
-  if (pendingDispatchRequests.get(pending.dispatchId) !== pending) {
-    return;
-  }
-  clearTimeout(pending.timer);
-  pendingDispatchRequests.delete(pending.dispatchId);
-  options.dispatch({ ...result.request, claimRequired: true });
-}
-
-function requestDispatchEmission(
-  app: ServerNextUseCases,
-  options: Pick<WebSocketHandlerOptions, 'dispatch'>,
-  dispatchId: string,
-): void {
-  void emitDispatchRequest(app, options, dispatchId).catch((error) => {
-    console.error(
-      '[server-next] dispatch request emission failed:',
-      error instanceof Error ? error.stack ?? error.message : error,
-    );
-  });
-}
-
-function resetPendingDispatchRequestTimer(
-  pendingDispatchRequests: Map<string, PendingDispatchRequest>,
-  pending: PendingDispatchRequest,
-  delayMs: number,
-  callback: () => void,
-): void {
-  clearTimeout(pending.timer);
-  pending.timer = setTimeout(() => {
-    pendingDispatchRequests.delete(pending.dispatchId);
-    callback();
-  }, delayMs);
-  (pending.timer as { unref?: () => void }).unref?.();
-}
-
-function isSendMessageAck(
-  result: unknown,
-): result is SendMessageAck & { task?: unknown; referenceSet?: unknown } {
-  if (!result || typeof result !== 'object') {
-    return false;
-  }
-  const candidate = result as { ok?: unknown; message?: { body?: unknown }; dispatches?: unknown };
-  return (
-    candidate.ok === true &&
-    typeof candidate.message?.body === 'string' &&
-    Array.isArray(candidate.dispatches)
   );
 }
 

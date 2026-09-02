@@ -129,15 +129,24 @@ ProjectArtifactLibrary 上下堆叠，也不向用户暴露「文件/逻辑产�
 ### 12. Channel Project Workspace 深模块统一 Chat / Tasks / Files 的 Project facts
 
 `apps/web-next/lib/use-channel-project-workspace.ts` 是频道页三块 surface 的共享只读投影边界，
-页面不得再分别维护 overview、artifact library、document bundles、output packages 与
-channel task workspace 的请求状态和 Socket 订阅：
+`channel-project-workspace-projection.ts` 是其纯 Server-event transition reducer。页面不得再分别维护
+overview、artifact library、document bundles、output packages 与 channel task workspace 的请求状态和
+Socket 订阅，也不得在 Hook effect 中另建第二套跨 surface 失效矩阵：
 
 - `useChannelProjectWorkspace({ channelId, connected, projectFactsActive, fileFactsActive })`
   返回 `overview` / `artifactLibrary` / `documentBundles` / `outputPackages` /
   `outputPackagePendings` / `tasks` / `taskWorkspace`，以及独立 loading/error；
 - `applyOverview` 必须继续经过 `acceptChannelProjectOverview` 的 revision freshness 判断；
   已有新画像时，不允许迟到的旧响应或 `null` 清空它；
-- 每种读取有独立 request fence，频道切换后旧频道响应不得写入新频道状态；
+- `channel-project-workspace-request-fence.ts` 通过 `begin / invalidate / isCurrent / reset`
+  统一维护五种读取的独立 revision；切换频道时一次性 fencing 全部 ticket，同频道 Server event
+  只 invalidate transition 指定的读取。Hook 的 render-time `channelRef` 继续覆盖 React effect 尚未
+  提交 reset 的窗口；只有生命周期 `reset` 可以切换 coordinator 的 active Channel，旧 render 的
+  迟到 callback 调用 `begin` 不得夺回 Channel ownership 或失效新频道请求；频道、连接与 active
+  scope 生命周期仍保留既有成组清空/加载时序；
+- `reduceChannelProjectWorkspaceProjection(event, context)` 统一返回 `apply`、
+  `invalidateRequests` 与 `refresh`；它不得读取 React、Socket 或可变 request ref，Hook 只执行其
+  确定性 transition；
 - `project:updated` 刷新 task workspace；`project:artifacts-updated` 同时失效 artifact
   library、output packages 和 task workspace；`task:updated` 先应用 Server task，随后
   刷新 task workspace 与项目 overview，并在 Files 活跃时刷新 output packages；所有订阅必须清理；
@@ -147,9 +156,11 @@ channel task workspace 的请求状态和 Socket 订阅：
 - `projectFactsActive` / `fileFactsActive` 仅控制昂贵投影的加载范围，不改变 Server authority；
   Tasks workspace 在频道连接后始终可读，供 Chat task card 与 Tasks 标签页共用。
 
-接口级回归测试在 `apps/web-next/tests/use-channel-project-workspace.test.tsx`，至少覆盖：
-一次接线获得同源投影、频道切换忽略迟到响应、artifact 事件统一失效 Tasks/Files，
-task 事件刷新 workspace 与 overview，以及同频道 artifact/document bundle 事件使在途旧查询失效。
+request fence 与纯 transition 契约测试分别在 `channel-project-workspace-request-fence.test.ts`、
+`channel-project-workspace-projection.test.ts`，Hook 接口级回归测试在
+`use-channel-project-workspace.test.tsx`。至少覆盖：一次接线获得同源投影、频道切换忽略
+迟到响应、跨频道 task event 被忽略、inactive expensive projection 不刷新、artifact 事件统一失效
+Tasks/Files、task 事件刷新 workspace 与 overview，以及同频道 artifact/document bundle 事件使在途旧查询失效。
 
 ## 佐证文件
 
@@ -163,6 +174,10 @@ task 事件刷新 workspace 与 overview，以及同频道 artifact/document bun
 - `apps/web-next/lib/file-group-model.ts`（文件组聚合/筛选/搜索纯函数）。
 - `apps/web-next/components/project/ProjectFilesBoard.tsx`（文件库逻辑产物视图：左卡右表 + 工具栏引用三入口）。
 - `apps/web-next/lib/use-channel-project-workspace.ts`（Channel Project facts、request fence、事件失效边界）。
+- `apps/web-next/lib/channel-project-workspace-request-fence.ts`（五类读取 revision 与 Channel reset）。
+- `apps/web-next/lib/channel-project-workspace-projection.ts`（纯 projection transition 与跨 surface 失效矩阵）。
+- `apps/web-next/tests/channel-project-workspace-request-fence.test.ts`（begin/invalidate/current/reset 契约）。
+- `apps/web-next/tests/channel-project-workspace-projection.test.ts`（纯 transition 契约）。
 - `apps/web-next/tests/use-channel-project-workspace.test.tsx`（共享投影、防串台与跨 surface 失效测试）。
 
 ## 反模式
@@ -174,12 +189,16 @@ task 事件刷新 workspace 与 overview，以及同频道 artifact/document bun
 - 复杂 Props 没导出，导致外部组件重新定义同结构（漂移风险）。
 - 在频道 page / Chat / Tasks / Files 分别复制 Project facts 的 state、首轮请求和 Socket
   订阅——会制造混合 revision、重复刷新和 surface 间事实漂移。
+- 在 Hook 的各个 Socket callback 中手写 `refreshTasks` / `refreshProjectFacts` /
+  `refreshOutputPackages` 组合——统一交给 projection reducer 返回 transition。
+- 为每种 Project Workspace 读取分别维护递增 `useRef` 与手写 channel/request 比较——统一交给
+  request-fence coordinator，禁止产生第六组局部 fence。
 
 ## 验证命令
 
 ```bash
 cd apps/web-next && npm test                       # 全量 vitest
 cd apps/web-next && npx vitest run tests/members-page-route-selection.test.tsx   # 单测 #853 首帧回归
-cd apps/web-next && npx vitest run tests/use-channel-project-workspace.test.tsx  # Project Workspace 深模块
+cd apps/web-next && npx vitest run tests/channel-project-workspace-request-fence.test.ts tests/channel-project-workspace-projection.test.ts tests/use-channel-project-workspace.test.tsx  # Project Workspace 深模块
 cd apps/web-next && npx tsc --noEmit -p tsconfig.json   # 类型
 ```

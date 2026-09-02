@@ -10,6 +10,12 @@ import type {
   ProjectDocumentBundleDto,
 } from '@agentbean/contracts';
 import { acceptChannelProjectOverview } from './channel-project-overview';
+import {
+  reduceChannelProjectWorkspaceProjection,
+  type ChannelProjectTask,
+  type ChannelProjectWorkspaceProjectionEvent,
+} from './channel-project-workspace-projection';
+import { createChannelProjectWorkspaceRequestFence } from './channel-project-workspace-request-fence';
 import { getWebSocket, projectEvents, taskEvents } from './socket';
 
 export interface ChannelProjectWorkspaceLoadError {
@@ -17,7 +23,7 @@ export interface ChannelProjectWorkspaceLoadError {
   readonly message: string;
 }
 
-export type ChannelProjectTask = ChannelTaskWorkspaceV1['entries'][number]['task'];
+export type { ChannelProjectTask } from './channel-project-workspace-projection';
 
 export interface ChannelProjectWorkspace {
   readonly overview: ChannelProjectOverviewDto | null | undefined;
@@ -56,11 +62,9 @@ export function useChannelProjectWorkspace(input: {
   const { channelId, connected, projectFactsActive, fileFactsActive } = input;
   const channelRef = useRef(channelId);
   channelRef.current = channelId;
-  const projectRequestRef = useRef(0);
-  const artifactRequestRef = useRef(0);
-  const documentBundleRequestRef = useRef(0);
-  const outputPackageRequestRef = useRef(0);
-  const taskRequestRef = useRef(0);
+  const requestFenceRef = useRef<ReturnType<typeof createChannelProjectWorkspaceRequestFence> | null>(null);
+  requestFenceRef.current ??= createChannelProjectWorkspaceRequestFence();
+  const requestFence = requestFenceRef.current;
 
   const [overview, setOverview] = useState<ChannelProjectOverviewDto | null>();
   const [overviewError, setOverviewError] = useState<ChannelProjectWorkspaceLoadError | null>(null);
@@ -87,64 +91,62 @@ export function useChannelProjectWorkspace(input: {
   }, []);
 
   const applyArtifactLibrary = useCallback((incoming: ProjectArtifactLibraryDto | null) => {
-    artifactRequestRef.current += 1;
+    requestFence.invalidate('artifact-library');
     setArtifactLibrary(incoming);
-  }, []);
+  }, [requestFence]);
 
   const refreshOutputPackages = useCallback(async () => {
     if (!channelId || !connected) return;
-    const requestId = ++outputPackageRequestRef.current;
+    const ticket = requestFence.begin('output-packages', channelId);
     const result = await projectEvents().listOutputPackages({ channelId }).catch(() => null);
-    if (requestId !== outputPackageRequestRef.current
-      || channelRef.current !== channelId
+    if (!requestFence.isCurrent(ticket, channelRef.current)
       || !result?.ok) return;
     setOutputPackages(result.packages ?? []);
     setOutputPackagePendings(result.pendingDeliveries ?? []);
     setDataRevision((revision) => revision + 1);
-  }, [channelId, connected]);
+  }, [channelId, connected, requestFence]);
 
   const refreshArtifactLibrary = useCallback(async () => {
     if (!channelId || !connected) return;
-    const requestId = ++artifactRequestRef.current;
+    const ticket = requestFence.begin('artifact-library', channelId);
     const result = await projectEvents().artifactCollections(channelId).catch(() => null);
-    if (requestId !== artifactRequestRef.current
-      || channelRef.current !== channelId
+    if (!requestFence.isCurrent(ticket, channelRef.current)
       || !result?.ok) return;
     setArtifactLibrary(result.library ?? null);
-  }, [channelId, connected]);
+  }, [channelId, connected, requestFence]);
 
   const refreshProjectFacts = useCallback(async () => {
     if (!channelId || !connected) return;
-    const requestId = ++projectRequestRef.current;
-    const artifactRequestId = ++artifactRequestRef.current;
+    const projectTicket = requestFence.begin('project-facts', channelId);
+    const artifactTicket = requestFence.begin('artifact-library', channelId);
     try {
       const [overviewResult, artifactResult] = await Promise.all([
         projectEvents().overview(channelId),
         projectEvents().artifactCollections(channelId),
       ]);
-      if (requestId !== projectRequestRef.current || channelRef.current !== channelId) return;
+      if (!requestFence.isCurrent(projectTicket, channelRef.current)) return;
       if (overviewResult.ok) {
         applyOverview(overviewResult.overview ?? null);
       } else {
         setOverviewError(projectLoadError(overviewResult, '项目推进加载失败，请稍后重试'));
       }
-      if (artifactRequestId === artifactRequestRef.current && artifactResult.ok) {
+      if (requestFence.isCurrent(artifactTicket, channelRef.current) && artifactResult.ok) {
         setArtifactLibrary(artifactResult.library ?? null);
       }
     } catch {
-      if (requestId !== projectRequestRef.current || channelRef.current !== channelId) return;
+      if (!requestFence.isCurrent(projectTicket, channelRef.current)) return;
       setOverviewError({ kind: 'error', message: '项目推进加载失败，请稍后重试' });
     }
-  }, [applyOverview, channelId, connected]);
+  }, [applyOverview, channelId, connected, requestFence]);
 
   const refreshTasks = useCallback(async () => {
     if (!channelId || !connected) return;
-    const requestId = ++taskRequestRef.current;
+    const ticket = requestFence.begin('tasks', channelId);
     setTasksLoading(true);
     setTasksLoadError(null);
     try {
       const result = await taskEvents().channelWorkspace(channelId);
-      if (requestId !== taskRequestRef.current || channelRef.current !== channelId) return;
+      if (!requestFence.isCurrent(ticket, channelRef.current)) return;
       if (result.ok && result.workspace) {
         setTaskWorkspace(result.workspace);
         setTasks(result.workspace.entries.map((entry) => entry.task));
@@ -158,22 +160,67 @@ export function useChannelProjectWorkspace(input: {
         setTasksLoadError(projectLoadError(result, '频道任务加载失败，请稍后重试'));
       }
     } catch {
-      if (requestId !== taskRequestRef.current || channelRef.current !== channelId) return;
+      if (!requestFence.isCurrent(ticket, channelRef.current)) return;
       setTaskWorkspace(null);
       setTasks([]);
       setTasksLoadError({ kind: 'error', message: '频道任务加载失败，请稍后重试' });
     } finally {
-      if (requestId === taskRequestRef.current && channelRef.current === channelId) {
+      if (requestFence.isCurrent(ticket, channelRef.current)) {
         setTasksLoading(false);
       }
     }
-  }, [channelId, connected]);
+  }, [channelId, connected, requestFence]);
+
+  const applyProjectionEvent = useCallback((event: ChannelProjectWorkspaceProjectionEvent) => {
+    if (!channelId) return;
+    const transition = reduceChannelProjectWorkspaceProjection(event, {
+      channelId,
+      projectFactsActive,
+      fileFactsActive,
+    });
+
+    for (const fence of transition.invalidateRequests) {
+      requestFence.invalidate(fence);
+    }
+    for (const projection of transition.apply) {
+      switch (projection.kind) {
+        case 'task':
+          applyTask(projection.task);
+          break;
+        case 'overview':
+          applyOverview(projection.overview);
+          break;
+        case 'artifact-library':
+          setArtifactLibrary(projection.library);
+          break;
+        case 'document-bundles':
+          setDocumentBundles([...projection.bundles]);
+          break;
+      }
+    }
+    for (const target of transition.refresh) {
+      if (target === 'tasks') void refreshTasks();
+      if (target === 'project-facts') void refreshProjectFacts();
+      if (target === 'output-packages') void refreshOutputPackages();
+    }
+  }, [
+    applyOverview,
+    applyTask,
+    channelId,
+    fileFactsActive,
+    projectFactsActive,
+    refreshOutputPackages,
+    refreshProjectFacts,
+    refreshTasks,
+    requestFence,
+  ]);
 
   useEffect(() => {
-    projectRequestRef.current += 1;
-    artifactRequestRef.current += 1;
-    documentBundleRequestRef.current += 1;
-    outputPackageRequestRef.current += 1;
+    requestFence.reset(channelId);
+    requestFence.invalidate('project-facts');
+    requestFence.invalidate('artifact-library');
+    requestFence.invalidate('document-bundles');
+    requestFence.invalidate('output-packages');
     setOverview(undefined);
     setOverviewError(null);
     setArtifactLibrary(null);
@@ -188,18 +235,16 @@ export function useChannelProjectWorkspace(input: {
     const projectFacts = refreshProjectFacts();
     const fileFacts = fileFactsActive
       ? (() => {
-          const documentBundleRequestId = ++documentBundleRequestRef.current;
+          const documentBundleTicket = requestFence.begin('document-bundles', channelId);
           return Promise.all([
             projectEvents().documentBundles(channelId).then((result) => {
               if (active
-                && documentBundleRequestId === documentBundleRequestRef.current
-                && channelRef.current === channelId) {
+                && requestFence.isCurrent(documentBundleTicket, channelRef.current)) {
                 setDocumentBundles(result.ok ? result.bundles ?? [] : []);
               }
             }).catch(() => {
               if (active
-                && documentBundleRequestId === documentBundleRequestRef.current
-                && channelRef.current === channelId) {
+                && requestFence.isCurrent(documentBundleTicket, channelRef.current)) {
                 setDocumentBundles([]);
               }
             }),
@@ -211,47 +256,40 @@ export function useChannelProjectWorkspace(input: {
       if (active && channelRef.current === channelId && fileFactsActive) setFilesReady(true);
     });
     return () => { active = false; };
-  }, [channelId, connected, fileFactsActive, projectFactsActive, refreshOutputPackages, refreshProjectFacts]);
+  }, [channelId, connected, fileFactsActive, projectFactsActive, refreshOutputPackages, refreshProjectFacts, requestFence]);
 
   useEffect(() => {
-    taskRequestRef.current += 1;
+    requestFence.reset(channelId);
+    requestFence.invalidate('tasks');
     setTasks([]);
     setTaskWorkspace(null);
     setTasksLoadError(null);
     setTasksLoading(false);
     if (!channelId || !connected) return;
     void refreshTasks();
-  }, [channelId, connected, refreshTasks]);
+  }, [channelId, connected, refreshTasks, requestFence]);
 
   useEffect(() => {
     if (!channelId || !connected) return;
     const socket = getWebSocket();
     const onTaskUpdated = (task: ChannelProjectTask) => {
-      if (task.channelId !== channelId) return;
-      applyTask(task);
-      void refreshTasks();
-      if (projectFactsActive) void refreshProjectFacts();
-      if (fileFactsActive) void refreshOutputPackages();
+      applyProjectionEvent({ kind: 'task-updated', task });
     };
     socket.on('task:updated', onTaskUpdated);
     return () => { socket.off('task:updated', onTaskUpdated); };
-  }, [applyTask, channelId, connected, fileFactsActive, projectFactsActive, refreshOutputPackages, refreshProjectFacts, refreshTasks]);
+  }, [applyProjectionEvent, channelId, connected]);
 
   useEffect(() => {
     if (!channelId || !connected || !projectFactsActive) return;
     const stopProject = projectEvents().onUpdated(channelId, (nextOverview) => {
-      applyOverview(nextOverview);
-      void refreshTasks();
+      applyProjectionEvent({ kind: 'project-updated', overview: nextOverview });
     });
     const stopArtifacts = projectEvents().onArtifactsUpdated(channelId, (library) => {
-      applyArtifactLibrary(library);
-      if (fileFactsActive) void refreshOutputPackages();
-      void refreshTasks();
+      applyProjectionEvent({ kind: 'artifacts-updated', library });
     });
     const stopBundles = fileFactsActive
       ? projectEvents().onDocumentBundlesUpdated(channelId, (bundles) => {
-          documentBundleRequestRef.current += 1;
-          setDocumentBundles(bundles);
+          applyProjectionEvent({ kind: 'document-bundles-updated', bundles });
         })
       : () => undefined;
     return () => {
@@ -259,7 +297,7 @@ export function useChannelProjectWorkspace(input: {
       stopArtifacts();
       stopBundles();
     };
-  }, [applyArtifactLibrary, applyOverview, channelId, connected, fileFactsActive, projectFactsActive, refreshOutputPackages, refreshTasks]);
+  }, [applyProjectionEvent, channelId, connected, fileFactsActive, projectFactsActive]);
 
   return {
     overview,
