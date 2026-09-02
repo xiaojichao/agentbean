@@ -93,15 +93,15 @@ import type { ArtifactRevisionConflictDto } from '../../../../packages/contracts
 import { parseArtifactRevisionCommandInputV1 } from '../../../../packages/contracts/src/index.js';
 import { shouldCreateMessageRouteAnalysis } from '../../../../packages/domain/src/deterministic-message-route-policy.js';
 import {
-  createMessageRouteAnalysisService,
-  type MessageRouteAnalysisServiceDependencies,
-} from './message-route-analysis-service.js';
+  createChannelWorkIntake,
+  type ChannelWorkIntakePiAnalyzer,
+} from './channel-work-intake.js';
 import { createMessageRoutePiAnalyzer } from './message-route-pi-analyzer.js';
 import {
   safeParseDispatchAgentMessageV1,
   type DispatchAgentMessageV1,
 } from '../../../../packages/contracts/src/index.js';
-import { assessCoordinationRisk, canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest, evaluateWorkspaceStagingSizeLimits, evaluateWorkspaceStagingUpload, evaluateWorkspaceStagingCommitReadiness, evaluateWorkspaceStagingExpiry, normalizeWorkspacePublishId, isCompatibleWorkspaceStagingBegin, DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_RETENTION_MS, deriveActivityAudience, mapLifecycleCommandToActivityFact, mapRemediationCommandToActivityFact } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest, evaluateWorkspaceStagingSizeLimits, evaluateWorkspaceStagingUpload, evaluateWorkspaceStagingCommitReadiness, evaluateWorkspaceStagingExpiry, normalizeWorkspacePublishId, isCompatibleWorkspaceStagingBegin, DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_RETENTION_MS, deriveActivityAudience, mapLifecycleCommandToActivityFact, mapRemediationCommandToActivityFact } from '../../../../packages/domain/src/index.js';
 import type { AgentAutoAcceptPolicyDto, AgentCapabilityDirectoryDto, AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentAutoAcceptPolicyInput, GetAgentCapabilityDirectoryInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentAutoAcceptPolicyInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelArchiveRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord, ProjectChannelWorkspaceRecord, ProjectChannelWorkspaceRevisionRecord, WorkspacePublishStagingRecord, WorkspacePublishStagingFileRecord } from './repositories.js';
@@ -2011,7 +2011,7 @@ export interface CreateServerNextUseCasesInput {
     taskIds: readonly string[],
   ) => Promise<{ readonly offered: number }>;
   /** 测试/host 可注入 PI 分析器；生产缺省绑定 Active PI Model + Capability Directory。 */
-  analyzeMessageRouteWithPi?: NonNullable<MessageRouteAnalysisServiceDependencies['analyzeWithPi']>;
+  analyzeMessageRouteWithPi?: ChannelWorkIntakePiAnalyzer;
   /** 协作状态消息落库后的轻量 realtime fetch 通知（不再生成 PI 汇总气泡）。 */
   onChannelCollaborationMessageAppended?: (
     delivery: { readonly teamId: string; readonly channelId: string; readonly messageId: string },
@@ -2212,182 +2212,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }),
       })
     : null;
-  const messageRouteAnalysis = createMessageRouteAnalysisService({
-    unitOfWork: repositories.channelCoordinationUnitOfWork,
-    clock,
-    async applyAuthorizedRoute(route) {
-      const candidates = [];
-      for (const agentId of route.targetAgentIds) {
-        const agent = await repositories.agents.getById(agentId);
-        if (!agent) throw new Error('MESSAGE_ROUTE_AGENT_NOT_FOUND');
-        candidates.push({ agentId, agentName: agent.name });
-      }
-      let subtasks;
-      const riskObjective = [
-        route.body,
-        ...route.requiredCapabilityIds,
-        ...route.subtasks.flatMap((subtask) => [
-          subtask.title,
-          subtask.objective,
-          ...subtask.requiredCapabilityIds,
-        ]),
-      ].join('\n');
-      if (assessCoordinationRisk({ modelRisk: route.riskLevel, objective: riskObjective }) !== 'low') {
-        throw new Error('MESSAGE_ROUTE_HIGH_RISK_REQUIRES_HUMAN');
-      }
-      const directoryResult = await agentExposure.getCapabilityDirectory({
-        teamId: route.analysis.teamId,
-        channelId: route.analysis.channelId,
-      });
-      if (!directoryResult.ok) throw new Error('MESSAGE_ROUTE_CAPABILITY_DIRECTORY_UNAVAILABLE');
-      const directoryByAgent = new Map(directoryResult.directory.entries.map((entry) => [entry.agentId, entry]));
-      const targetDeviceIds: string[] = [];
-      for (const targetAgentId of route.targetAgentIds) {
-        const directoryEntry = directoryByAgent.get(targetAgentId);
-        if (!directoryEntry) throw new Error('MESSAGE_ROUTE_TARGET_NOT_FOUND');
-        if (!directoryEntry.available) throw new Error('MESSAGE_ROUTE_TARGET_UNAVAILABLE');
-        const targetAgent = await repositories.agents.getById(targetAgentId);
-        if (!targetAgent?.deviceId) throw new Error('MESSAGE_ROUTE_TARGET_UNAVAILABLE');
-        targetDeviceIds.push(targetAgent.deviceId);
-      }
-      if (route.intentSource === 'pi') {
-        if (route.subtasks.length === 0) throw new Error('MESSAGE_ROUTE_SUBTASKS_REQUIRED');
-        subtasks = route.subtasks.map((subtask) => {
-          const directoryEntry = directoryByAgent.get(subtask.targetAgentId);
-          if (!directoryEntry) throw new Error('MESSAGE_ROUTE_SUBTASK_TARGET_NOT_FOUND');
-          const capabilityNameById = new Map(directoryEntry.capabilities.map((capability) => [
-            capability.registry.capabilityId,
-            capability.name,
-          ]));
-          const requiredCapabilities = subtask.requiredCapabilityIds.map((capabilityId) => {
-            const name = capabilityNameById.get(capabilityId);
-            if (!name) throw new Error('MESSAGE_ROUTE_SUBTASK_CAPABILITY_NOT_FOUND');
-            return name;
-          });
-          return {
-            title: subtask.title,
-            objective: subtask.objective,
-            targetAgentId: subtask.targetAgentId,
-            requiredCapabilities,
-            acceptanceCriteria: subtask.acceptanceCriteria,
-            dependsOnSubtaskIndexes: subtask.dependsOnSubtaskIndexes ?? [],
-          };
-        });
-      }
-      const hooks = createChannelCollaborationPromotionHooks({
-        requesterId: route.senderId,
-        objective: route.body.trim(),
-        candidates,
-        ...(subtasks ? { subtasks } : {}),
-        ids,
-      });
-      const objectiveSnapshot = {
-        schemaVersion: 1 as const,
-        objective: route.body.trim(),
-        scope: `channel:${route.analysis.channelId}:agents:${route.targetAgentIds.join(',')}`,
-        riskLevel: 'low' as const,
-      };
-      const freshnessBasis = {
-        schemaVersion: 1 as const,
-        sourceLineage: {
-          kind: 'message' as const,
-          id: route.analysis.messageId,
-          revision: route.analysis.messageRevision,
-        },
-      };
-      const revalidateTargetRuntimeConnection = () => {
-        if (targetDeviceIds.some((deviceId) => input.isDeviceRuntimeDisconnected?.(deviceId) === true)) {
-          throw new Error('MESSAGE_ROUTE_TARGET_UNAVAILABLE');
-        }
-      };
-      let promotion;
-      if (route.intentSource === 'pi') {
-        const stopped = await assertTeamPiCommandsAllowed(route.analysis.teamId);
-        if (stopped) throw new Error('MESSAGE_ROUTE_PI_AUTHORITY_UNAVAILABLE');
-        await assertMessageRouteAuthorityCurrent(route.analysis.teamId, route.analysis.messageId);
-        const configuredRollout = await repositories.taskCoordinationUnitOfWork.run((tx) =>
-          tx.promotion.semanticRollout.get(route.analysis.teamId));
-        if (configuredRollout) throw new Error('MESSAGE_ROUTE_SEMANTIC_ROLLOUT_REQUIRES_REVIEW');
-        promotion = await promotionModesForTeam(route.analysis.teamId).applyTeamPolicy({
-          requesterId: route.senderId,
-          channelId: route.analysis.channelId,
-          rootMessageId: route.analysis.messageId,
-          ruleId: 'pi-message-route-v1',
-          orchestrationNeed: true,
-          objectiveSnapshot,
-          freshnessBasis,
-          idempotencyKey: `message-route:${route.analysis.id}`,
-          revalidateAdditionalAuthorityInTransaction: async (context) => {
-            const currentRollout = await context.repositories.promotion.semanticRollout
-              .get(route.analysis.teamId);
-            if (currentRollout) {
-              throw new Error('MESSAGE_ROUTE_SEMANTIC_ROLLOUT_FRESHNESS_CONFLICT');
-            }
-            revalidateTargetRuntimeConnection();
-          },
-          onAppliedInTransaction: hooks.onAppliedInTransaction,
-          onConvergedInTransaction: hooks.onConvergedInTransaction,
-        });
-      } else {
-        promotion = await createPromotionGateHandler({
-          teamId: route.analysis.teamId,
-          requesterId: route.senderId,
-          unitOfWork: repositories.taskCoordinationUnitOfWork,
-          clock,
-          ids,
-          onAppliedInTransaction: async (context) => {
-            revalidateTargetRuntimeConnection();
-            await hooks.onAppliedInTransaction(context);
-          },
-          onConvergedInTransaction: async (context) => {
-            revalidateTargetRuntimeConnection();
-            await hooks.onConvergedInTransaction(context);
-          },
-        }).promoteToTask({
-          schemaVersion: 1,
-          commandName: 'promote-to-task',
-          commandSchemaVersion: 1,
-          idempotencyKey: `message-route:${route.analysis.id}`,
-          causationRef: { kind: 'message', id: route.analysis.messageId, revision: route.analysis.messageRevision },
-        }, {
-          triggerKind: 'human-structured',
-          channelId: route.analysis.channelId,
-          rootMessageId: route.analysis.messageId,
-          objectiveSnapshot,
-          freshnessBasis,
-        });
-      }
-      if (promotion.outcome !== 'applied' && promotion.outcome !== 'replayed') {
-        throw new Error(promotion.stableCode);
-      }
-      const promotionResult = 'result' in promotion ? promotion.result : undefined;
-      let projected = hooks.getResult();
-      if (!projected && promotionResult?.rootTaskId && promotionResult.managementRunId) {
-        const coordinations = await repositories.taskCoordination.coordinations
-          .listByManagementRun(promotionResult.managementRunId);
-        projected = {
-          rootTaskId: promotionResult.rootTaskId,
-          managementRunId: promotionResult.managementRunId,
-          subtaskIds: coordinations
-            .filter((coordination) => coordination.nodeKind === 'subtask'
-              && coordination.parentTaskId === promotionResult.rootTaskId)
-            .map((coordination) => coordination.taskId)
-            .sort(),
-        };
-      }
-      if (!projected) throw new Error('MESSAGE_ROUTE_PROMOTION_NOT_APPLIED');
-      // Exact-idempotency receipt replay 会在 Promotion hooks 之前返回；在任何 Offer 发布前
-      // 再读一次实时连接 fence，覆盖 crash/retry 后的 replay 路径。
-      revalidateTargetRuntimeConnection();
-      if (projected.subtaskIds.length > 0) {
-        if (!input.onChannelCollaborationTasksPublished) {
-          throw new Error('MESSAGE_ROUTE_OFFER_PUBLICATION_UNAVAILABLE');
-        }
-        await input.onChannelCollaborationTasksPublished(projected.subtaskIds);
-      }
-      return { linkedTaskId: projected.rootTaskId };
-    },
-  });
   const promotionModesForTeam = (teamId: string) => createPromotionModesService({
     teamId,
     unitOfWork: repositories.taskCoordinationUnitOfWork,
@@ -2728,17 +2552,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     }
   }
 
-  function wakeMessageRouteAnalysis(
-    teamId: string,
-    messageId: string,
-    clientMessageId: string | null,
-  ): void {
-    // ACK 只依赖 Message/RouteAnalysis 的持久化提交；外部 PI 与积压消费留给 durable consumer。
-    void bindMessageEpochBestEffort(teamId, messageId, clientMessageId)
-      .then(() => messageRouteAnalysis.processPending(1))
-      .catch(() => undefined);
-  }
-
   /** #931 A6：Team emergency-stop guard for promotion/PI commands。 */
   async function assertTeamPiCommandsAllowed(teamId: string): Promise<Ack<never> | null> {
     const migration = await repositories.teamPiAuthorityMigrations.get(teamId);
@@ -3042,13 +2855,33 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       revisionId: active.revisionId,
     });
   }
-  messageRouteAnalysis.bindPiAnalyzer(input.analyzeMessageRouteWithPi ?? createMessageRoutePiAnalyzer({
+  const channelWorkIntake = createChannelWorkIntake({
+    repositories,
+    clock,
+    ids,
+    getCapabilityDirectory: agentExposure.getCapabilityDirectory,
+    promotionModesForTeam,
+    analyzeWithPi: input.analyzeMessageRouteWithPi ?? createMessageRoutePiAnalyzer({
       resolveActiveTarget: resolveActivePiModelTarget,
       async resolveCapabilityDirectory({ teamId, channelId }) {
         const result = await agentExposure.getCapabilityDirectory({ teamId, channelId });
         return result.ok ? result.directory : null;
       },
-    }));
+    }),
+    ...(input.isDeviceRuntimeDisconnected
+      ? { isDeviceRuntimeDisconnected: input.isDeviceRuntimeDisconnected }
+      : {}),
+    ...(input.onChannelCollaborationTasksPublished
+      ? { onTasksPublished: input.onChannelCollaborationTasksPublished }
+      : {}),
+    bindMessageAuthorityEpoch: ({ teamId, messageId, clientMessageId }) =>
+      bindMessageEpochBestEffort(teamId, messageId, clientMessageId),
+    async assertPiCommandsAllowed(teamId) {
+      const stopped = await assertTeamPiCommandsAllowed(teamId);
+      if (stopped) throw new Error('MESSAGE_ROUTE_PI_AUTHORITY_UNAVAILABLE');
+    },
+    assertMessageRouteAuthorityCurrent,
+  });
 
   // Agent capability LLM 总结（混合提取慢路径）：机械提取为空/内容变化时，
   // 用 Active PI Model 对 AGENTS.md 全文总结一次，结果标「AI 总结」候选。
@@ -3130,7 +2963,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     if (response.outcome === 'applied' && response.result?.commandName === 'send-message') {
       const message = await repositories.messages.getById(response.result.messageId);
       if (!message) return makeFailure('INTERNAL_ERROR', 'Message not found after send');
-      wakeMessageRouteAnalysis(message.teamId, message.id, messageInput.clientMessageId ?? null);
+      channelWorkIntake.wakeAfterMessageCommitted({
+        teamId: message.teamId,
+        messageId: message.id,
+        clientMessageId: messageInput.clientMessageId ?? null,
+      });
       return makeSuccess({ message, dispatches: [] });
     }
     // replay → response 仅含 wire receipt（V1 投影白名单不含 resultJson，ADR-0067）；
@@ -3441,7 +3278,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async runCoordinationCycle(input?: { now?: number; limit?: number }): Promise<CoordinationCycleSummary> {
       // 与现有 durable coordinator 共用 host tick，使 PI/模型暂时不可用留下的 route
       // 能在 nextRetryAt 到期后恢复，而不依赖用户再次发消息。
-      await messageRouteAnalysis.processPending(input?.limit).catch(() => undefined);
+      await channelWorkIntake.processPending(input?.limit).catch(() => undefined);
       return channelCoordinator.runCoordinationCycle(input);
     },
     processCoordinationJob(jobId: string): Promise<CoordinationJobOutcome> {
@@ -6315,11 +6152,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       if (outcome.kind === 'saved' && outcome.routeAnalysisCreated) {
         // Message 已提交；只异步唤醒 durable consumer，PI/Promotion 不进入 Socket ACK 响应链。
-        wakeMessageRouteAnalysis(
-          outcome.message.teamId,
-          outcome.message.id,
-          messageInput.clientMessageId ?? null,
-        );
+        channelWorkIntake.wakeAfterMessageCommitted({
+          teamId: outcome.message.teamId,
+          messageId: outcome.message.id,
+          clientMessageId: messageInput.clientMessageId ?? null,
+        });
         const route: RouteResult = routeMessageForChannel({
           channel,
           visibleAgents,
@@ -19797,17 +19634,6 @@ async function projectStageCandidateAgentIds(
     }
     const device = devices.get(agent.deviceId);
     if (!device || device.status !== 'online') continue;
-    if (requiresDocumentInputSet
-      && (!agent.projectDocumentInputSetVersions?.includes(1)
-        || !device.capabilities?.projectDocumentInputSetVersions?.includes(1))) {
-      continue;
-    }
-    const manifest = await repositories.agentExposure.manifests
-      .getActiveByTeamAgent(task.teamId, agent.id);
-    const capabilities = new Set((manifest?.capabilities ?? agent.skills ?? [])
-      .map((capability) => capability.name.toLowerCase()));
-    if (coordination.requiredCapabilities
-      .some((required) => !capabilities.has(required.toLowerCase()))) continue;
     if (coordination.claimPolicy === 'targeted' && task.assigneeId !== agent.id) continue;
     eligible.push(agent.id);
   }
@@ -19815,6 +19641,9 @@ async function projectStageCandidateAgentIds(
     teamId: task.teamId,
     candidateAgentIds: eligible,
     requiredCapabilities: coordination.requiredCapabilities,
+    ...(requiresDocumentInputSet
+      ? { requiredProjectDocumentInputSetVersion: 1 }
+      : {}),
     now,
   });
 }

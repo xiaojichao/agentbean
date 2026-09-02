@@ -227,7 +227,7 @@ test('fails closed when runtime Capsule revalidation is bypassed', () => {
 
 test('fails closed when production runtime Capsule wiring is removed', () => {
   const result = withFixture('agentbean-phase3-runtime-wiring-', (fixture) => {
-    const path = join(fixture, 'apps/server-next/src/dev-server.ts');
+    const path = join(fixture, 'apps/server-next/src/server-runtime-assembly.ts');
     writeFileSync(path, readFileSync(path, 'utf8')
       .replaceAll('createDefaultServerCapsuleRuntimeContextResolver', 'removedRuntimeResolver'));
   });

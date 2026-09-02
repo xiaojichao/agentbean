@@ -13,6 +13,10 @@ import type {
   TaskCoordinationRecord,
   TaskOfferRecord,
 } from './task-coordination-repositories.js';
+import {
+  createAgentEligibilityModule,
+  type StrictProjectStageEligibilityInput,
+} from './agent-eligibility-module.js';
 
 export interface ProjectStageStableInputResolution {
   readonly stageId?: string;
@@ -84,49 +88,12 @@ export async function hasActiveProjectStageInvocation(
 /** #829 自动推进禁用 legacy skill 回退，只接受当前 Team 的有效公开 Exposure。 */
 export async function filterStrictProjectStageAgentIds(
   repositories: ServerNextRepositories,
-  input: {
-    teamId: string;
-    candidateAgentIds: readonly string[];
-    requiredCapabilities: readonly string[];
-    requiredProjectDocumentInputSetVersion?: number;
-    now: number;
-  },
+  input: StrictProjectStageEligibilityInput,
 ): Promise<string[]> {
-  const eligible: string[] = [];
-  for (const agentId of input.candidateAgentIds) {
-    const manifest = await repositories.agentExposure.manifests
-      .getActiveByTeamAgent(input.teamId, agentId);
-    if (!manifest
-      || manifest.validFrom > input.now
-      || (manifest.validUntil !== null && manifest.validUntil <= input.now)
-      || manifest.availability.status !== 'available') continue;
-    const restriction = await repositories.agentExposure.restrictions
-      .getByTeamAgent(input.teamId, agentId);
-    const disabled = new Set(
-      restriction?.manifestId === manifest.id
-        ? restriction.disabledCapabilities.map((name) => name.toLowerCase())
-        : [],
-    );
-    const capabilities = new Set(manifest.capabilities
-      .map((capability) => capability.name.toLowerCase())
-      .filter((name) => !disabled.has(name)));
-    if (input.requiredCapabilities
-      .some((required) => !capabilities.has(required.toLowerCase()))) continue;
-    if (input.requiredProjectDocumentInputSetVersion !== undefined) {
-      const agent = await repositories.agents.getById(agentId);
-      const device = agent?.deviceId
-        ? await repositories.devices.getById(agent.deviceId)
-        : null;
-      if (!agent?.projectDocumentInputSetVersions
-        ?.includes(input.requiredProjectDocumentInputSetVersion)
-        || !device?.capabilities?.projectDocumentInputSetVersions
-          ?.includes(input.requiredProjectDocumentInputSetVersion)) {
-        continue;
-      }
-    }
-    eligible.push(agentId);
-  }
-  return eligible.sort();
+  return createAgentEligibilityModule({
+    repositories,
+    clock: { now: () => input.now },
+  }).filterStrictProjectStageAgentIds(input);
 }
 
 /**

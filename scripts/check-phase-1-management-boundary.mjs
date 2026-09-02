@@ -205,6 +205,7 @@ const deviceWorkerScheduler = readSource('apps/server-next/src/application/manag
 const socketHandlers = readSource('apps/server-next/src/transport/socket-handlers.ts');
 const socketServer = readSource('apps/server-next/src/transport/socket-server.ts');
 const devServer = readSource('apps/server-next/src/dev-server.ts');
+const serverRuntimeAssembly = readSource('apps/server-next/src/server-runtime-assembly.ts');
 const workerTransportPresent = [
   'createDeviceWorkerScheduler',
   'registerWorker',
@@ -221,8 +222,9 @@ const workerTransportPresent = [
   && socketHandlers.includes('AGENT_EVENTS.managementWorker.register')
   && socketServer.includes('managementWorkerScheduler')
   && socketServer.includes('scheduleManagementRun')
-  && (devServer.includes('createDefaultManagementWorkerScheduler') || devServer.includes('createDefaultManagementRuntime'))
-  && devServer.includes('createDeviceWorkerScheduler');
+  && devServer.includes('createServerRuntimeAssembly')
+  && serverRuntimeAssembly.includes('createDefaultManagementRuntime')
+  && serverRuntimeAssembly.includes('createDeviceWorkerScheduler');
 
 if (!workerTransportPresent) {
   console.error('P1_WORKER_TRANSPORT_INVALID: Device Worker scheduler or Socket transport integration is incomplete');

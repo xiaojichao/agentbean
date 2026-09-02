@@ -58,6 +58,7 @@ const serverCapsuleRuntimeTests = read('apps/server-next/tests/server-capsule-ru
 const serverMemoryPermissions = read('apps/server-next/src/application/server-memory-permissions.ts');
 const serverMemoryPermissionTests = read('apps/server-next/tests/server-memory-permissions.test.ts');
 const serverDevRuntime = read('apps/server-next/src/dev-server.ts');
+const serverRuntimeAssembly = read('apps/server-next/src/server-runtime-assembly.ts');
 const daemonRuntimeMemory = read('apps/daemon-next/src/memory/runtime-memory-context.ts');
 const daemonRuntimeMemoryTests = read('apps/daemon-next/tests/runtime-memory-context.test.ts');
 const daemonExecutor = read('apps/daemon-next/src/executor.ts');
@@ -313,7 +314,8 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !managementToolExecutor.includes('recordMemoryToolReceiptInTransaction')
   || !managementToolExecutor.includes("receipt.disposition === 'existing'")
   || !managementMemoryUnitOfWork.includes('ManagementMemoryTransactionRepositories')
-  || (serverDevRuntime.match(/managementMemoryUnitOfWork: repositories\.managementMemoryUnitOfWork/g)?.length ?? 0) < 2
+  || !serverDevRuntime.includes('createServerRuntimeAssembly')
+  || (serverRuntimeAssembly.match(/managementMemoryUnitOfWork: repositories\.managementMemoryUnitOfWork/g)?.length ?? 0) < 2
   || !managementWorkerV1.includes('readonly toolName?: string')
   || !managementWorkerV1.includes('toolName: optional(text(128))')
   || !inMemoryRepositories.includes('AsyncLocalStorage<ManagementMemoryTransactionRepositories>')
@@ -348,8 +350,9 @@ if (!runtimeContractMarkers.every((marker) => dispatchContract.includes(marker))
   || !serverMemoryPermissions.includes('CURRENT_MEMORY_POLICY_VERSION')
   || !serverMemoryPermissions.includes("sourceVisibility === 'local-only'")
   || !serverMemoryPermissionTests.includes('production Server Memory permissions')
-  || !serverDevRuntime.includes('createDefaultServerCapsuleRuntimeContextResolver')
-  || !serverDevRuntime.includes('serverCapsuleRuntimeContextResolver,')
+  || !serverDevRuntime.includes('createServerRuntimeAssembly')
+  || !serverRuntimeAssembly.includes('createDefaultServerCapsuleRuntimeContextResolver')
+  || !serverRuntimeAssembly.includes('serverCapsuleRuntimeContextResolver,')
   || !serverNextUsecases.includes('serverCapsuleRuntimeContextResolver')
   || !serverNextUsecases.includes('memoryContext.length > 0')
   || !serverCapsuleRuntimeTests.includes('describe.each')

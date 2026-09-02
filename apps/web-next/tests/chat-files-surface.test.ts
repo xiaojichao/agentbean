@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 
 const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
+const projectWorkspaceSource = readFileSync(
+  new URL('../lib/use-channel-project-workspace.ts', import.meta.url),
+  'utf8',
+);
 const projectFilesBoardSource = readFileSync(
   new URL('../components/project/ProjectFilesBoard.tsx', import.meta.url),
   'utf8',
@@ -45,7 +49,8 @@ describe('chat files surface', () => {
     expect(source).not.toContain('const useAttachmentFiles');
     // 首轮投影拉取完成前不闪空板。
     expect(source).toContain('files-project-surface-loading');
-    expect(source).toContain('setFilesProjectSurfaceReady(true)');
+    expect(source).toContain('const filesProjectSurfaceReady = projectWorkspace.filesReady');
+    expect(projectWorkspaceSource).toContain('setFilesReady(true)');
     // stages 容空:overview 缺失时传空数组,等待上游卡自然不出现。
     expect(source).toMatch(/stages=\{channelProjectOverview\?\.stages\.map\(/);
     // 提升入口在无 overview 时关闭(canPromote=false),不误开。
