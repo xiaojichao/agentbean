@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 
 const chatSource = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
+const projectWorkspaceSource = readFileSync(
+  new URL('../lib/use-channel-project-workspace.ts', import.meta.url),
+  'utf8',
+);
 const appShellSource = readFileSync(new URL('../components/app-shell.tsx', import.meta.url), 'utf8');
 const sidebarSource = readFileSync(new URL('../components/sidebar.tsx', import.meta.url), 'utf8');
 const settingsSource = readFileSync(new URL('../app/[teamPath]/settings/page.tsx', import.meta.url), 'utf8');
@@ -190,11 +194,13 @@ describe('chat task surface', () => {
 
     expect(panel).toContain('showProjectSettings');
     expect(panel).toContain('data-smoke="channel-project-settings-dialog"');
-    expect(panel).toContain('acceptChannelProjectOverview');
+    expect(projectWorkspaceSource).toContain('acceptChannelProjectOverview');
+    expect(panel).toContain('onApplyProjectOverview');
     expect(panel).toContain('onCreateStage={workspaceReadOnly ? undefined : createProjectStage}');
     expect(panel).toContain("projectEvents().createStage({");
     expect(panel).toContain('closeProjectSettings');
-    expect(panel).toContain('void refreshProjectOverview()');
+    expect(panel).toContain('void onRefreshProjectFacts()');
+    expect(panel).not.toContain('projectEvents().overview');
 
     const progressStart = panel.indexOf('<ChannelProjectProgress');
     const progressEnd = panel.indexOf('onOpenSettings', progressStart);

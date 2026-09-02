@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispa
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Bookmark, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, ChevronRight, Smile, ChevronDown, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDeliveryOverviewV1, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDeliveryOverviewV1, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -45,7 +45,10 @@ import {
   ChannelProjectProgress,
   type ChannelProjectProgressState,
 } from '@/components/ChannelProjectProgress';
-import { acceptChannelProjectOverview } from '@/lib/channel-project-overview';
+import {
+  useChannelProjectWorkspace,
+  type ChannelProjectTask,
+} from '@/lib/use-channel-project-workspace';
 import {
   type PromoteArtifactDraft,
   type SetArtifactFinalVersionDraft,
@@ -124,19 +127,7 @@ interface ComposerAttachment {
   error?: string;
 }
 
-interface TaskItem {
-  id: string;
-  title: string;
-  description: string | null;
-  status: TaskStatus;
-  creatorId: string;
-  assigneeId: string | null;
-  channelId: string | null;
-  tags: string[];
-  sortOrder: number;
-  createdAt: number;
-  updatedAt: number;
-}
+type TaskItem = ChannelProjectTask;
 
 interface OpenChannelDocument {
   document: ChannelDocumentDto;
@@ -405,24 +396,43 @@ export default function ChatPage() {
     initialVersionId?: string;
     readOnly?: boolean;
   } | null>(null);
-  const outputPackageProjectionRequestRef = useRef(0);
-  const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
-  /** 仅用于 composer 历史 chip 标签解析；文件库不再展示文档包列表。 */
-  const [projectDocumentBundles, setProjectDocumentBundles] = useState<ProjectDocumentBundleDto[]>([]);
-  /** 文件页项目投影是否已完成首轮拉取，避免普通频道在空数据时闪一下逻辑产物板。 */
-  const [filesProjectSurfaceReady, setFilesProjectSurfaceReady] = useState(false);
-  // #1060 OutputPackage 投影(Files 面;与讨论串/Task 同一 Server 事实)。
-  const [outputPackages, setOutputPackages] = useState<OutputPackageSummaryDto[]>([]);
-  const [outputPackagePendings, setOutputPackagePendings] = useState<OutputPackagePendingDeliveryDto[]>([]);
   const [projectReferenceSelections, setProjectReferenceSelections] = useState<ProjectReferenceSelectionRequestDto[]>([]);
-  // 原型收敛:逻辑产物视图的包详情缓存失效令牌(onArtifactsUpdated/packages 刷新时 +1)。
-  const [projectDataRevision, setProjectDataRevision] = useState(0);
   // 原型收敛:逻辑产物视图集合行「查看」→ ArtifactViewer 只读。
   const [readOnlyArtifact, setReadOnlyArtifact] = useState<ArtifactDto | null>(null);
   const [sendingMessage, setSendingMessage] = useState(false);
-  const [channelProjectOverview, setChannelProjectOverview] = useState<ChannelProjectOverviewDto | null>(null);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
+  const projectWorkspace = useChannelProjectWorkspace({
+    channelId: activeChannel,
+    connected: conn === 'open',
+    projectFactsActive: tab !== 'chat' || Boolean(threadRootId),
+    fileFactsActive: tab === 'files' || Boolean(threadRootId),
+  });
+  const tasks = projectWorkspace.tasks;
+  const channelTaskWorkspace = projectWorkspace.taskWorkspace;
+  const tasksLoading = projectWorkspace.tasksLoading;
+  const tasksLoadError = projectWorkspace.tasksLoadError;
+  const channelProjectOverview = projectWorkspace.overview ?? null;
+  const projectArtifactLibrary = projectWorkspace.artifactLibrary;
+  const projectDocumentBundles = projectWorkspace.documentBundles;
+  const outputPackages = projectWorkspace.outputPackages;
+  const outputPackagePendings = projectWorkspace.outputPackagePendings;
+  const filesProjectSurfaceReady = projectWorkspace.filesReady;
+  const projectDataRevision = projectWorkspace.dataRevision;
+  const loadTasks = projectWorkspace.refreshTasks;
+  const applyProjectTask = projectWorkspace.applyTask;
+  const applyProjectOverview = projectWorkspace.applyOverview;
+  const applyProjectArtifactLibrary = projectWorkspace.applyArtifactLibrary;
+  const refreshProjectFacts = projectWorkspace.refreshProjectFacts;
+  const refreshArtifactLibrary = projectWorkspace.refreshArtifactLibrary;
+  const refreshOutputPackages = projectWorkspace.refreshOutputPackages;
+  const refreshOutputPackageProjection = useCallback((channelId: string) => {
+    if (channelId !== activeChannel) return Promise.resolve();
+    return refreshOutputPackages();
+  }, [activeChannel, refreshOutputPackages]);
+  const refreshProjectArtifactLibrary = useCallback(() => {
+    void refreshArtifactLibrary();
+  }, [refreshArtifactLibrary]);
   const [taskDetailMessageId, setTaskDetailMessageId] = useState<string | null>(null);
   /** 原型收敛:无关联消息的任务(看板直接创建)的详情——task-only 模式,值为 taskId。 */
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
@@ -439,10 +449,6 @@ export default function ChatPage() {
   } | null>(null);
   const [threadContinuationSubmitting, setThreadContinuationSubmitting] = useState(false);
   const [showBackToBottom, setShowBackToBottom] = useState(false);
-  const [tasks, setTasks] = useState<TaskItem[]>([]);
-  const [channelTaskWorkspace, setChannelTaskWorkspace] = useState<ChannelTaskWorkspaceV1 | null>(null);
-  const [tasksLoading, setTasksLoading] = useState(false);
-  const [tasksLoadError, setTasksLoadError] = useState<{ kind: 'not_ready' | 'no_permission' | 'error'; message: string } | null>(null);
   const [stoppingChannelAgents, setStoppingChannelAgents] = useState(false);
   const [chatTaskMenuTarget, setChatTaskMenuTarget] = useState<ChatTaskMenuTarget>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -469,17 +475,6 @@ export default function ChatPage() {
     channelId: null,
     messageCount: 0,
   });
-
-  const refreshOutputPackageProjection = useCallback(async (channelId: string) => {
-    const requestId = ++outputPackageProjectionRequestRef.current;
-    const result = await projectEvents().listOutputPackages({ channelId });
-    if (requestId !== outputPackageProjectionRequestRef.current
-      || activeChannelRef.current !== channelId
-      || !result.ok) return;
-    setOutputPackages(result.packages ?? []);
-    setOutputPackagePendings(result.pendingDeliveries ?? []);
-    setProjectDataRevision((revision) => revision + 1);
-  }, []);
 
   useEffect(() => {
     dmsRef.current = dms;
@@ -653,63 +648,8 @@ export default function ChatPage() {
     };
   }, [activeChannel, conn, currentTeamId, applyChannelHistory, applyDispatchStatus, handleMessage, upsertActivityMessages]);
 
-  // #823 逻辑产物视图按需拉取 Server 投影。
-  // 设计/原型：文件库只展示输出包/文件集合/等待上游，不展示「频道文档」顶栏。
-  // 所有会话统一渲染逻辑产物板；无项目数据面时呈现空板形态。
-  useEffect(() => {
-    let active = true;
-    setProjectArtifactLibrary(null);
-    setChannelProjectOverview(null);
-    setProjectDocumentBundles([]);
-    setOutputPackages([]);
-    setOutputPackagePendings([]);
-    setFilesProjectSurfaceReady(false);
-    if ((tab !== 'files' && !threadRootId) || !activeChannel || conn !== 'open') {
-      return () => { active = false; };
-    }
-    const libraryPromise = projectEvents().artifactCollections(activeChannel).then((result) => {
-      if (active && result.ok && result.library) setProjectArtifactLibrary(result.library);
-    });
-    const overviewPromise = projectEvents().overview(activeChannel).then((result) => {
-      if (active && result.ok) setChannelProjectOverview(result.overview ?? null);
-    });
-    // composer 历史 document/bundle chip 标签仍可能需要 bundle 名；不渲染列表。
-    const bundlesPromise = projectEvents().documentBundles(activeChannel).then((result) => {
-      if (!active) return;
-      setProjectDocumentBundles(result.ok ? result.bundles ?? [] : []);
-    });
-    // #1060 OutputPackage:Files 面读取同一 Server 事实(packages + pendingDeliveries)。
-    const packagesPromise = refreshOutputPackageProjection(activeChannel);
-    void Promise.all([libraryPromise, overviewPromise, bundlesPromise, packagesPromise]).finally(() => {
-      if (active) setFilesProjectSurfaceReady(true);
-    });
-    return () => { active = false; };
-  }, [activeChannel, conn, tab, threadRootId, refreshOutputPackageProjection]);
-
   useEffect(() => {
     setProjectReferenceSelections([]);
-  }, [activeChannel]);
-
-  useEffect(() => {
-    if (!activeChannel) return;
-    return projectEvents().onArtifactsUpdated(activeChannel, (library) => {
-      setProjectArtifactLibrary(library);
-      // 产物事实变化(审核/设 final/人工修订/提升)→ 逻辑产物视图的包投影缓存失效。
-      void refreshOutputPackageProjection(activeChannel);
-    });
-  }, [activeChannel, refreshOutputPackageProjection]);
-
-  // #1062 修订保存后刷新 Files 投影(新 current revision 立即可见)。
-  const refreshProjectArtifactLibrary = useCallback(() => {
-    if (!activeChannel) return;
-    void projectEvents().artifactCollections(activeChannel).then((result) => {
-      if (result.ok && result.library) setProjectArtifactLibrary(result.library);
-    });
-  }, [activeChannel]);
-
-  useEffect(() => {
-    if (!activeChannel) return;
-    return projectEvents().onDocumentBundlesUpdated(activeChannel, setProjectDocumentBundles);
   }, [activeChannel]);
 
   // Agent 改名后，server 已把历史消息的 @oldName 迁移进 meta.mentions（锁定稳定 id）。
@@ -918,9 +858,9 @@ export default function ChatPage() {
     if (!result.ok || !result.library) {
       return result.message ?? '提升逻辑产物版本失败，请刷新后重试';
     }
-    setProjectArtifactLibrary(result.library);
+    applyProjectArtifactLibrary(result.library);
     return null;
-  }, [activeChannel]);
+  }, [activeChannel, applyProjectArtifactLibrary]);
 
   const loadChannelPromotableArtifacts = useCallback(async () => {
     if (!activeChannel || conn !== 'open') return [];
@@ -940,9 +880,9 @@ export default function ChatPage() {
     if (!result.ok || !result.library) {
       return result.message ?? '提交产物审核失败，请刷新后重试';
     }
-    setProjectArtifactLibrary(result.library);
+    applyProjectArtifactLibrary(result.library);
     return null;
-  }, [activeChannel]);
+  }, [activeChannel, applyProjectArtifactLibrary]);
 
   const finalizeChannelArtifact = useCallback(async (
     draft: SetArtifactFinalVersionDraft,
@@ -956,9 +896,9 @@ export default function ChatPage() {
     if (!result.ok || !result.library) {
       return result.message ?? '设置最终版失败，请刷新后重试';
     }
-    setProjectArtifactLibrary(result.library);
+    applyProjectArtifactLibrary(result.library);
     return null;
-  }, [activeChannel]);
+  }, [activeChannel, applyProjectArtifactLibrary]);
 
   // 原型收敛:逻辑产物视图(ProjectFilesBoard)的 Agent 名映射(来源列/搜索;DTO 只有 agentId)。
   const filesBoardAgentNames = useMemo(
@@ -1484,67 +1424,6 @@ export default function ChatPage() {
     const query = params.toString();
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
   }, [router, searchParams]);
-
-  const loadTasks = useCallback(async () => {
-    if (!activeChannel || conn !== 'open') return;
-    setTasksLoading(true);
-    setTasksLoadError(null);
-    try {
-      const res = await taskEvents().channelWorkspace(activeChannel);
-      if (res.ok && res.workspace) {
-        setChannelTaskWorkspace(res.workspace);
-        setTasks(res.workspace.entries.map((entry) => entry.task) as TaskItem[]);
-      } else if (res.ok) {
-        setTasksLoadError({ kind: 'not_ready', message: '频道任务事实尚未就绪' });
-      } else {
-        const code = res.error ?? '';
-        setTasksLoadError({
-          kind: code === 'FORBIDDEN' || code === 'UNAUTHORIZED' ? 'no_permission' : 'error',
-          message: res.message ?? res.error ?? '频道任务加载失败，请稍后重试',
-        });
-      }
-    } catch {
-      setTasksLoadError({ kind: 'error', message: '频道任务加载失败，请稍后重试' });
-    } finally {
-      setTasksLoading(false);
-    }
-  }, [activeChannel, conn]);
-
-  useEffect(() => {
-    setTasks([]);
-    setChannelTaskWorkspace(null);
-    setTasksLoadError(null);
-    void loadTasks();
-  }, [loadTasks]);
-
-  useEffect(() => {
-    if (!activeChannel || conn !== 'open') return;
-    const socket = getWebSocket();
-    const onTaskUpdated = (task: TaskItem) => {
-      if (task.channelId !== activeChannel) return;
-      setTasks((prev) => {
-        if (prev.some((item) => item.id === task.id)) {
-          return prev.map((item) => item.id === task.id ? task : item);
-        }
-        return [...prev, task];
-      });
-      void loadTasks();
-      void refreshOutputPackageProjection(activeChannel);
-    };
-    socket.on('task:updated', onTaskUpdated);
-    return () => { socket.off('task:updated', onTaskUpdated); };
-  }, [activeChannel, conn, loadTasks, refreshOutputPackageProjection]);
-
-  useEffect(() => {
-    if (!activeChannel || conn !== 'open') return;
-    const refresh = () => { void loadTasks(); };
-    const stopProject = projectEvents().onUpdated(activeChannel, refresh);
-    const stopArtifacts = projectEvents().onArtifactsUpdated(activeChannel, refresh);
-    return () => {
-      stopProject();
-      stopArtifacts();
-    };
-  }, [activeChannel, conn, loadTasks]);
 
   useEffect(() => {
     if (!activeChannel) return;
@@ -2165,13 +2044,8 @@ export default function ChatPage() {
     const res = await messageReactionEvents().convertToTask(msg.id);
     if (res?.ok && res.message && res.task) {
       appendMessage(res.message);
-      setTasks((prev) => {
-        const task = res.task as TaskItem;
-        return prev.some((item) => item.id === task.id)
-          ? prev.map((item) => item.id === task.id ? { ...item, ...task } : item)
-          : [...prev, task];
-      });
-      setTimeout(() => loadTasks(), 150);
+      // convert-message-to-task 返回的是消息内嵌摘要；完整 Task authority 由 workspace 查询提供。
+      setTimeout(() => { void loadTasks(); }, 150);
       return;
     }
     appendMessage({
@@ -2359,7 +2233,7 @@ export default function ChatPage() {
     }
     const maxSort = tasks.filter((item) => item.status === status && item.id !== task.id).reduce((max, item) => Math.max(max, item.sortOrder), 0);
     const optimistic = { ...task, status, sortOrder: maxSort + 1, updatedAt: Date.now() };
-    setTasks((prev) => prev.map((item) => item.id === task.id ? optimistic : item));
+    applyProjectTask(optimistic);
     setChatTaskMenuTarget(null);
     try {
       const res = status === 'cancelled'
@@ -2368,12 +2242,12 @@ export default function ChatPage() {
           ? await taskEvents().close(task.id, '管理员关闭')
         : await taskEvents().update({ id: task.id, status, sortOrder: maxSort + 1 });
       if (res.ok && res.task) {
-        setTasks((prev) => prev.map((item) => item.id === task.id ? res.task as TaskItem : item));
+        applyProjectTask(res.task);
       } else {
-        setTasks((prev) => prev.map((item) => item.id === task.id ? task : item));
+        applyProjectTask(task);
       }
     } catch {
-      setTasks((prev) => prev.map((item) => item.id === task.id ? task : item));
+      applyProjectTask(task);
     }
   };
 
@@ -2886,6 +2760,9 @@ export default function ChatPage() {
               workspace={channelTaskWorkspace}
               loading={tasksLoading}
               loadError={tasksLoadError}
+              projectOverview={projectWorkspace.overview}
+              projectOverviewError={projectWorkspace.overviewError}
+              projectArtifactLibrary={projectArtifactLibrary}
               selectedStageId={selectedStageId}
               archived={Boolean(activeChannelObj?.archivedAt)}
               participants={taskParticipants}
@@ -2894,6 +2771,8 @@ export default function ChatPage() {
               onBackToThread={backToThreadFromTaskCard}
               onReviewDeliveryFiles={openReviewFilesFromProjection}
               onViewDeliveryFiles={viewDeliveryFilesFromTaskCard}
+              onApplyProjectOverview={applyProjectOverview}
+              onRefreshProjectFacts={refreshProjectFacts}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-neutral-400">选择一个频道或私聊查看任务</div>
@@ -3623,6 +3502,9 @@ function ConversationTasks({
   workspace,
   loading,
   loadError,
+  projectOverview,
+  projectOverviewError,
+  projectArtifactLibrary,
   selectedStageId,
   archived,
   participants,
@@ -3631,11 +3513,16 @@ function ConversationTasks({
   onBackToThread,
   onReviewDeliveryFiles,
   onViewDeliveryFiles,
+  onApplyProjectOverview,
+  onRefreshProjectFacts,
 }: {
-  tasks: TaskItem[];
+  tasks: readonly TaskItem[];
   workspace: ChannelTaskWorkspaceV1 | null;
   loading: boolean;
   loadError: { kind: 'not_ready' | 'no_permission' | 'error'; message: string } | null;
+  projectOverview: ChannelProjectOverviewDto | null | undefined;
+  projectOverviewError: { kind: 'not_ready' | 'no_permission' | 'error'; message: string } | null;
+  projectArtifactLibrary: ProjectArtifactLibraryDto | null;
   selectedStageId: string | null;
   archived: boolean;
   participants: { id: string; name: string; kind: 'human' | 'agent' }[];
@@ -3647,75 +3534,10 @@ function ConversationTasks({
   onReviewDeliveryFiles: (projection: TaskCardReviewProjection, versionId: string | undefined) => void;
   /** 原型已结束卡「查看交付与 final」：定位 Files 逻辑产物视图。 */
   onViewDeliveryFiles: (taskId: string) => void;
+  onApplyProjectOverview: (overview: ChannelProjectOverviewDto | null) => void;
+  onRefreshProjectFacts: () => Promise<void>;
 }) {
-  const [projectOverview, setProjectOverview] = useState<ChannelProjectOverviewDto | null>();
-  const [projectOverviewError, setProjectOverviewError] = useState<{ kind: 'no_permission' | 'error'; message: string } | null>(null);
-  const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
   const [showProjectSettings, setShowProjectSettings] = useState(false);
-  const projectTaskVersion = tasks
-    .map((task) => `${task.id}:${task.status}:${task.updatedAt}`)
-    .sort()
-    .join('|');
-
-  const applyProjectOverview = useCallback((incoming: ChannelProjectOverviewDto | null) => {
-    setProjectOverview((current) => acceptChannelProjectOverview(current, incoming));
-    setProjectOverviewError(null);
-  }, []);
-
-  const refreshProjectOverview = useCallback(async () => {
-    try {
-      const [overviewResult, artifactResult] = await Promise.all([
-        projectEvents().overview(channelId),
-        projectEvents().artifactCollections(channelId),
-      ]);
-      if (overviewResult.ok) {
-        applyProjectOverview(overviewResult.overview ?? null);
-      } else {
-        const code = overviewResult.error ?? '';
-        setProjectOverviewError({
-          kind: code === 'FORBIDDEN' || code === 'UNAUTHORIZED' ? 'no_permission' : 'error',
-          message: overviewResult.message ?? overviewResult.error ?? '项目推进加载失败，请稍后重试',
-        });
-      }
-      if (artifactResult.ok) setProjectArtifactLibrary(artifactResult.library ?? null);
-    } catch {
-      setProjectOverviewError({ kind: 'error', message: '项目推进加载失败，请稍后重试' });
-    }
-  }, [applyProjectOverview, channelId]);
-
-  useEffect(() => {
-    let active = true;
-    setProjectOverview(undefined);
-    setProjectOverviewError(null);
-    void Promise.all([
-      projectEvents().overview(channelId),
-      projectEvents().artifactCollections(channelId),
-    ]).then(([overviewResult, artifactResult]) => {
-      if (!active) return;
-      if (overviewResult.ok) {
-        applyProjectOverview(overviewResult.overview ?? null);
-      } else {
-        const code = overviewResult.error ?? '';
-        setProjectOverviewError({
-          kind: code === 'FORBIDDEN' || code === 'UNAUTHORIZED' ? 'no_permission' : 'error',
-          message: overviewResult.message ?? overviewResult.error ?? '项目推进加载失败，请稍后重试',
-        });
-      }
-      if (artifactResult.ok) setProjectArtifactLibrary(artifactResult.library ?? null);
-    }).catch(() => {
-      if (!active) return;
-      setProjectOverviewError({ kind: 'error', message: '项目推进加载失败，请稍后重试' });
-    });
-    return () => { active = false; };
-  }, [applyProjectOverview, channelId, projectTaskVersion]);
-
-  useEffect(() => projectEvents().onUpdated(channelId, (nextOverview) => {
-    applyProjectOverview(nextOverview);
-  }), [applyProjectOverview, channelId]);
-  useEffect(
-    () => projectEvents().onArtifactsUpdated(channelId, setProjectArtifactLibrary),
-    [channelId],
-  );
 
   const hasProjectStages = (projectOverview?.stages.length ?? 0) > 0;
   const workspaceReadOnly = archived || Boolean(projectOverview?.archived);
@@ -3733,7 +3555,7 @@ function ConversationTasks({
     if (!result.ok || !result.overview) {
       return result.message ?? '创建项目阶段失败，请刷新后重试';
     }
-    applyProjectOverview(result.overview);
+    onApplyProjectOverview(result.overview);
     return null;
   };
 
@@ -3754,7 +3576,7 @@ function ConversationTasks({
     if (!result.ok || !result.overview) {
       return result.message ?? '创建项目阶段失败，请刷新后重试';
     }
-    applyProjectOverview(result.overview);
+    onApplyProjectOverview(result.overview);
     return null;
   };
 
@@ -3777,7 +3599,7 @@ function ConversationTasks({
     if (!result.ok || !result.overview) {
       return result.message ?? '配置阶段依赖失败，请刷新后重试';
     }
-    applyProjectOverview(result.overview);
+    onApplyProjectOverview(result.overview);
     return null;
   };
 
@@ -3792,13 +3614,13 @@ function ConversationTasks({
     if (!result.ok || !result.overview) {
       return result.message ?? '删除阶段依赖失败，请刷新后重试';
     }
-    applyProjectOverview(result.overview);
+    onApplyProjectOverview(result.overview);
     return null;
   };
 
   const closeProjectSettings = () => {
     setShowProjectSettings(false);
-    void refreshProjectOverview();
+    void onRefreshProjectFacts();
   };
 
   const projectProgressState: ChannelProjectProgressState = loadError?.kind
@@ -4100,7 +3922,7 @@ function shortPackageLabel(packageId: string): string {
 
 function projectReferenceSelectionLabel(
   selection: ProjectReferenceSelectionRequestDto,
-  bundles?: ProjectDocumentBundleDto[],
+  bundles?: readonly ProjectDocumentBundleDto[],
 ): string {
   switch (selection.kind) {
     case 'bundle_all':
@@ -4200,7 +4022,7 @@ function ThreadPanel({
   savedIds: Set<string>;
   pinnedIds: Set<string>;
   reactionEmojis: ReactionEmojiMap;
-  tasks: TaskItem[];
+  tasks: readonly TaskItem[];
   taskWorkspaceEntries: readonly ChannelTaskWorkspaceEntryV1[];
   taskNumbers: Map<string, number>;
   activeDmAgent?: AgentSnapshot;
@@ -4240,7 +4062,7 @@ function ThreadPanel({
   /** 原型对齐:线程内文件包「预览/编辑」浮窗入口。 */
   onOpenPackagePreview?: (packageMeta: OutputPackageMeta, versionId?: string) => void;
   /** 原型 @选择器扩展:文件包候选(@文件包 → current projection 引用)。 */
-  outputPackages: OutputPackageSummaryDto[];
+  outputPackages: readonly OutputPackageSummaryDto[];
   /** 原型 @选择器扩展:文件候选(@文件 → artifact_version 引用)。 */
   artifactLibrary: ProjectArtifactLibraryDto | null;
 }) {
@@ -5978,7 +5800,7 @@ function parseScopedMessageId(raw: string | null, channelId: string): string | n
   return left === channelId && right ? right : null;
 }
 
-function buildTaskNumberMap(tasks: TaskItem[]): Map<string, number> {
+function buildTaskNumberMap(tasks: readonly TaskItem[]): Map<string, number> {
   const ordered = [...tasks].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   return new Map(ordered.map((task, index) => [task.id, index + 1]));
 }

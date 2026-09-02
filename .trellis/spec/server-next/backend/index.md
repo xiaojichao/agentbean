@@ -6,7 +6,7 @@
 
 `server-next` 是 AgentBean 的生产服务端。它**不使用 Hono/Express 等框架**，而是直接基于 `node:http` 的 `createServer` 起裸 HTTP 服务，几乎所有客户端 API 走 socket.io 命名空间事件，HTTP 面只有 `/healthz`、`/metricsz`、`/preview` 等极少数端点。数据库为 better-sqlite3（Global DB + 每 Team DB 双轨），传输层为 socket.io。
 
-新增功能时，绝大多数工作发生在 `src/application/usecases.ts`（god-interface 工厂）与 `src/transport/socket-handlers.ts`（事件绑定），并辅以 `src/application/` 下正在抽取的深模块。改 DB schema 要同步迁移注册与表守卫。新 transport 事件要同步 readiness 剥离链。
+新增功能时，先判断它是否属于已有深模块：Channel Work Intake 进入 `src/application/channel-work-intake.ts`，Agent 资格事实进入 `src/application/agent-eligibility-module.ts`，通用 Server runtime wiring 进入 `src/server-runtime-assembly.ts`；只有尚未抽取的用例才继续进入 `src/application/usecases.ts`。事件绑定仍在 `src/transport/socket-handlers.ts`。改 DB schema 要同步迁移注册与表守卫，新 transport 事件要同步 readiness 剥离链。
 
 ## 主题导航
 
@@ -36,8 +36,11 @@
 
 ## 关键源码入口（绝对路径）
 
-- 生产组装根：`/Users/shaw/AgentBean/apps/server-next/src/dev-server.ts`（2920 行）
-- god-interface 工厂：`/Users/shaw/AgentBean/apps/server-next/src/application/usecases.ts`（19401 行）
+- 生产 host/storage 组装根：`/Users/shaw/AgentBean/apps/server-next/src/dev-server.ts`
+- 通用 runtime assembly：`/Users/shaw/AgentBean/apps/server-next/src/server-runtime-assembly.ts`
+- Channel Work Intake：`/Users/shaw/AgentBean/apps/server-next/src/application/channel-work-intake.ts`
+- Agent eligibility：`/Users/shaw/AgentBean/apps/server-next/src/application/agent-eligibility-module.ts`
+- god-interface 工厂：`/Users/shaw/AgentBean/apps/server-next/src/application/usecases.ts`
 - socket 绑定：`/Users/shaw/AgentBean/apps/server-next/src/transport/socket-handlers.ts`
 - 迁移注册：`/Users/shaw/AgentBean/apps/server-next/src/infra/sqlite/repositories.ts`
 - 授权路由：`/Users/shaw/AgentBean/apps/server-next/src/application/management/management-router.ts`

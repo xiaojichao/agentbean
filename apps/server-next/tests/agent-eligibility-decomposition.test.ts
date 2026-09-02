@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { resolveDecompositionAllocatability } from '../src/application/management/agent-eligibility-service.js';
+import { resolveDecompositionAllocatability } from '../src/application/agent-eligibility-module.js';
 
-describe('resolveDecompositionAllocatability', () => {
+describe('AgentEligibilityModule decomposition allocatability', () => {
   const clock = { now: () => 100 };
 
   function currentManifest(skills: string[] = ['research']) {
@@ -98,6 +98,8 @@ describe('resolveDecompositionAllocatability', () => {
   });
 
   test('multi subtask:two qualified agents covering two subtasks → fully_allocatable', async () => {
+    let candidateReads = 0;
+    let manifestReads = 0;
     const result = await resolveDecompositionAllocatability({
       parentTaskId: 'root',
       subtaskSkillReqs: [
@@ -106,21 +108,27 @@ describe('resolveDecompositionAllocatability', () => {
       ],
       teamId: 'team-1',
       broker: {
-        resolveCandidates: async () => ({
-          taskId: 'root', taskRevision: 1, taskAttempt: 1,
-          candidates: [
-            { agentId: 'agent-1', eligible: true, missingCapabilities: [], diagnosticCodes: [] },
-            { agentId: 'agent-2', eligible: true, missingCapabilities: [], diagnosticCodes: [] },
-          ],
-          ancestorAgentIds: [],
-        }),
+        resolveCandidates: async () => {
+          candidateReads += 1;
+          return {
+            taskId: 'root', taskRevision: 1, taskAttempt: 1,
+            candidates: [
+              { agentId: 'agent-1', eligible: true, missingCapabilities: [], diagnosticCodes: [] },
+              { agentId: 'agent-2', eligible: true, missingCapabilities: [], diagnosticCodes: [] },
+            ],
+            ancestorAgentIds: [],
+          };
+        },
       },
       resolveManifest: async (_teamId: string, agentId: string) => {
+        manifestReads += 1;
         if (agentId === 'agent-1') return currentManifest(['research']);
         return currentManifest(['codegen']);
       },
       clock,
     });
     expect(result).toEqual({ kind: 'fully_allocatable' });
+    expect(candidateReads).toBe(1);
+    expect(manifestReads).toBe(2);
   });
 });

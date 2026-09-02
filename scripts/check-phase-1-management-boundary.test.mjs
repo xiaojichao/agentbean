@@ -141,7 +141,8 @@ function scaffoldWorkerTransport(root) {
   write(root, 'apps/server-next/src/application/management/management-kernel.ts', 'createOrResumeRun acquireLease renewLease releaseLease expireLease appendEvent authorizeManagementWrite\n');
   write(root, 'apps/server-next/src/transport/socket-handlers.ts', 'safeParseManagementWorkerPayload AGENT_EVENTS.managementWorker.register\n');
   write(root, 'apps/server-next/src/transport/socket-server.ts', 'managementWorkerScheduler scheduleManagementRun\n');
-  write(root, 'apps/server-next/src/dev-server.ts', 'createDefaultManagementWorkerScheduler createDeviceWorkerScheduler\n');
+  write(root, 'apps/server-next/src/dev-server.ts', 'createServerRuntimeAssembly\n');
+  write(root, 'apps/server-next/src/server-runtime-assembly.ts', 'createDefaultManagementRuntime createDeviceWorkerScheduler\n');
 }
 
 function scaffoldInvocationGateway(root) {
@@ -310,6 +311,21 @@ test('reports Worker transport while Device WorkerHost remains Red', () => {
     assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /P1_WORKER_TRANSPORT_PRESENT/);
     assert.match(result.stderr, /P1_DEVICE_WORKER_HOST_INVALID/);
+  });
+});
+
+test('fails closed when dev-server bypasses the runtime assembly', () => {
+  withFixture((root) => {
+    scaffoldRuntimeSlice(root);
+    scaffoldWorkerContracts(root);
+    scaffoldManagementPersistence(root);
+    scaffoldServerKernel(root);
+    scaffoldInvocationGateway(root);
+    scaffoldWorkerTransport(root);
+    write(root, 'apps/server-next/src/dev-server.ts', 'createDeviceWorkerScheduler\n');
+    const result = runChecker(root);
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /P1_WORKER_TRANSPORT_INVALID/);
   });
 });
 

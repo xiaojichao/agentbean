@@ -42,7 +42,8 @@ import {
   filterStrictProjectStageAgentIds,
   resolveProjectStageStableInputs,
 } from '../project-stage-advance-service.js';
-import type { AgentRecord, ServerNextRepositories, TaskRecord } from '../repositories.js';
+import { createAgentEligibilityModule } from '../agent-eligibility-module.js';
+import type { ServerNextRepositories, TaskRecord } from '../repositories.js';
 import type { ProjectArtifactReviewRecord } from '../project-repositories.js';
 import type { TaskClaimLeaseRecord, TaskCoordinationRecord, TaskOfferRecord } from '../task-coordination-repositories.js';
 import {
@@ -293,30 +294,10 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
   let onTaskAllocationBlockedRecorded:
     ((record: TaskAllocationBlockedRecorded) => Promise<void>) | undefined;
   let onTaskClaimExpired: ((expired: TaskClaimExpiredV1) => Promise<void>) | undefined;
-
-  // #710：候选硬过滤优先用 Team Agent Exposure 公开 capability（active 能力减去 Team restriction）。
-  // 过渡兼容（计划 §8：旧代码先降为兼容层，切片 E 强制前保留）：无 active manifest 时回退到
-  // legacy skill 名做匹配——仅用名称，永不引入 sourcePath/工具/权限（AC#6）。
-  async function resolveEffectiveCapabilities(teamId: string, agent: AgentRecord): Promise<Set<string>> {
-    const exposure = input.repositories.agentExposure;
-    const now = input.clock.now();
-    const active = await exposure.manifests.getActiveByTeamAgent(teamId, agent.id);
-    if (active) {
-      if (active.validUntil !== null && active.validUntil <= now) {
-        await exposure.manifests.setStatus({ id: active.id, status: 'expired', now });
-      } else {
-        const restriction = await exposure.restrictions.getByTeamAgent(teamId, agent.id);
-        const disabled = restriction && restriction.manifestId === active.id ? restriction.disabledCapabilities : [];
-        const disabledSet = new Set(disabled.map((entry) => entry.toLowerCase()));
-        return new Set(
-          active.capabilities
-            .map((capability) => capability.name.toLowerCase())
-            .filter((name) => !disabledSet.has(name)),
-        );
-      }
-    }
-    return new Set((agent.skills ?? []).map((skill) => skill.name.toLowerCase()));
-  }
+  const eligibility = createAgentEligibilityModule({
+    repositories: input.repositories,
+    clock: input.clock,
+  });
 
   async function resolveCandidates(taskId: string, options?: {
     readonly dependencyTaskIds?: readonly string[];
@@ -359,7 +340,10 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         diagnostics.push('DEVICE_OFFLINE');
       }
       if (agent.status !== 'online') diagnostics.push('AGENT_NOT_READY');
-      const explicitCapabilities = await resolveEffectiveCapabilities(task.teamId, agent);
+      const explicitCapabilities = await eligibility.resolveTaskCandidateCapabilities({
+        teamId: task.teamId,
+        agent,
+      });
       const missingCapabilities = coordination.requiredCapabilities
         .filter((capability) => !explicitCapabilities.has(capability.toLowerCase()));
       if (missingCapabilities.length > 0) diagnostics.push('CAPABILITY_MISSING');
