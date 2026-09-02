@@ -141,7 +141,9 @@ Socket 订阅，也不得在 Hook effect 中另建第二套跨 surface 失效矩
 - `channel-project-workspace-request-fence.ts` 通过 `begin / invalidate / isCurrent / reset`
   统一维护五种读取的独立 revision；切换频道时一次性 fencing 全部 ticket，同频道 Server event
   只 invalidate transition 指定的读取。Hook 的 render-time `channelRef` 继续覆盖 React effect 尚未
-  提交 reset 的窗口；频道、连接与 active scope 生命周期仍保留既有成组清空/加载时序；
+  提交 reset 的窗口；只有生命周期 `reset` 可以切换 coordinator 的 active Channel，旧 render 的
+  迟到 callback 调用 `begin` 不得夺回 Channel ownership 或失效新频道请求；频道、连接与 active
+  scope 生命周期仍保留既有成组清空/加载时序；
 - `reduceChannelProjectWorkspaceProjection(event, context)` 统一返回 `apply`、
   `invalidateRequests` 与 `refresh`；它不得读取 React、Socket 或可变 request ref，Hook 只执行其
   确定性 transition；

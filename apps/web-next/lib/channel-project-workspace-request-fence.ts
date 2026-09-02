@@ -36,6 +36,7 @@ const REQUEST_KINDS: readonly ChannelProjectWorkspaceRequestKind[] = [
  * Channel Project Workspace 的 request epoch coordinator。
  *
  * 每类读取拥有独立 revision；切换 Channel 时统一使全部 ticket 失效。
+ * 只有生命周期调用的 reset 可以切换 active Channel；迟到闭包不得通过 begin 夺回 ownership。
  * renderedChannelId 额外覆盖 React effect 尚未提交 reset 的切换窗口。
  */
 export function createChannelProjectWorkspaceRequestFence(): ChannelProjectWorkspaceRequestFence {
@@ -56,7 +57,13 @@ export function createChannelProjectWorkspaceRequestFence(): ChannelProjectWorks
 
   return {
     begin(kind, channelId) {
-      reset(channelId);
+      if (activeChannelId !== channelId) {
+        return {
+          kind,
+          channelId,
+          revision: revisions.get(kind) ?? 0,
+        };
+      }
       invalidate(kind);
       return {
         kind,

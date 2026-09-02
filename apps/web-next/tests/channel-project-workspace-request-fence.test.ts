@@ -4,6 +4,7 @@ import { createChannelProjectWorkspaceRequestFence } from '../lib/channel-projec
 describe('createChannelProjectWorkspaceRequestFence', () => {
   test('newer request only supersedes the same projection kind', () => {
     const fence = createChannelProjectWorkspaceRequestFence();
+    fence.reset('channel-1');
     const firstProject = fence.begin('project-facts', 'channel-1');
     const artifact = fence.begin('artifact-library', 'channel-1');
     const secondProject = fence.begin('project-facts', 'channel-1');
@@ -15,6 +16,7 @@ describe('createChannelProjectWorkspaceRequestFence', () => {
 
   test('invalidate fences an in-flight request without affecting another kind', () => {
     const fence = createChannelProjectWorkspaceRequestFence();
+    fence.reset('channel-1');
     const tasks = fence.begin('tasks', 'channel-1');
     const packages = fence.begin('output-packages', 'channel-1');
 
@@ -26,6 +28,7 @@ describe('createChannelProjectWorkspaceRequestFence', () => {
 
   test('channel reset invalidates every request while same-channel reset is stable', () => {
     const fence = createChannelProjectWorkspaceRequestFence();
+    fence.reset('channel-1');
     const project = fence.begin('project-facts', 'channel-1');
     const tasks = fence.begin('tasks', 'channel-1');
 
@@ -40,18 +43,23 @@ describe('createChannelProjectWorkspaceRequestFence', () => {
 
   test('rendered channel guard closes the window before React effects reset the coordinator', () => {
     const fence = createChannelProjectWorkspaceRequestFence();
+    fence.reset('channel-1');
     const ticket = fence.begin('document-bundles', 'channel-1');
 
     expect(fence.isCurrent(ticket, 'channel-2')).toBe(false);
     expect(fence.isCurrent(ticket, null)).toBe(false);
   });
 
-  test('begin on a new channel performs the channel reset before issuing a ticket', () => {
+  test('stale-channel begin cannot steal ownership or invalidate current-channel requests', () => {
     const fence = createChannelProjectWorkspaceRequestFence();
-    const previous = fence.begin('artifact-library', 'channel-1');
-    const current = fence.begin('artifact-library', 'channel-2');
+    fence.reset('channel-2');
+    const currentProject = fence.begin('project-facts', 'channel-2');
+    const currentTasks = fence.begin('tasks', 'channel-2');
 
-    expect(fence.isCurrent(previous, 'channel-1')).toBe(false);
-    expect(fence.isCurrent(current, 'channel-2')).toBe(true);
+    const staleTasks = fence.begin('tasks', 'channel-1');
+
+    expect(fence.isCurrent(staleTasks, 'channel-1')).toBe(false);
+    expect(fence.isCurrent(currentProject, 'channel-2')).toBe(true);
+    expect(fence.isCurrent(currentTasks, 'channel-2')).toBe(true);
   });
 });
