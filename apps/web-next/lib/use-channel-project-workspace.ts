@@ -230,11 +230,12 @@ export function useChannelProjectWorkspace(input: {
       if (task.channelId !== channelId) return;
       applyTask(task);
       void refreshTasks();
+      if (projectFactsActive) void refreshProjectFacts();
       if (fileFactsActive) void refreshOutputPackages();
     };
     socket.on('task:updated', onTaskUpdated);
     return () => { socket.off('task:updated', onTaskUpdated); };
-  }, [applyTask, channelId, connected, fileFactsActive, refreshOutputPackages, refreshTasks]);
+  }, [applyTask, channelId, connected, fileFactsActive, projectFactsActive, refreshOutputPackages, refreshProjectFacts, refreshTasks]);
 
   useEffect(() => {
     if (!channelId || !connected || !projectFactsActive) return;

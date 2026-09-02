@@ -140,7 +140,7 @@ channel task workspace 的请求状态和 Socket 订阅：
 - 每种读取有独立 request fence，频道切换后旧频道响应不得写入新频道状态；
 - `project:updated` 刷新 task workspace；`project:artifacts-updated` 同时失效 artifact
   library、output packages 和 task workspace；`task:updated` 先应用 Server task，随后
-  刷新 task workspace，并在 Files 活跃时刷新 output packages；所有订阅必须清理；
+  刷新 task workspace 与项目 overview，并在 Files 活跃时刷新 output packages；所有订阅必须清理；
 - 阶段、审核、最终版、交付等 mutation 仍走现有具名 Server command；command 成功后只把
   Server 返回投影交给 `applyOverview` / `applyTask` / `applyArtifactLibrary`，不得在页面猜测
   governance、可用动作或交付状态；
@@ -149,7 +149,7 @@ channel task workspace 的请求状态和 Socket 订阅：
 
 接口级回归测试在 `apps/web-next/tests/use-channel-project-workspace.test.tsx`，至少覆盖：
 一次接线获得同源投影、频道切换忽略迟到响应、artifact 事件统一失效 Tasks/Files，
-以及同频道 artifact/document bundle 事件使在途旧查询失效。
+task 事件刷新 workspace 与 overview，以及同频道 artifact/document bundle 事件使在途旧查询失效。
 
 ## 佐证文件
 

@@ -122,6 +122,24 @@ describe('Channel Project Workspace 深模块', () => {
     expect(Number(screen.getByTestId('workspace').getAttribute('data-revision'))).toBeGreaterThan(1);
   });
 
+  test('task 更新同时刷新 Tasks workspace 与项目 overview', async () => {
+    let taskUpdated: ((task: ReturnType<typeof taskFixture>) => void) | undefined;
+    mocks.socketOn.mockImplementation((event: string, handler: (task: ReturnType<typeof taskFixture>) => void) => {
+      if (event === 'task:updated') taskUpdated = handler;
+    });
+    mocks.overview
+      .mockResolvedValueOnce({ ok: true, overview: overviewFixture('channel-a', 1) })
+      .mockResolvedValueOnce({ ok: true, overview: overviewFixture('channel-a', 2) });
+
+    render(<Probe channelId="channel-a" />);
+    await waitFor(() => expect(attribute('data-overview-revision')).toBe('1'));
+    taskUpdated?.(taskFixture('channel-a', 'task-updated'));
+
+    await waitFor(() => expect(attribute('data-overview-revision')).toBe('2'));
+    expect(mocks.overview).toHaveBeenCalledTimes(2);
+    expect(mocks.channelWorkspace).toHaveBeenCalledTimes(2);
+  });
+
   test('同频道 artifact 事件使在途旧查询失效', async () => {
     let artifactsUpdated: ((library: unknown) => void) | undefined;
     let resolveOldLibrary: ((value: unknown) => void) | undefined;
@@ -174,6 +192,7 @@ function Probe({ channelId }: { channelId: string }) {
     <div
       data-testid="workspace"
       data-overview-channel={workspace.overview?.profile.channelId ?? ''}
+      data-overview-revision={workspace.overview?.profile.revision ?? ''}
       data-library-channel={(workspace.artifactLibrary as { channelId?: string } | null)?.channelId ?? ''}
       data-library-id={(workspace.artifactLibrary as { id?: string } | null)?.id ?? ''}
       data-bundle-id={(workspace.documentBundles[0] as { id?: string } | undefined)?.id ?? ''}
@@ -190,13 +209,13 @@ function attribute(name: string): string | null {
   return screen.getByTestId('workspace').getAttribute(name);
 }
 
-function overviewFixture(channelId: string) {
+function overviewFixture(channelId: string, revision = 1) {
   return {
     profile: {
       id: `profile-${channelId}`,
       teamId: 'team-1',
       channelId,
-      revision: 1,
+      revision,
       updatedAt: 1,
     },
   };
@@ -209,19 +228,23 @@ function libraryFixture(channelId: string, id = `library-${channelId}`) {
 function taskWorkspaceFixture(channelId: string, taskId: string) {
   return {
     entries: [{
-      task: {
-        id: taskId,
-        title: taskId,
-        description: null,
-        status: 'pending',
-        creatorId: 'user-1',
-        assigneeId: null,
-        channelId,
-        tags: [],
-        sortOrder: 0,
-        createdAt: 1,
-        updatedAt: 1,
-      },
+      task: taskFixture(channelId, taskId),
     }],
+  };
+}
+
+function taskFixture(channelId: string, taskId: string) {
+  return {
+    id: taskId,
+    title: taskId,
+    description: null,
+    status: 'pending',
+    creatorId: 'user-1',
+    assigneeId: null,
+    channelId,
+    tags: [],
+    sortOrder: 0,
+    createdAt: 1,
+    updatedAt: 1,
   };
 }
