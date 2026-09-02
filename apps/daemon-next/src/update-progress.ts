@@ -31,6 +31,45 @@ const CURSOR_UP = '\x1b[1A';
 const HIDE_CURSOR = '\x1b[?25l';
 const SHOW_CURSOR = '\x1b[?25h';
 
+/**
+ * East-Asian wide characters occupy two terminal columns. Pure codepoint
+ * ranges keep this source ASCII-safe (literal wide chars mutate between tools).
+ */
+function isWideChar(code: number): boolean {
+  return (code >= 0x1100 && code <= 0x115f)
+    || (code >= 0x2e80 && code <= 0xa4cf)
+    || (code >= 0xac00 && code <= 0xd7a3)
+    || (code >= 0xf900 && code <= 0xfaff)
+    || (code >= 0xfe30 && code <= 0xfe4f)
+    || (code >= 0xff00 && code <= 0xff60)
+    || (code >= 0xffe0 && code <= 0xffe6);
+}
+
+function displayWidth(text: string): number {
+  let width = 0;
+  for (const ch of text) width += isWideChar(ch.codePointAt(0) ?? 0) ? 2 : 1;
+  return width;
+}
+
+/**
+ * Keep the task line within one physical terminal row. paint() moves the
+ * cursor up exactly two rows to reach the bar, which only lands on the bar
+ * when the task line did not wrap (long paths, narrow terminals, or CJK
+ * double-width text all wrap it).
+ */
+function fitSingleLine(text: string, maxColumns: number): string {
+  if (displayWidth(text) <= maxColumns) return text;
+  let width = 0;
+  let fitted = '';
+  for (const ch of text) {
+    const w = isWideChar(ch.codePointAt(0) ?? 0) ? 2 : 1;
+    if (width + w > maxColumns - 1) return `${fitted}…`;
+    fitted += ch;
+    width += w;
+  }
+  return fitted;
+}
+
 export function createUpdateProgress(input: CreateUpdateProgressInput = {}): UpdateProgress {
   const stdout = input.stdout ?? console.log;
   const stderr = input.stderr ?? console.error;
@@ -59,12 +98,12 @@ export function createUpdateProgress(input: CreateUpdateProgressInput = {}): Upd
 
   function paint(): void {
     if (!isTTY || finished) return;
-    const task = detailLine || activeLabel || '…';
+    const task = fitSingleLine(`正在执行：${detailLine || activeLabel || '…'}`, columns());
     const bar = renderBar();
     if (!live) {
       write(HIDE_CURSOR);
       write(`${CLEAR_LINE}${bar}\n`);
-      write(`${CLEAR_LINE}正在执行：${task}\n`);
+      write(`${CLEAR_LINE}${task}\n`);
       live = true;
       return;
     }
@@ -73,7 +112,7 @@ export function createUpdateProgress(input: CreateUpdateProgressInput = {}): Upd
     // a single CURSOR_UP lands on the task line and the new bar gets erased by
     // the task write, freezing the bar at its first (0/N) frame.
     write(`${CURSOR_UP}${CURSOR_UP}${CLEAR_LINE}${bar}\n`);
-    write(`${CLEAR_LINE}正在执行：${task}\n`);
+    write(`${CLEAR_LINE}${task}\n`);
   }
 
   function endLive(): void {
