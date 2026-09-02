@@ -68,9 +68,12 @@ export function createUpdateProgress(input: CreateUpdateProgressInput = {}): Upd
       live = true;
       return;
     }
-    // Rewrite the two live lines in place.
-    write(`${CURSOR_UP}${CLEAR_LINE}${bar}\n`);
-    write(`${CURSOR_UP}${CLEAR_LINE}正在执行：${task}\n`);
+    // Rewrite the two live lines in place. The cursor sits one line below both
+    // live lines, so move up two lines to the bar and paint down through both;
+    // a single CURSOR_UP lands on the task line and the new bar gets erased by
+    // the task write, freezing the bar at its first (0/N) frame.
+    write(`${CURSOR_UP}${CURSOR_UP}${CLEAR_LINE}${bar}\n`);
+    write(`${CLEAR_LINE}正在执行：${task}\n`);
   }
 
   function endLive(): void {
