@@ -51,7 +51,7 @@
 - **server 序列化边界**：server 在投影/序列化消息时调用谓词过滤掉应隐藏的系统消息，不投递给前端。
 - **web 渲染/计数处**：前端在渲染频道主时间线、Thread、计算未读/回复数时再次调用同一谓词，作为防御性二次过滤。
 
-文件注释（`src/message.ts:92-99`）明确：「服务端在序列化边界、前端在渲染/计数处各自应用同一规则。」隐藏条件（`src/message.ts:104-109`）：`senderKind==='system'` 且 `meta.kind` 为 `task-created`/`management-status`，或 `meta.coordination !== undefined`。保留可见：`management-question`（PI 向用户提问）、`management-delivery`（交付物，需验收）。
+文件注释（`src/message.ts:92-99`）明确：「服务端在序列化边界、前端在渲染/计数处各自应用同一规则。」隐藏条件（`src/message.ts:104-109`）：`senderKind==='system'` 且 `meta.kind` 属于 `HIDDEN_SYSTEM_MESSAGE_KINDS`（包括 `task-created`、`management-status`、`artifact-version-revision`、`task-delivery-accepted` 及历史 `channel-collaboration-summary`），或 `meta.coordination !== undefined`。保留可见：`management-question`（PI 向用户提问）、`management-delivery`（交付物，需验收）。
 
 陷阱：死守卫 `senderKind === 'pi'` 不存在 —— PI 不以独立 senderKind 出现，只发 `system` 消息再靠 `meta.kind`/`meta.coordination` 区分（feedback 记忆 `agentbean-pi-system-message-thread-leak.md`「死守卫陷阱」）。新增应隐藏的 meta.kind 时，**同步改 server 投影 + web 渲染/计数两处**，并扩 `tests/message-visibility.test.ts`。
 

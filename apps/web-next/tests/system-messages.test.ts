@@ -41,6 +41,16 @@ describe('shouldHideSystemMessage — 既有去重规则', () => {
     }))).toBe(true);
   });
 
+  test('hides task-delivery-accepted (acceptance state belongs to Task, not chat)', () => {
+    expect(shouldHideSystemMessage(message({
+      metaJson: JSON.stringify({ kind: 'task-delivery-accepted', taskId: 'task-1' }),
+    }))).toBe(true);
+    expect(shouldHideSystemMessage(message({
+      meta: { kind: 'task-delivery-accepted', taskId: 'task-1' },
+      metaJson: null,
+    }))).toBe(true);
+  });
+
   test('keeps non-task and malformed system messages visible', () => {
     expect(shouldHideSystemMessage(message({
       metaJson: JSON.stringify({ kind: 'message-edit-fail' }),
