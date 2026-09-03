@@ -52,7 +52,7 @@ describe('MessageSocketAdapter', () => {
       referenceSet: result.referenceSet,
     });
     expect(afterTaskMutation).toHaveBeenCalledWith(payload, result);
-    expect(afterDispatchMutation).toHaveBeenCalledWith(payload, result);
+    expect(afterDispatchMutation).toHaveBeenCalledWith('message-send', payload, result);
     expect(calls).toEqual(['message', 'references', 'task', 'dispatch']);
     await vi.waitFor(() => {
       expect(dispatch).toHaveBeenCalledWith(dispatchRequest('dispatch-1'));

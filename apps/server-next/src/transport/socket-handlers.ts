@@ -25,6 +25,7 @@ import {
   createMessageSocketHandlers,
   type MessageSocketHandlerOptions,
 } from './message-socket-handlers.js';
+import type { DispatchSocketMutationSource } from './dispatch-socket-projection.js';
 
 export interface AuthenticatedUserIdentity {
   hasToken: boolean;
@@ -110,7 +111,6 @@ export interface ScanDescriptorForwardResult {
 export interface WebSocketHandlerOptions extends MessageSocketHandlerOptions {
   authenticatedUser?: AuthenticatedUserProvider;
   dispatchCancel?(request: DispatchRequestDto & { id: string }): void;
-  dispatchStatus?(dispatch: unknown): void;
   deviceScan?(request: DeviceScanEmitRequest): void;
   deviceSelectDirectory?(request: { deviceId: string }): Promise<{ ok: boolean; path?: string; error?: string }>;
   deviceListDirectory?(request: { deviceId: string; path: string }): Promise<ListDirectoryForwardResult>;
@@ -136,7 +136,11 @@ export interface AgentSocketHandlerOptions {
   afterDeviceInviteWait?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
-  afterDispatchMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterDispatchMutation?(
+    source: DispatchSocketMutationSource,
+    payload: unknown,
+    result: unknown,
+  ): Promise<void> | void;
   afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
   // hello 成功后首推 scanRequested（带 customAgents）给该 device，触发 daemon 扫 custom skills。
   // 复用 web 端 requestDeviceScan 的下发通道（按 deviceId emit 到对应 device socket）。
@@ -889,9 +893,8 @@ export function registerWebSocketHandlers(
     if (!isDispatchAck(result)) {
       return;
     }
-    await options.afterDispatchMutation?.(_payload, result);
+    await options.afterDispatchMutation?.('web-command', _payload, result);
     await options.afterTaskMutation?.(_payload, result);
-    options.dispatchStatus?.(result.dispatch);
     messageHandlers.cancelPendingDispatch(result.dispatch.id);
     if (!options.dispatchCancel) {
       return;
@@ -905,10 +908,9 @@ export function registerWebSocketHandlers(
     if (!isDispatchListAck(result)) {
       return;
     }
-    await options.afterDispatchMutation?.(_payload, result);
+    await options.afterDispatchMutation?.('web-command', _payload, result);
     await options.afterTaskMutation?.(_payload, result);
     for (const dispatch of result.dispatches) {
-      options.dispatchStatus?.(dispatch);
       messageHandlers.cancelPendingDispatch(dispatch.id);
       if (!options.dispatchCancel) {
         continue;
@@ -1003,7 +1005,7 @@ export function registerAgentSocketHandlers(
   const afterAgentMutation = (payload: unknown, result: unknown) =>
     options.afterAgentMutation?.(payload, result);
   const afterDispatchMutation = (payload: unknown, result: unknown) =>
-    options.afterDispatchMutation?.(payload, result);
+    options.afterDispatchMutation?.('agent-report', payload, result);
   const afterDispatchCompletion = async (payload: unknown, result: unknown) => {
     await afterDispatchMutation(payload, result);
     await options.afterTaskMutation?.(payload, result);
