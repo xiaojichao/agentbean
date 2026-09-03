@@ -108,7 +108,13 @@ async function authorizeTeamAudience(
   for (const subscriber of subscribers) {
     const subscription = teamSubscription(subscriber, teamId);
     if (!subscription) continue;
-    const access = await port.listChannels(subscription);
+    let access: Awaited<ReturnType<DispatchSocketProjectionPort['listChannels']>>;
+    try {
+      access = await port.listChannels(subscription);
+    } catch {
+      // 单个订阅者的瞬时权限读取异常不得阻断其他合法受众；保留 subscription 供后续重试。
+      continue;
+    }
     if (!access.ok) {
       clearTeamSubscriptions(subscriber, teamId);
       continue;

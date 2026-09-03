@@ -183,6 +183,42 @@ describe('Dispatch socket projection', () => {
     ]);
   });
 
+  test('isolates an access read error to one subscriber', async () => {
+    const failingEmit = vi.fn();
+    const healthyEvents: Array<{ event: string; payload: unknown }> = [];
+    const failingSubscriber = {
+      socket: { emit: failingEmit },
+      channels: { userId: 'user-1', teamId: 'team-1' },
+    };
+    const projection = createDispatchSocketProjection(new Set([
+      failingSubscriber,
+      {
+        socket: { emit: (event: string, payload: unknown) => healthyEvents.push({ event, payload }) },
+        channels: { userId: 'user-2', teamId: 'team-1' },
+      },
+    ]), {
+      listChannels: vi.fn(async (input: { userId: string }) => {
+        if (input.userId === 'user-1') throw new Error('repository unavailable');
+        return { ok: true as const, channels: [] };
+      }),
+      listDirectMessages: vi.fn(),
+      listVisibleAgents: vi.fn(),
+    });
+    const dispatch = { id: 'dispatch-1', teamId: 'team-1', status: 'queued' };
+
+    await expect(projection.handleMutation('message-send', { teamId: 'team-1' }, {
+      ok: true,
+      dispatches: [dispatch],
+    })).resolves.toBeUndefined();
+
+    expect(failingEmit).not.toHaveBeenCalled();
+    expect(failingSubscriber.channels).toEqual({ userId: 'user-1', teamId: 'team-1' });
+    expect(healthyEvents).toEqual([
+      { event: WEB_EVENTS.message.dispatchStatus, payload: dispatch },
+      { event: WEB_EVENTS.memory.changed, payload: { teamId: 'team-1' } },
+    ]);
+  });
+
   test('enforces Message visibility and ignores failed or Team-less results', async () => {
     const channelEvents: Array<{ event: string; payload: unknown }> = [];
     const unrelatedEvents: Array<{ event: string; payload: unknown }> = [];
