@@ -187,6 +187,9 @@ describe('Dispatch socket projection', () => {
     const failingEmit = vi.fn();
     const healthyEvents: Array<{ event: string; payload: unknown }> = [];
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let accessUnavailable = true;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-03T00:00:00Z'));
     const failingSubscriber = {
       socket: { emit: failingEmit },
       channels: { userId: 'user-1', teamId: 'team-1' },
@@ -199,7 +202,7 @@ describe('Dispatch socket projection', () => {
       },
     ]), {
       listChannels: vi.fn(async (input: { userId: string }) => {
-        if (input.userId === 'user-1') throw new Error('repository unavailable');
+        if (input.userId === 'user-1' && accessUnavailable) throw new Error('repository unavailable');
         return { ok: true as const, channels: [] };
       }),
       listDirectMessages: vi.fn(),
@@ -226,11 +229,47 @@ describe('Dispatch socket projection', () => {
           teamId: 'team-1',
           userId: 'user-1',
           errorClass: 'Error',
+          suppressedCount: 0,
         },
       );
+      await projection.emitStatus(dispatch);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(60_000);
+      await projection.emitStatus(dispatch);
+
+      expect(warn).toHaveBeenLastCalledWith(
+        '[server-next] Dispatch Socket Team access read failed (non-blocking):',
+        {
+          event: 'dispatch_socket_team_access_read_failed',
+          teamId: 'team-1',
+          userId: 'user-1',
+          errorClass: 'Error',
+          suppressedCount: 1,
+        },
+      );
+      expect(warn).toHaveBeenCalledTimes(2);
+
+      accessUnavailable = false;
+      await projection.emitStatus(dispatch);
+      accessUnavailable = true;
+      await projection.emitStatus(dispatch);
+
+      expect(warn).toHaveBeenLastCalledWith(
+        '[server-next] Dispatch Socket Team access read failed (non-blocking):',
+        {
+          event: 'dispatch_socket_team_access_read_failed',
+          teamId: 'team-1',
+          userId: 'user-1',
+          errorClass: 'Error',
+          suppressedCount: 0,
+        },
+      );
+      expect(warn).toHaveBeenCalledTimes(3);
       expect(warn.mock.calls.flat()).not.toContain('repository unavailable');
     } finally {
       warn.mockRestore();
+      vi.useRealTimers();
     }
   });
 

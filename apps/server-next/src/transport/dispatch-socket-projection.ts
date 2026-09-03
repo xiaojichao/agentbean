@@ -35,6 +35,22 @@ interface AuthorizedDispatchSubscriber {
   readonly visibleChannelIds: ReadonlySet<string>;
 }
 
+interface AccessReadWarningReporter {
+  failed(
+    subscriber: DispatchSocketSubscriber,
+    subscription: DispatchSubscription,
+    teamId: string,
+    error: unknown,
+  ): void;
+  succeeded(
+    subscriber: DispatchSocketSubscriber,
+    subscription: DispatchSubscription,
+    teamId: string,
+  ): void;
+}
+
+const ACCESS_READ_WARNING_WINDOW_MS = 60_000;
+
 /**
  * Dispatch mutation 的唯一 Socket 投影 owner。
  *
@@ -45,10 +61,11 @@ export function createDispatchSocketProjection(
   subscribers: Iterable<DispatchSocketSubscriber>,
   port: DispatchSocketProjectionPort,
 ): DispatchSocketProjection {
+  const accessReadWarnings = createAccessReadWarningReporter();
   const emitStatus = async (dispatch: unknown): Promise<void> => {
     const teamId = objectString(dispatch, 'teamId');
     if (!teamId) return;
-    const audience = await authorizeTeamAudience(subscribers, port, teamId);
+    const audience = await authorizeTeamAudience(subscribers, port, teamId, accessReadWarnings);
     emitStatusToAudience(audience, dispatch);
   };
 
@@ -71,7 +88,7 @@ export function createDispatchSocketProjection(
       ]);
       const audienceByTeam = new Map<string, AuthorizedDispatchSubscriber[]>();
       for (const teamId of teamIds) {
-        audienceByTeam.set(teamId, await authorizeTeamAudience(subscribers, port, teamId));
+        audienceByTeam.set(teamId, await authorizeTeamAudience(subscribers, port, teamId, accessReadWarnings));
       }
 
       for (const dispatch of dispatches) {
@@ -103,6 +120,7 @@ async function authorizeTeamAudience(
   subscribers: Iterable<DispatchSocketSubscriber>,
   port: DispatchSocketProjectionPort,
   teamId: string,
+  accessReadWarnings: AccessReadWarningReporter,
 ): Promise<AuthorizedDispatchSubscriber[]> {
   const audience: AuthorizedDispatchSubscriber[] = [];
   for (const subscriber of subscribers) {
@@ -113,14 +131,10 @@ async function authorizeTeamAudience(
       access = await port.listChannels(subscription);
     } catch (error) {
       // 单个订阅者的瞬时权限读取异常不得阻断其他合法受众；保留 subscription 供后续重试。
-      console.warn('[server-next] Dispatch Socket Team access read failed (non-blocking):', {
-        event: 'dispatch_socket_team_access_read_failed',
-        teamId,
-        userId: subscription.userId,
-        errorClass: error instanceof Error ? error.name : 'UnknownError',
-      });
+      accessReadWarnings.failed(subscriber, subscription, teamId, error);
       continue;
     }
+    accessReadWarnings.succeeded(subscriber, subscription, teamId);
     if (!access.ok) {
       clearTeamSubscriptions(subscriber, teamId);
       continue;
@@ -131,6 +145,48 @@ async function authorizeTeamAudience(
     });
   }
   return audience;
+}
+
+function createAccessReadWarningReporter(): AccessReadWarningReporter {
+  const failuresBySubscriber = new WeakMap<
+    DispatchSocketSubscriber,
+    Map<string, { errorClass: string; lastLoggedAt: number; suppressedCount: number }>
+  >();
+
+  return {
+    failed(subscriber, subscription, teamId, error) {
+      const errorClass = error instanceof Error ? error.name : 'UnknownError';
+      const failureKey = JSON.stringify([teamId, subscription.userId]);
+      const failures = failuresBySubscriber.get(subscriber) ?? new Map();
+      const previous = failures.get(failureKey);
+      const now = Date.now();
+      if (
+        previous
+        && previous.errorClass === errorClass
+        && now - previous.lastLoggedAt < ACCESS_READ_WARNING_WINDOW_MS
+      ) {
+        previous.suppressedCount += 1;
+        failuresBySubscriber.set(subscriber, failures);
+        return;
+      }
+
+      console.warn('[server-next] Dispatch Socket Team access read failed (non-blocking):', {
+        event: 'dispatch_socket_team_access_read_failed',
+        teamId,
+        userId: subscription.userId,
+        errorClass,
+        suppressedCount: previous?.errorClass === errorClass ? previous.suppressedCount : 0,
+      });
+      failures.set(failureKey, { errorClass, lastLoggedAt: now, suppressedCount: 0 });
+      failuresBySubscriber.set(subscriber, failures);
+    },
+    succeeded(subscriber, subscription, teamId) {
+      const failures = failuresBySubscriber.get(subscriber);
+      if (!failures) return;
+      failures.delete(JSON.stringify([teamId, subscription.userId]));
+      if (failures.size === 0) failuresBySubscriber.delete(subscriber);
+    },
+  };
 }
 
 function emitStatusToAudience(audience: readonly AuthorizedDispatchSubscriber[], dispatch: unknown): void {
