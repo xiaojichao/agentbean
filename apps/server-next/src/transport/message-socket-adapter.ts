@@ -3,6 +3,7 @@ import type {
   DispatchRequestDto,
   ProjectReferenceSetDto,
 } from '../../../../packages/contracts/src/index.js';
+import type { DispatchSocketMutationSource } from './dispatch-socket-projection.js';
 
 export interface MessageDispatchPort {
   getDispatchRequest(input: {
@@ -56,7 +57,11 @@ export interface MessageSocketAdapterOptions {
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
   afterProjectReferencesUpdated?(committed: CommittedProjectReferences): Promise<void> | void;
   afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
-  afterDispatchMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterDispatchMutation?(
+    source: DispatchSocketMutationSource,
+    payload: unknown,
+    result: unknown,
+  ): Promise<void> | void;
   afterMemoryMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
@@ -151,7 +156,7 @@ export function createMessageSocketAdapter(
       }
       // 全量 Agent refresh 只在确实产生 dispatch（即写入 busy）时触发。
       if (result.dispatches.length > 0) {
-        await options.afterDispatchMutation?.(payload, result);
+        await options.afterDispatchMutation?.('message-send', payload, result);
       }
       if (!options.dispatch) return;
       extendPendingDispatchRequest(result.coalescedDispatchId);

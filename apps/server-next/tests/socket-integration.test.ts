@@ -466,14 +466,21 @@ describe('server-next Socket.IO namespaces', () => {
     await agentSock.emitWithAck(AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }] });
 
     const statuses: Array<{ id?: string; status?: string }> = [];
+    const dispatchStatuses: Array<{ id?: string; status?: string }> = [];
     const memoryChanges: unknown[] = [];
     web.on(WEB_EVENTS.agent.status, (s) => statuses.push(s as { id?: string; status?: string }));
+    web.on(WEB_EVENTS.message.dispatchStatus, (dispatch) => {
+      dispatchStatuses.push(dispatch as { id?: string; status?: string });
+    });
     web.on(WEB_EVENTS.memory.changed, (change) => memoryChanges.push(change));
     await web.emitWithAck(WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' });
 
     await web.emitWithAck(WEB_EVENTS.message.send, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
     await eventually(async () => {
       expect(statuses.some((s) => s.id === 'agent-1' && s.status === 'busy')).toBe(true);
+      expect(dispatchStatuses).toEqual([
+        expect.objectContaining({ id: 'dispatch-1', status: 'queued' }),
+      ]);
       expect(memoryChanges.length).toBeGreaterThan(0);
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -483,6 +490,10 @@ describe('server-next Socket.IO namespaces', () => {
     await web.emitWithAck(WEB_EVENTS.dispatch.cancel, { userId: 'user-1', dispatchId: 'dispatch-1' });
     await eventually(async () => {
       expect(statuses.some((s) => s.id === 'agent-1' && s.status === 'online')).toBe(true);
+      expect(dispatchStatuses).toEqual([
+        expect.objectContaining({ id: 'dispatch-1', status: 'queued' }),
+        expect.objectContaining({ id: 'dispatch-1', status: 'cancelled' }),
+      ]);
       expect(memoryChanges.length).toBeGreaterThan(0);
     });
     await new Promise((resolve) => setTimeout(resolve, 50));

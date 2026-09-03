@@ -32,7 +32,7 @@
 | `src/application/management/` | PI 内核（路由、worker 池、claim broker） | `management-kernel.ts`、`management-router.ts`、`server-worker-pool.ts`、`task-claim-broker.ts` |
 | `src/infra/sqlite/` | SQLite 实现 + 迁移 | `repositories.ts`、`migrations/global/`、`migrations/team/` |
 | `src/infra/memory/` | 测试用内存实现 | `repositories.ts` |
-| `src/transport/` | socket.io adapter、事件绑定与 Server-owned projection | `socket-server.ts`、`socket-handlers.ts`、`message-socket-handlers.ts`、`message-socket-adapter.ts`、`task-socket-projection.ts` |
+| `src/transport/` | socket.io adapter、事件绑定与 Server-owned projection | `socket-server.ts`、`socket-handlers.ts`、`message-socket-handlers.ts`、`message-socket-adapter.ts`、`dispatch-socket-projection.ts`、`task-socket-projection.ts` |
 | `src/` 根 | 入口与组装根 | `dev-server.ts`（生产 host/storage）、`server-runtime-assembly.ts`（通用 runtime assembly）、`index.ts`（内存）、`bin.ts`（CLI） |
 
 ### god-interface 工厂：createServerNextUseCases
@@ -57,6 +57,7 @@
 - `src/transport/message-socket-handlers.ts` + `message-socket-adapter.ts`：前者通过本地 `MessageSocketPort` 统一拥有 Message 事件映射与 send 认证输入增强声明，后者拥有 send/edit/delete/convert-to-task 投影 fan-out，以及 send dispatch 的 quiet window、claim wake 与终态取消。共享 binder 仍统一执行认证身份注入和 ACK/error 整形。
 - `src/transport/project-socket-broadcast.ts`：通过单一 `handleMutation(kind, payload, result)` interface 拥有 Project overview / artifact / document bundle 的 mutation failure 分类、Team 过滤、逐订阅者身份解析与 Server 投影重读、事件发送及 latency 观测。References 更新使用不同的频道可见性语义，由 Message socket module 只在提交成功且存在冻结引用集时触发，暂不进入该 module。
 - `src/transport/task-socket-projection.ts`：通过单一 `handleMutation(result)` interface 拥有 `task` / `tasks` 归一化、Task identity 去重、按 Team 聚合，以及 `task.updated` → `task.snapshot` → `memory.changed` 顺序；Message 与 Dispatch 投影不得进入该 module。
+- `src/transport/dispatch-socket-projection.ts`：通过 `handleMutation(source, payload, result)` interface 拥有 Dispatch status、Agent reply Message、Agent snapshot/status 与非 Task Memory invalidation 的统一顺序；调用方必须显式标注 mutation source，不能从 result shape 猜 owner。
 
 抽新模块时**必须**沿用相对路径 import（见 gotchas.md）。
 
@@ -67,6 +68,7 @@
 - Message socket module 通过删除测试：删除后，mutation 投影顺序、每个 dispatch 独立的 quiet window、claim wake 与终态取消都会重新散回 handler。
 - Project projection broadcast 已通过删除测试：删除 `project-socket-broadcast.ts` 会把三类投影共用的 failure policy、逐用户重读和 latency 观测重新泄漏回 `socket-server.ts`；入口认证与声明式 event → use case 映射仍留在 `socket-handlers.ts`。
 - Task socket projection 已通过删除测试：删除 `task-socket-projection.ts` 会把 Task identity 去重、按 Team 单次 snapshot/Memory invalidation、受众差异和事件顺序重新泄漏到 Web Task、Message convert/send、Dispatch cancel 与 Agent result/error 路径。它不能与 Message/Project 共用泛型 fan-out seam。
+- Dispatch socket projection 已通过删除测试：删除 `dispatch-socket-projection.ts` 会把 status audience、Agent reply 可见性、Team 去重、Agent refresh 与 Task/Memory 唯一 owner 顺序重新泄漏到 Message send、Web cancel/cancelChannel、Agent message/result/error 及 realtime timeout 路径。
 - Channel Work Intake 已通过删除测试且保持现有边界：删除 `channel-work-intake.ts` 会把 authority、freshness、promotion、replay 与 Offer publication 顺序泄漏回 composition root；在没有第二个 route writer 或重复 authority 流程前，不要再包一层 facade。
 
 - Project references 当前**未通过独立 module 的删除测试**：删除候选只会把单一 Message send callback 的频道可见性循环放回原处，不会把状态机、顺序或共享 fan-out 泄漏到多个调用方。其 interface 应保持窄的 committed facts，不得为复用 Project mutation failure policy 而重新接收任意 payload/result。未来只有当 references 出现可由单一 module 完整拥有的状态机、顺序策略或多个调用方共享规则时，才重新评估对应 adapter；事件数量本身不是抽取理由。
@@ -239,7 +241,7 @@ interface TaskSocketProjectionPort {
 }
 ```
 
-`MessageSocketAdapterOptions`、`WebSocketHandlerOptions` 与 `AgentSocketHandlerOptions` 使用 `afterDispatchMutation(payload, result)` 表达 Dispatch refresh；不得再借 `afterAgentMutation` 承载 Dispatch 或 Task 投影。
+`MessageSocketAdapterOptions`、`WebSocketHandlerOptions` 与 `AgentSocketHandlerOptions` 使用 `afterDispatchMutation(source, payload, result)` 表达 Dispatch projection；不得再借 `afterAgentMutation` 承载 Dispatch 或 Task 投影。
 
 #### 3. Contracts
 
@@ -283,6 +285,85 @@ if (!Array.isArray(result.dispatches)) emitChannelMessage(result);
 // Correct：Task module 只处理 Task；来源路径各自唯一拥有 Message/Dispatch。
 await taskSocketProjection.handleMutation(result);
 await afterMessageSend(payload, result);
+```
+
+### Dispatch Socket Projection interface
+
+#### 1. Scope / Trigger
+
+- Trigger：Message send 创建 `dispatches[]`、Web cancel/cancelChannel 返回 Dispatch，或 Agent message/result/error 返回 Dispatch 已提交事实。
+- Scope：只拥有 `dispatch.status`、Agent 回报产生的可见 Message、Agent snapshot/status 与非 Task 结果的 Memory invalidation；不拥有 ACK、Task projection、quiet window、claim wake、daemon cancel 或 PI recovery。
+
+#### 2. Signatures
+
+```typescript
+type DispatchSocketMutationSource = 'message-send' | 'web-command' | 'agent-report';
+
+interface DispatchSocketProjection {
+  handleMutation(
+    source: DispatchSocketMutationSource,
+    payload: unknown,
+    result: unknown,
+  ): Promise<void>;
+  emitStatus(dispatch: unknown): Promise<void>;
+}
+
+interface DispatchSocketProjectionPort {
+  listChannels: ServerNextUseCases['listChannels'];
+  listDirectMessages: ServerNextUseCases['listDirectMessages'];
+  listVisibleAgents: ServerNextUseCases['listVisibleAgents'];
+}
+```
+
+#### 3. Contracts
+
+- 调用方必须显式传入 source；不得以 `dispatch` / `dispatches` 的 shape 推断 Message 是否已被其他 owner 投影。
+- 发送任何事件前，按 Team 为每个匹配 subscriber 使用其 channel/agent/device subscription 调用一次 `listChannels` 复验当前成员权限；失败时清除该 socket 对此 Team 的三类缓存 subscription，并从本次 audience 排除。
+- 成功结果将单个 `dispatch` 与 `dispatches[]` 合并并按 Dispatch `id` 首次出现去重；每个 Dispatch 按其 `teamId` 向 channels/agents/devices 任一属于该 Team 的 subscriber 发送一次 `WEB_EVENTS.message.dispatchStatus`。
+- 只有 `agent-report` source 才读取 `message` / `messages[]`；`message-send` 的原消息已由 Message adapter 唯一投影，Dispatch module 不得重复发送。
+- Agent reply Message 必须先匹配 Team，再以 subscriber 自己的 channel subscription 重读 `listChannels` / `listDirectMessages` 复核频道或 DM 可见性；不得先广播正文再由客户端隐藏。
+- 受影响 Team 从 payload team/targetTeam、Agent visibility、Dispatch 与 Message 的 committed team facts 合并去重；每 Team、每 agents subscriber 最多重读一次 `listVisibleAgents`，固定发送 snapshot 后逐 Agent status。
+- 固定顺序为全部 Dispatch status → 全部可见 Agent reply Message → 每 Team Agent snapshot/status → Memory invalidation。
+- 结果包含 `task` 或非空 `tasks[]` 时，Memory invalidation 由后续 `TaskSocketProjection` 唯一发送；否则 Dispatch module 每 Team 发送一次。
+- `emitStatus` 供 realtime timeout 等已提交 Dispatch 状态入口异步复用相同权限复验与 audience 规则，不触发 Message、Agent 或 Memory 投影；调用方必须 `await`。
+
+#### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|---|---|
+| `result.ok !== true` | 不发送、不重读 |
+| Team access 复验失败 | 清除该 Team 的 channels/agents/devices subscription；不向该 socket 发送任何事件 |
+| 单个 subscriber 的 Team access 读取抛异常 | 本次排除该 subscriber、保留 subscription 供后续重试，并继续处理其他合法受众；warning 包含固定 event、Team/User correlation、error class 与 suppressed count，在 projection 内跨 Socket 共享 Team/User/error class 的 60 秒去重窗口，首次立即记录、窗口后汇总；汇总时续期、成功读取时主动清除，并在最后一次日志后 2 个窗口自动淘汰；不得记录原始错误消息或对象 |
+| Dispatch 缺少字符串 `teamId` | 不发送该 status；仍可由其他 committed Team fact 驱动 refresh |
+| 重复 Dispatch `id` | 只发送第一次 |
+| source 非 `agent-report` 且结果含 Message | 不发送 Message |
+| Message 缺少 `channelId` 或没有可见频道/DM | 不发送正文 |
+| agents subscriber 的 Team access 重读失败 | 清除该 agents subscription，不发送 snapshot/status |
+| `listVisibleAgents` 失败 | 不发送 snapshot/status；仍执行适用的 Memory invalidation |
+| 结果含 Task projection | Dispatch module 不发送 Memory invalidation |
+
+#### 5. Good/Base/Bad Cases
+
+- Good：cancelChannel 返回同 Team 多个 Dispatch/Task → 每个 status 一次、Agent refresh 一次、Memory 由 Task module 一次发送。
+- Base：Agent result 返回 Dispatch + reply Message → status、可见 Message、Agent refresh、适用的 Memory 依次发生。
+- Bad：message.send 的 committed human Message 被 Message adapter 与 Dispatch module各发送一次；或 handler 在 module 后再次手工发送 status。
+
+#### 6. Tests Required
+
+- `dispatch-socket-projection.test.ts`：断言顺序、Dispatch/Team 去重、Team 权限复验、撤权清理、单订阅者异常隔离、同用户多 Socket 的限流汇总与离线过期诊断、频道与 DM 可见性、Task/Memory 唯一 owner、失败与缺失 Team 输入。
+- `message-socket-adapter.test.ts`：断言 `message-send` source 与 Message → references → Task → Dispatch callback 顺序。
+- `socket-handlers.test.ts`：断言 `web-command` / `agent-report` source，以及 Dispatch → Task callback 顺序。
+- `socket-integration.test.ts`：真实 Socket.IO 断言 message send 与 cancel 各发送一次 status、Agent busy/online refresh、reply Message 不重复及 Memory 精确次数。
+
+#### 7. Wrong vs Correct
+
+```typescript
+// Wrong：用结果 shape 猜来源，并在 handler 继续补发 status。
+await dispatchSocketProjection.handleMutation(payload, result);
+dispatchStatus(result.dispatch);
+
+// Correct：入口显式交付 owner 语义，所有 Socket 投影委托一个 module。
+await dispatchSocketProjection.handleMutation('web-command', payload, result);
 ```
 
 ### Agent Eligibility interface
@@ -337,6 +418,7 @@ interface AgentEligibilityModule {
 - **不要在 broker、项目阶段或 overview helper 中自行重新解释 Exposure/Restriction/InputSet**：统一调用 `agent-eligibility-module.ts`；但不要删除 Offer 发布与 accept/claim 的独立新鲜度复验。
 - **不要把 Message 事件映射、mutation 投影 fan-out、send dispatch quiet window 或 claim wake 散回 `socket-handlers.ts`**：统一调用 Message socket module；module 通过本地 port 依赖 use case，不得重新 import `ServerNextUseCases` god-interface。
 - **不要从 Task projection 发送 Message 或 Dispatch/Agent 事件**：Task 投影只调用 `taskSocketProjection.handleMutation(result)`；同一结果必须按 Task id 去重、按 Team 单次刷新 snapshot 与 Memory invalidation。
+- **不要在 handler 或 Message adapter 外重复解释 Dispatch 结果**：统一传入明确 source 并调用 `dispatchSocketProjection.handleMutation(...)`；Task 结果的 Memory invalidation 只由 Task module 发送。
 
 ## 验证命令
 
@@ -354,6 +436,8 @@ npx vitest run apps/server-next/tests/message-route-analysis-service.test.ts app
 npx vitest run apps/server-next/tests/message-socket-handlers.test.ts apps/server-next/tests/message-socket-adapter.test.ts apps/server-next/tests/socket-handlers.test.ts
 # Task transport seam
 npx vitest run apps/server-next/tests/task-socket-projection.test.ts apps/server-next/tests/socket-integration.test.ts
+# Dispatch transport seam
+npx vitest run apps/server-next/tests/dispatch-socket-projection.test.ts apps/server-next/tests/message-socket-adapter.test.ts apps/server-next/tests/socket-handlers.test.ts apps/server-next/tests/socket-integration.test.ts
 # Agent eligibility 边界与关键调用方
 npx vitest run apps/server-next/tests/agent-eligibility-module.test.ts apps/server-next/tests/agent-eligibility-decomposition.test.ts apps/server-next/tests/task-claim-broker.test.ts apps/server-next/tests/project-stage-overview.test.ts apps/server-next/tests/project-stage-edges.test.ts
 ```

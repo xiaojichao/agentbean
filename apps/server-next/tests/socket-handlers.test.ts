@@ -1726,6 +1726,7 @@ describe('server-next socket handlers', () => {
     });
 
     expect(afterDispatchMutation).toHaveBeenCalledWith(
+      'web-command',
       { userId: 'user-1', dispatchId: 'dispatch-1' },
       result,
     );

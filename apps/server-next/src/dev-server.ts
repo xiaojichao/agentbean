@@ -601,7 +601,7 @@ function startDispatchTimeoutScheduler(
       return;
     }
     for (const dispatch of result.dispatches) {
-      realtime.emitDispatchStatus(dispatch);
+      await realtime.emitDispatchStatus(dispatch);
       await realtime.refreshAgents(dispatch.teamId);
     }
   }, config.intervalMs);
