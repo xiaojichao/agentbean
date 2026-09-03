@@ -79,6 +79,8 @@ describe('chat files surface', () => {
     expect(source).toMatch(/<ProjectFilesBoard[\s\S]*?onOpenPackagePreview=\{openPackagePreviewModal\}/);
     expect(source).toMatch(/<ThreadPanel[\s\S]*?onOpenPackagePreview=\{openPackagePreviewModal\}/);
     expect(source).toContain('openPackagePreview.readOnly || activeChannelObj?.archivedAt');
+    expect(source).toMatch(/<ThreadPanel[\s\S]*?dataRevision=\{projectDataRevision\}/);
+    expect(source).toMatch(/onSaved=\{\(\) => \{[\s\S]*?refreshProjectArtifactLibrary\(\);[\s\S]*?refreshOutputPackages\(\);[\s\S]*?\}\}/);
   });
 
   test('左栏空态区分无数据与无匹配', () => {
