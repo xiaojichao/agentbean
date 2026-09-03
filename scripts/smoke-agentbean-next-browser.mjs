@@ -2822,7 +2822,31 @@ export async function exerciseWebUiTaskBusinessSmoke({
   await waitForWebUiTaskCard({ page, title, status: 'todo', timeoutMs });
   await waitForWebUiTaskCard({ page, title: secondaryTitle, status: 'todo', timeoutMs });
 
-  await clickWebUiTaskAction({ page, title, selector: '[data-smoke="task-reorder-top"]', description: 'move task to top' });
+  const primaryTaskStartsAbove = await isWebUiTaskAbove({
+    page,
+    firstTitle: title,
+    secondTitle: secondaryTitle,
+  });
+  if (primaryTaskStartsAbove) {
+    await clickWebUiTaskAction({
+      page,
+      title: secondaryTitle,
+      selector: '[data-smoke="task-reorder-top"]',
+      description: 'move secondary task to top',
+    });
+    await waitForWebUiTaskOrder({
+      page,
+      firstTitle: secondaryTitle,
+      secondTitle: title,
+      timeoutMs,
+    });
+  }
+  await clickWebUiTaskAction({
+    page,
+    title,
+    selector: '[data-smoke="task-reorder-top"]',
+    description: 'move task to top',
+  });
   await waitForWebUiTaskOrder({ page, firstTitle: title, secondTitle: secondaryTitle, timeoutMs });
 
   const clickedStatusTrigger = await page.evaluateJson(`
@@ -3278,6 +3302,20 @@ async function waitForWebUiTaskOrder({ page, firstTitle, secondTitle, timeoutMs 
     `task "${firstTitle}" to render above "${secondTitle}" after reorder`,
     timeoutMs,
   );
+}
+
+async function isWebUiTaskAbove({ page, firstTitle, secondTitle }) {
+  return page.evaluateJson(`
+    (() => {
+      const firstTitle = ${JSON.stringify(firstTitle)};
+      const secondTitle = ${JSON.stringify(secondTitle)};
+      const items = Array.from(document.querySelectorAll('[data-smoke="task-card"], [data-smoke="task-row"]'))
+        .filter((candidate) => candidate.dataset.taskStatus === 'todo');
+      const firstIndex = items.findIndex((candidate) => candidate.dataset.taskTitle === firstTitle);
+      const secondIndex = items.findIndex((candidate) => candidate.dataset.taskTitle === secondTitle);
+      return firstIndex >= 0 && secondIndex >= 0 && firstIndex < secondIndex;
+    })()
+  `);
 }
 
 async function clickWebUiTaskAction({ page, title, selector, description }) {
