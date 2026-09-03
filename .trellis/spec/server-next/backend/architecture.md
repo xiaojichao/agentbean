@@ -55,6 +55,7 @@
 - `src/application/agent-eligibility-module.ts`：统一解释 Team Exposure、restriction、legacy capability 与 Project Document InputSet 合同；broker 与项目阶段调用方继续拥有各自的通道、设备、依赖和策略诊断。
 - `src/server-runtime-assembly.ts`：统一组装 TaskClaimBroker、management runtime、use cases、readiness 与 server worker。Memory/SQLite adapter 只准备仓储、目录、迁移与 cleanup，再把准备好的依赖交给该模块。
 - `src/transport/message-socket-handlers.ts` + `message-socket-adapter.ts`：前者通过本地 `MessageSocketPort` 统一拥有 Message 事件映射与 send 认证输入增强声明，后者拥有 send/edit/delete/convert-to-task 投影 fan-out，以及 send dispatch 的 quiet window、claim wake 与终态取消。共享 binder 仍统一执行认证身份注入和 ACK/error 整形。
+- `src/transport/project-socket-broadcast.ts`：通过单一 `handleMutation(kind, payload, result)` interface 拥有 Project overview / artifact / document bundle 的 mutation failure 分类、Team 过滤、逐订阅者身份解析与 Server 投影重读、事件发送及 latency 观测。References 更新使用不同的频道可见性语义，暂不进入该 module。
 
 抽新模块时**必须**沿用相对路径 import（见 gotchas.md）。
 
@@ -63,10 +64,11 @@
 只有删除候选 module 会把顺序敏感状态、authority 规则或跨事件协调重新泄漏给多个调用方时，才继续抽取：
 
 - Message socket module 通过删除测试：删除后，mutation 投影顺序、每个 dispatch 独立的 quiet window、claim wake 与终态取消都会重新散回 handler。
-- Task / Project 剩余 socket 绑定未通过删除测试：`socket-handlers.ts` 中主要是声明式 event → use case 映射；真实 Task fan-out 与 Project subscriber refresh/metrics 仍由 `socket-server.ts` 的 `afterTaskMutation` / `afterProject*Mutation` 拥有。只搬动这些 `bind(...)` 不会形成更深接口，不要为“按领域分文件”创建薄 adapter。
+- Project projection broadcast 已通过删除测试：删除 `project-socket-broadcast.ts` 会把三类投影共用的 failure policy、逐用户重读和 latency 观测重新泄漏回 `socket-server.ts`；入口认证与声明式 event → use case 映射仍留在 `socket-handlers.ts`。
+- Task socket 仍未通过删除测试：`afterTaskMutation` 同时发送 mutation payload、message visibility、Task snapshot 与 Memory invalidation，不能与 Project projection 共用泛型 fan-out seam。只搬动相关 `bind(...)` 不会形成更深 interface。
 - Channel Work Intake 已通过删除测试且保持现有边界：删除 `channel-work-intake.ts` 会把 authority、freshness、promotion、replay 与 Offer publication 顺序泄漏回 composition root；在没有第二个 route writer 或重复 authority 流程前，不要再包一层 facade。
 
-未来只有当 Task / Project transport 出现可由单一 module 完整拥有的状态机、顺序策略或多个调用方共享的 fan-out 规则时，才重新评估对应 adapter；事件数量本身不是抽取理由。
+未来只有当 Task transport 或 Project references 出现可由单一 module 完整拥有的状态机、顺序策略或多个调用方共享的 fan-out 规则时，才重新评估对应 adapter；事件数量本身不是抽取理由。
 
 ### Repository 接口 + 双实现
 
