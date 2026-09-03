@@ -1666,6 +1666,99 @@ describe('server-next socket handlers', () => {
     expect(app.receiveDispatchError).toHaveBeenCalledWith({ dispatchId: 'dispatch-1' });
   });
 
+  test('keeps Agent catalog, Dispatch, and Task projection callbacks separated', async () => {
+    const socket = new FakeSocket();
+    const calls: string[] = [];
+    const app = {
+      registerDiscoveredAgents: vi.fn(async () => makeSuccess({ agents: [] })),
+      receiveDispatchAgentMessage: vi.fn(async () => makeSuccess({ dispatch: { id: 'dispatch-1' } })),
+      receiveDispatchResult: vi.fn(async () => makeSuccess({
+        dispatch: { id: 'dispatch-1' },
+        task: { id: 'task-1', teamId: 'team-1' },
+      })),
+      receiveDispatchError: vi.fn(async () => makeSuccess({
+        dispatch: { id: 'dispatch-1' },
+        task: { id: 'task-1', teamId: 'team-1' },
+      })),
+    } as unknown as ServerNextUseCases;
+
+    registerAgentSocketHandlers(socket, app, {
+      afterAgentMutation: async () => { calls.push('agent'); },
+      afterDispatchMutation: async () => { calls.push('dispatch'); },
+      afterTaskMutation: async () => { calls.push('task'); },
+    });
+
+    await socket.trigger(AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1' });
+    await socket.trigger(AGENT_EVENTS.dispatch.message, { dispatchId: 'dispatch-1' });
+    await socket.trigger(AGENT_EVENTS.dispatch.result, { dispatchId: 'dispatch-1' });
+    await socket.trigger(AGENT_EVENTS.dispatch.error, { dispatchId: 'dispatch-1' });
+
+    expect(calls).toEqual([
+      'agent',
+      'dispatch',
+      'dispatch', 'task',
+      'dispatch', 'task',
+    ]);
+  });
+
+  test('routes Web dispatch cancellation through Dispatch and Task callbacks only', async () => {
+    const socket = new FakeSocket();
+    const afterAgentMutation = vi.fn();
+    const afterDispatchMutation = vi.fn();
+    const afterTaskMutation = vi.fn();
+    const result = makeSuccess({
+      dispatch: { id: 'dispatch-1', teamId: 'team-1', status: 'cancelled' },
+      task: { id: 'task-1', teamId: 'team-1', status: 'todo' },
+    });
+    const app = {
+      cancelDispatch: vi.fn(async () => result),
+      getDispatchRequest: vi.fn(async () => makeFailure('NOT_FOUND', 'Dispatch request unavailable')),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, {
+      afterAgentMutation,
+      afterDispatchMutation,
+      afterTaskMutation,
+    });
+
+    await socket.trigger(WEB_EVENTS.dispatch.cancel, {
+      userId: 'user-1', dispatchId: 'dispatch-1',
+    });
+
+    expect(afterDispatchMutation).toHaveBeenCalledWith(
+      { userId: 'user-1', dispatchId: 'dispatch-1' },
+      result,
+    );
+    expect(afterTaskMutation).toHaveBeenCalledWith(
+      { userId: 'user-1', dispatchId: 'dispatch-1' },
+      result,
+    );
+    expect(afterAgentMutation).not.toHaveBeenCalled();
+  });
+
+  test('projects a Task status update before its committed system Message', async () => {
+    const socket = new FakeSocket();
+    const calls: string[] = [];
+    const result = makeSuccess({
+      task: { id: 'task-1', teamId: 'team-1', status: 'done' },
+      message: { id: 'message-1', teamId: 'team-1', channelId: 'channel-1' },
+    });
+    const app = {
+      updateTask: vi.fn(async () => result),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, {
+      afterTaskMutation: async () => { calls.push('task'); },
+      afterMessageSend: async () => { calls.push('message'); },
+    });
+
+    await socket.trigger(WEB_EVENTS.task.update, {
+      userId: 'user-1', teamId: 'team-1', taskId: 'task-1', status: 'done',
+    });
+
+    expect(calls).toEqual(['task', 'message']);
+  });
+
   test('Agent promotion escalation 注入已认证连接的 deviceId', async () => {
     const socket = new FakeSocket();
     const app = {

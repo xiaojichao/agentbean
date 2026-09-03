@@ -277,9 +277,15 @@ describe('server-next Socket.IO namespaces', () => {
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', status: 'online' }] });
 
     const channelMessages: unknown[] = [];
+    const taskUpdates: unknown[] = [];
+    const taskSnapshots: unknown[] = [];
+    const memoryChanges: unknown[] = [];
     web.on(WEB_EVENTS.channel.message, (message) => {
       channelMessages.push(message);
     });
+    web.on(WEB_EVENTS.task.updated, (task) => taskUpdates.push(task));
+    web.on(WEB_EVENTS.task.snapshot, (tasks) => taskSnapshots.push(tasks));
+    web.on(WEB_EVENTS.memory.changed, (change) => memoryChanges.push(change));
     await expect(
       web.emitWithAck(WEB_EVENTS.channel.subscribe, {
         userId: 'user-1',
@@ -300,6 +306,14 @@ describe('server-next Socket.IO namespaces', () => {
       task: { id: 'task-1', status: 'in_progress' },
       dispatches: [{ id: 'dispatch-1', requestId: 'request-1' }],
     });
+    await eventually(async () => {
+      expect(taskUpdates).toHaveLength(1);
+      expect(taskSnapshots).toHaveLength(1);
+      expect(memoryChanges).toHaveLength(1);
+    });
+    taskUpdates.length = 0;
+    taskSnapshots.length = 0;
+    memoryChanges.length = 0;
     await expect(
       agent.emitWithAck(AGENT_EVENTS.dispatch.result, {
         dispatchId: 'dispatch-1',
@@ -313,11 +327,61 @@ describe('server-next Socket.IO namespaces', () => {
       task: { id: 'task-1', status: 'in_review' },
     });
     await eventually(async () => {
-      expect(channelMessages).toEqual([
-        expect.objectContaining({ id: 'message-1', senderKind: 'human', body: '@Codex 总结一下今天新闻 Top20' }),
-        expect.objectContaining({ id: 'reply-1', senderKind: 'agent', body: 'done' }),
-      ]);
+      expect(memoryChanges).toEqual([{ teamId: 'team-1' }]);
     });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(channelMessages).toEqual([
+      expect.objectContaining({ id: 'message-1', senderKind: 'human', body: '@Codex 总结一下今天新闻 Top20' }),
+      expect.objectContaining({ id: 'reply-1', senderKind: 'agent', body: 'done' }),
+    ]);
+    expect(taskUpdates).toEqual([
+      expect.objectContaining({ id: 'task-1', status: 'in_review' }),
+    ]);
+    expect(taskSnapshots).toEqual([
+      [expect.objectContaining({ id: 'task-1', status: 'in_review' })],
+    ]);
+    expect(memoryChanges).toEqual([{ teamId: 'team-1' }]);
+  });
+
+  test('projects convert-to-task Message and Task exactly once', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'task-1']),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => web.disconnect());
+
+    await web.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw', password: 'secret', teamName: 'AgentBean',
+    });
+    const channelMessages: unknown[] = [];
+    web.on(WEB_EVENTS.channel.message, (message) => channelMessages.push(message));
+    await web.emitWithAck(WEB_EVENTS.channel.subscribe, {
+      userId: 'user-1', teamId: 'team-1',
+    });
+    await expect(web.emitWithAck(WEB_EVENTS.message.send, {
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '稍后转为任务',
+    })).resolves.toMatchObject({ ok: true, message: { id: 'message-1' } });
+    await eventually(async () => expect(channelMessages).toHaveLength(1));
+    channelMessages.length = 0;
+
+    await expect(web.emitWithAck(WEB_EVENTS.message.convertToTask, {
+      userId: 'user-1', teamId: 'team-1', messageId: 'message-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-1' },
+      task: { id: 'task-1' },
+    });
+    await eventually(async () => expect(channelMessages.length).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(channelMessages).toEqual([
+      expect.objectContaining({ id: 'message-1', body: '稍后转为任务' }),
+    ]);
   });
 
   test('does not claim a task for an online agent without a connected daemon socket', async () => {
@@ -402,20 +466,29 @@ describe('server-next Socket.IO namespaces', () => {
     await agentSock.emitWithAck(AGENT_EVENTS.agent.registerBatch, { teamId: 'team-1', deviceId: 'device-1', agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }] });
 
     const statuses: Array<{ id?: string; status?: string }> = [];
+    const memoryChanges: unknown[] = [];
     web.on(WEB_EVENTS.agent.status, (s) => statuses.push(s as { id?: string; status?: string }));
+    web.on(WEB_EVENTS.memory.changed, (change) => memoryChanges.push(change));
     await web.emitWithAck(WEB_EVENTS.agent.subscribe, { userId: 'user-1', teamId: 'team-1' });
 
     await web.emitWithAck(WEB_EVENTS.message.send, { userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
     await eventually(async () => {
       expect(statuses.some((s) => s.id === 'agent-1' && s.status === 'busy')).toBe(true);
+      expect(memoryChanges.length).toBeGreaterThan(0);
     });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(memoryChanges).toEqual([{ teamId: 'team-1' }]);
+    memoryChanges.length = 0;
 
     await web.emitWithAck(WEB_EVENTS.dispatch.cancel, { userId: 'user-1', dispatchId: 'dispatch-1' });
     await eventually(async () => {
       expect(statuses.some((s) => s.id === 'agent-1' && s.status === 'online')).toBe(true);
+      expect(memoryChanges.length).toBeGreaterThan(0);
     });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(memoryChanges).toEqual([{ teamId: 'team-1' }]);
 
-    // 回归：无 dispatch 的消息不得触发 afterAgentMutation，否则每条聊天都会
+    // 回归：无 dispatch 的消息不得触发 afterDispatchMutation，否则每条聊天都会
     // 全量扇出 refreshAgentSubscribers（性能回归）。
     // 守门条件：isSendMessageAck(result) && result.dispatches.length > 0。
     // 用 @UnknownAgent mention 强制 route=no-dispatch（reason=unknown-mention），
@@ -1029,7 +1102,7 @@ describe('server-next Socket.IO namespaces', () => {
   test('pushes task:updated to subscribers after task mutations', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
-      ids: createIds(['user-1', 'team-1', 'channel-1', 'task-1']),
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'task-1', 'message-1']),
     });
     const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
     cleanups.push(async () => {
@@ -1053,12 +1126,14 @@ describe('server-next Socket.IO namespaces', () => {
     });
 
     const updates: Array<{ id: string; title?: string }> = [];
+    const channelMessages: unknown[] = [];
     owner.on(WEB_EVENTS.task.updated, (task) => {
       if (typeof task !== 'object' || task === null) {
         throw new Error('Expected task:updated payload to be an object');
       }
       updates.push(task as { id: string; title?: string });
     });
+    owner.on(WEB_EVENTS.channel.message, (message) => channelMessages.push(message));
 
     // task:updated is team-scoped: subscribe so the owner belongs to team-1.
     await expect(
@@ -1078,6 +1153,22 @@ describe('server-next Socket.IO namespaces', () => {
       expect(updates.length).toBeGreaterThan(0);
       expect(updates.at(-1)!.title).toBe('My Task');
     });
+
+    await expect(owner.emitWithAck(WEB_EVENTS.task.update, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-1',
+      status: 'done',
+    })).resolves.toMatchObject({
+      ok: true,
+      task: { id: 'task-1', status: 'done' },
+      message: { id: 'message-1', meta: { kind: 'task-status-updated' } },
+    });
+    await eventually(async () => expect(channelMessages.length).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(channelMessages).toEqual([
+      expect.objectContaining({ id: 'message-1', meta: expect.objectContaining({ kind: 'task-status-updated' }) }),
+    ]);
   });
 
   test('queries a selected Stage delivery review workspace through authenticated Socket.IO', async () => {

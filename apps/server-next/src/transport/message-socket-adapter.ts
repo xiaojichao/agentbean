@@ -46,7 +46,7 @@ export interface MessageSocketAdapterOptions {
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
   afterProjectReferencesUpdated?(payload: unknown, result: unknown): Promise<void> | void;
   afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
-  afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterDispatchMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterMemoryMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
 
@@ -135,7 +135,7 @@ export function createMessageSocketAdapter(
       }
       // 全量 Agent refresh 只在确实产生 dispatch（即写入 busy）时触发。
       if (result.dispatches.length > 0) {
-        await options.afterAgentMutation?.(payload, result);
+        await options.afterDispatchMutation?.(payload, result);
       }
       if (!options.dispatch) return;
       extendPendingDispatchRequest(result.coalescedDispatchId);
