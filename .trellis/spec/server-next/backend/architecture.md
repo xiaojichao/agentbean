@@ -32,7 +32,7 @@
 | `src/application/management/` | PI 内核（路由、worker 池、claim broker） | `management-kernel.ts`、`management-router.ts`、`server-worker-pool.ts`、`task-claim-broker.ts` |
 | `src/infra/sqlite/` | SQLite 实现 + 迁移 | `repositories.ts`、`migrations/global/`、`migrations/team/` |
 | `src/infra/memory/` | 测试用内存实现 | `repositories.ts` |
-| `src/transport/` | socket.io adapter、事件绑定与 Server-owned projection | `socket-server.ts`、`socket-handlers.ts`、`message-socket-handlers.ts`、`message-socket-adapter.ts`、`dispatch-socket-projection.ts`、`task-socket-projection.ts`、`task-claim-socket-delivery.ts` |
+| `src/transport/` | socket.io adapter、事件绑定与 Server-owned projection | `socket-server.ts`、`socket-handlers.ts`、`message-socket-handlers.ts`、`message-socket-adapter.ts`、`agent-socket-projection.ts`、`device-socket-projection.ts`、`dispatch-socket-projection.ts`、`task-socket-projection.ts`、`task-claim-socket-delivery.ts` |
 | `src/` 根 | 入口与组装根 | `dev-server.ts`（生产 host/storage）、`server-runtime-assembly.ts`（通用 runtime assembly）、`index.ts`（内存）、`bin.ts`（CLI） |
 
 ### god-interface 工厂：createServerNextUseCases
@@ -58,6 +58,8 @@
 - `src/transport/project-socket-broadcast.ts`：通过单一 `handleMutation(kind, payload, result)` interface 拥有 Project overview / artifact / document bundle 的 mutation failure 分类、Team 过滤、逐订阅者身份解析与 Server 投影重读、事件发送及 latency 观测。References 更新使用不同的频道可见性语义，由 Message socket module 只在提交成功且存在冻结引用集时触发，暂不进入该 module。
 - `src/transport/task-socket-projection.ts`：通过单一 `handleMutation(result)` interface 拥有 `task` / `tasks` 归一化、Task identity 去重、按 Team 聚合，以及 `task.updated` → `task.snapshot` → `memory.changed` 顺序；Message 与 Dispatch 投影不得进入该 module。
 - `src/transport/dispatch-socket-projection.ts`：通过 `handleMutation(source, payload, result)` interface 拥有 Dispatch status、Agent reply Message、Agent snapshot/status 与非 Task Memory invalidation 的统一顺序；调用方必须显式标注 mutation source，不能从 result shape 猜 owner。
+- `src/transport/agent-socket-projection.ts`：通过 `handleMutation(source, payload, result)` 与 `refresh(teamId)` 拥有 Web/daemon Agent mutation 的 Team 归一化、当前权限复验、Agent snapshot/status 顺序、Memory/Channel 后续投影、availability 通知，以及 discovered Agent runtime enrichment；Device 路由、在线状态与 Broker fencing 继续留在组装根和领域 owner。
+- `src/transport/device-socket-projection.ts`：通过 `subscribe(...)`、`handleMutation(payload, result)` 与 `refresh(teamId)` 拥有 Device snapshot/status/runtime 的订阅首推、mutation fan-out、Team 去重，以及 Agent/Channel/availability 后续顺序；Device Socket 路由、`device:removed`、offline authority 与 Task Claim fencing 继续留在组装根和领域 owner。
 - `src/transport/task-claim-socket-delivery.ts`：通过 `offerTaskClaims(...)` / `expireTaskClaims()` interface 拥有 Task Offer 的 Device Socket 定向交付、ACK/timeout 解释、接受计数，以及过期 Claim 的当前 Device 复验与定向通知；Broker 继续唯一拥有 eligibility、Offer/Claim 事实与状态机。
 
 抽新模块时**必须**沿用相对路径 import（见 gotchas.md）。
@@ -70,10 +72,28 @@
 - Project projection broadcast 已通过删除测试：删除 `project-socket-broadcast.ts` 会把三类投影共用的 failure policy、逐用户重读和 latency 观测重新泄漏回 `socket-server.ts`；入口认证与声明式 event → use case 映射仍留在 `socket-handlers.ts`。
 - Task socket projection 已通过删除测试：删除 `task-socket-projection.ts` 会把 Task identity 去重、按 Team 单次 snapshot/Memory invalidation、受众差异和事件顺序重新泄漏到 Web Task、Message convert/send、Dispatch cancel 与 Agent result/error 路径。它不能与 Message/Project 共用泛型 fan-out seam。
 - Dispatch socket projection 已通过删除测试：删除 `dispatch-socket-projection.ts` 会把 status audience、Agent reply 可见性、Team 去重、Agent refresh 与 Task/Memory 唯一 owner 顺序重新泄漏到 Message send、Web cancel/cancelChannel、Agent message/result/error 及 realtime timeout 路径。
+- Agent socket projection 已通过删除测试：删除 `agent-socket-projection.ts` 会把 Agent Team 去重、订阅权限复验、snapshot/status 顺序、Memory/Channel/availability 协调和 discovered runtime enrichment 重新泄漏到 Web Agent mutation、daemon Agent report、Device mutation/disconnect 与 realtime refresh 多个入口。
+- Device socket projection 已通过删除测试：删除 `device-socket-projection.ts` 会把订阅首推 runtime 重读、Device snapshot/status 顺序、mutation runtime fan-out，以及 Agent/Channel/availability 协调重新泄漏到 Web Device list、daemon hello/runtime report 与 disconnect refresh 多个入口。
 - Task Claim socket delivery 已通过删除测试：删除 `task-claim-socket-delivery.ts` 会把 Offer 准备、当前 Device Socket 定位、ACK timeout/接受计数、Claim expiry 的候选解析与定向通知重新泄漏到 `socket-server.ts` 组装根；它不能吸收 Broker 的 authority 或自动重试策略。
 - Channel Work Intake 已通过删除测试且保持现有边界：删除 `channel-work-intake.ts` 会把 authority、freshness、promotion、replay 与 Offer publication 顺序泄漏回 composition root；在没有第二个 route writer 或重复 authority 流程前，不要再包一层 facade。
 
 - Project references 当前**未通过独立 module 的删除测试**：删除候选只会把单一 Message send callback 的频道可见性循环放回原处，不会把状态机、顺序或共享 fan-out 泄漏到多个调用方。其 interface 应保持窄的 committed facts，不得为复用 Project mutation failure policy 而重新接收任意 payload/result。未来只有当 references 出现可由单一 module 完整拥有的状态机、顺序策略或多个调用方共享规则时，才重新评估对应 adapter；事件数量本身不是抽取理由。
+- Workspace revision committed fan-out 当前**未通过独立 module 的删除测试**：它只有 `commitWorkspacePublishStaging` 一个 committed-facts 入口，Socket 侧也只有一次 Device 解析与 fire-and-forget emit；没有 ACK、重试、共享状态机或跨调用方顺序。保持 `ServerNextRealtime.emitWorkspaceRevisionCommitted(...)` 窄 seam 即可。只有出现第二个 revision writer、共享的 replay/ACK/能力协商/权限复验策略，或多个入口需要共同维护通知顺序时，才重新评估独立 delivery module。
+
+### 最终残余审计与收口边界
+
+本轮完成 Agent/Device projection 后，`socket-server.ts` 剩余候选均不再计划抽取：
+
+| 候选 | 删除测试结论 | 保留原因 |
+|---|---|---|
+| Message pin / tracer delivered fan-out | 未通过 | 各自只有一个 committed callback；抽 module 只会搬移一次 Channel/DM 可见性循环 |
+| Web DM start/list/snapshot | 未通过 | 只服务单个 Web subscriber，并直接依赖其当前 Channel subscription 与 ACK 顺序 |
+| Workspace revision committed | 未通过 | 单 writer、单 fire-and-forget delivery seam；无共享状态机或 ACK/retry 策略 |
+| server-worker namespace | 不抽取 | 授权、connection id、Pool/Scheduler fallback、V1/V2/V3 ACK 协议共同绑定同一连接闭包；拆出会扩大接口而不隐藏复杂度 |
+| daemon disconnect / invite / `device:removed` | 不抽取 | 依赖 Socket route 与 invite maps，且清理、Broker fence、offline write、removed-before-disconnect 顺序必须在组装根可见 |
+| payload/result parser helpers | 未通过 | 仅为本文件协议适配细节，调用方少，无独立 authority 或跨入口协调 |
+
+因此本次 transport 架构提升以 Agent/Device projection 为最后两个新深模块。未来只有新的生产需求让上述候选出现第二入口或共享状态/顺序策略时，才重新执行删除测试；不得因为文件行数或测试覆盖缺口本身继续拆 module。缺失的行为测试应作为测试任务独立处理，不能伪装成架构抽取。
 
 ### Repository 接口 + 双实现
 
@@ -220,6 +240,41 @@ afterProjectReferencesUpdated({
 });
 ```
 
+### Workspace Revision Committed Socket seam
+
+#### 1. Scope / Trigger
+
+- Trigger：`commitWorkspacePublishStaging` 真正提交出新的 Workspace revision。
+- Scope：只把已提交的 `{ teamId, channelId, workspaceId, revisionId }` 事实通知给该频道当前在线的 Agent Device；不拥有 revision authority、staging/CAS、OutputPackage formation、设备本地物化或离线恢复。
+
+#### 2. Contracts
+
+- `commitWorkspacePublishStaging` 只有在本次调用新建 revision 时调用 `onWorkspaceRevisionCommitted`；已 committed staging 的幂等 replay 不重复通知。
+- `resolveChannelAgentDeviceIds` 是 server 内部、无 `userId` 的系统查询：先校验 Channel 属于 Team，再只返回频道成员中仍对该 Team 可见且绑定 Device 的 Agent。
+- `ServerNextRealtime.emitWorkspaceRevisionCommitted` 使用 `.emit`，不得改为等待 Device ACK；revision 已提交，慢或离线 Device 不能改变 commit 结果。
+- 单个通知或 Device fan-out 失败保持 best-effort，不回滚 Workspace commit。daemon reconnect reconcile 才是最终收敛路径，实时事件只是低延迟提示。
+- 协议事件、Server sender 与 daemon listener 必须成套保留；不得留下永远不会发送或无人消费的假能力。
+
+#### 3. Validation & Error Matrix
+
+| 条件 | 行为 |
+|---|---|
+| 新 revision 提交成功 | 调用一次 committed callback，并通知当前在线目标 Device |
+| committed staging 幂等 replay | 返回既有成功结果，不重复 callback |
+| Channel 不存在或 Team 不匹配 | resolver 返回空数组，不发送 |
+| Agent 已移出频道、撤销 Team 可见性或无 Device | 不进入目标 Device 集合 |
+| 目标 Device 离线 | 跳过，不抛错、不影响其他 Device |
+| resolver / Socket fan-out 抛异常 | 不改变已成功的 commit；由 reconnect reconcile 最终收敛 |
+
+#### 4. Deletion Test Decision
+
+当前不抽 `workspace-revision-socket-delivery.ts`：删除这样的候选 module 只会把一个 resolver 调用和一个 emit 循环放回 `socket-server.ts`，不会把顺序敏感状态、authority 或共享策略泄漏给多个调用方。未来重评必须先证明出现了可由单一 module 完整拥有的多入口协调，而不是只因为 `socket-server.ts` 仍然较大。
+
+#### 5. Tests Required
+
+- `apps/server-next/tests/workspace-revision-fanout.test.ts`：覆盖系统侧 Device 解析、跨 Team/未知 Channel 静默、新 revision 单次 callback、幂等 replay 不重复，以及真实 Socket.IO 的在线/离线 fan-out。
+- `apps/daemon-next/tests/workspace-revision-fanout.test.ts`：覆盖收到通知后的本地物化、重复事件幂等、错误 Device 忽略与 reconnect reconcile。
+
 ### Task Socket Projection interface
 
 #### 1. Scope / Trigger
@@ -287,6 +342,154 @@ if (!Array.isArray(result.dispatches)) emitChannelMessage(result);
 // Correct：Task module 只处理 Task；来源路径各自唯一拥有 Message/Dispatch。
 await taskSocketProjection.handleMutation(result);
 await afterMessageSend(payload, result);
+```
+
+### Agent Socket Projection interface
+
+#### 1. Scope / Trigger
+
+- Trigger：Web Agent mutation、daemon Agent report，或 Device mutation/disconnect 与 realtime 显式要求刷新 Agent 投影。
+- Scope：拥有 Agent Team 归一化、订阅权限复验、snapshot/status 顺序、Agent mutation 导致的 Memory/Channel/availability 后续投影，以及 daemon report 的 discovered Agent enrichment；不拥有 Agent/Device 持久状态、Device Socket 路由、删除断连、Dispatch/Task 投影或 Broker fencing。
+
+#### 2. Signatures
+
+```typescript
+type AgentSocketMutationSource = 'web-command' | 'agent-report';
+
+interface AgentSocketProjection {
+  handleMutation(
+    source: AgentSocketMutationSource,
+    payload: unknown,
+    result: unknown,
+  ): Promise<void>;
+  refresh(teamId: string): Promise<void>;
+}
+
+interface AgentSocketProjectionPort extends Pick<
+  ServerNextUseCases,
+  'listChannels' | 'listVisibleAgents' | 'getDevice'
+> {}
+```
+
+#### 3. Contracts
+
+- 失败 ACK 不读取任何投影、不发送事件，也不调用 Memory/Channel/availability callback。
+- `web-command` 从 payload Team/target/affected、result Agent visibility 与 Dispatch Team 合并去重；每 Team 固定执行 Agent refresh → Memory invalidation，最后再刷新 `channelTeamIds`。
+- `agent-report` 要求 payload Team 或 result Dispatch Team；合并 target/visible Team 去重后，每 Team 固定执行 Agent refresh → availability callback，最后投影 discovered Agent。
+- `refresh(teamId)` 先以每个 agents subscription 调用 `listChannels` 复验当前 Team access；失败即清除该 subscription，不得继续发送 snapshot/status。
+- 权限复验成功后按 `agent.snapshot` → 每个 `agent.status` 的顺序发送；`listVisibleAgents` 失败时静默跳过当前订阅者。
+- discovered Agent 只发给同 Team 的 devices subscriber，并以该订阅者 `userId` 调用 `getDevice`；adapter kind 归一化后匹配 runtime，不能把任意 mutation result 当成投影输入。
+- availability callback 失败保持 best-effort，不阻断其他 Team 与 discovered 投影。Device mutation/disconnect 只复用 `refresh`；设备路由表、offline write 与删除断连仍留在 `socket-server.ts`。
+
+#### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|---|---|
+| mutation `result.ok !== true` | 不读取、不发送、不调用 callback |
+| 多个来源重复同一 Team | 每个 mutation 只刷新该 Team 一次 |
+| agents subscription Team 不匹配 | 不读取该 subscriber |
+| `listChannels` 返回失败 | 清除 agents subscription，不发送 snapshot/status |
+| `listVisibleAgents` 返回失败 | 保留 subscription，本轮不发送 |
+| availability callback reject | 吞掉并继续后续 Team/discovered 投影 |
+| daemon report 缺 Team/device/有效 agents | 保留适用的 Agent refresh；不发送 discovered |
+| `getDevice` 返回失败 | 仅跳过该 devices subscriber |
+
+#### 5. Good/Base/Bad Cases
+
+- Good：Agent visibility mutation 同时影响多个 Team → Team 去重、逐 Team snapshot/status 后各发一次 Memory，最后刷新受影响 Channel。
+- Base：daemon registerBatch → 当前 Team snapshot/status、availability，再向 Device subscriber 发送一次规范化 discovered payload。
+- Bad：Device mutation 自己重写 Agent snapshot/status 循环；或 projection module 修改 Device 路由、Agent 在线状态与 Claim fencing。
+
+#### 6. Tests Required
+
+- `agent-socket-projection.test.ts`：覆盖 Web Team 去重与顺序、daemon report/availability/discovered enrichment、撤权 fail-closed 和失败 ACK 静默。
+- `socket-handlers.test.ts`：继续覆盖 Web/Agent event 到 callback 的职责分离与 affected/channel Team 输入增强。
+- `socket-integration.test.ts`：继续通过真实 Socket.IO 覆盖 daemon report、撤权、Device runtime、discovered payload、disconnect 与 `realtime.refreshAgents`。
+
+#### 7. Wrong vs Correct
+
+```typescript
+// Wrong：每个入口自行解释 Team、权限与 snapshot/status 顺序。
+await refreshAgentSubscribers(webSubscribers, app, teamId);
+emitMemoryChanged(webSubscribers, teamId);
+
+// Correct：入口只标注 owner 语义，Device/realtime 只请求共享 refresh。
+await agentSocketProjection.handleMutation('web-command', payload, result);
+await agentSocketProjection.refresh(affectedTeamId);
+```
+
+### Device Socket Projection interface
+
+#### 1. Scope / Trigger
+
+- Trigger：Web Device list 建立订阅、daemon Device hello/runtime report 成功提交，或当前 daemon socket disconnect 后需要刷新 Device 投影。
+- Scope：拥有 Device snapshot/status/runtime 的订阅首推、mutation fan-out 与相关 Agent/Channel/availability 后续顺序；不拥有 Device 持久状态、Socket 路由、`device:removed`、offline authority 或 Task Claim fencing。
+
+#### 2. Signatures
+
+```typescript
+interface DeviceSocketProjection {
+  subscribe(
+    subscriber: DeviceSocketSubscriber,
+    subscription: DeviceProjectionSubscription,
+    devices: readonly { readonly id: string }[],
+  ): Promise<void>;
+  handleMutation(payload: unknown, result: unknown): Promise<void>;
+  refresh(teamId: string): Promise<void>;
+}
+
+interface DeviceSocketProjectionPort extends Pick<
+  ServerNextUseCases,
+  'listDevices' | 'getDevice'
+> {}
+```
+
+#### 3. Contracts
+
+- `subscribe` 保存已认证 subscription，先发送 `device.snapshot`，再以订阅者 `userId` 逐 Device 调用 `getDevice`；只为非空已存 runtimes 发送 `device.runtimes`。
+- `refresh(teamId)` 只重读目标 Team 的 Device subscriber；成功结果固定发送一次 snapshot，再按结果顺序逐 Device 发送 status。失败读取不发送、不清除 subscription。
+- `handleMutation` 只处理成功 ACK，并从 payload Team 或 committed Device Team 解析 scope；固定顺序为 Device refresh → affected Agent Teams → affected Channel Teams → mutation runtimes → availability callback。
+- `affectedTeamIds` / `channelTeamIds` 分别去重；Device 主 Team 的 availability callback 只调用一次，失败保持 best-effort。
+- daemon hello 成功后，组装根必须先更新 `connectedDeviceId`、Socket route 与 Broker reconnect fence，再调用 projection；disconnect 必须先确认当前 socket 仍拥有 Device route，再写 offline authority，最后调用 `refresh`。
+- `device:removed` 必须在 socket disconnect 前发送给 delete result 中全部 alias Device；该流程继续由 `socket-server.ts` 拥有，不进入 projection。
+
+#### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|---|---|
+| Device list 成功 | 保存 subscription；snapshot 后发送各 Device 已存 runtime |
+| mutation `result.ok !== true` | 不读取、不发送、不调用 callback |
+| mutation 缺 payload/result Team | 不刷新、不发送 |
+| `listDevices` 返回失败 | 保留 subscription，本轮不发送 snapshot/status |
+| stored `getDevice` 失败或 runtimes 为空 | 仅跳过该 Device runtime，继续后续 Device |
+| 重复 affected/channel Team | 每类 callback 对该 Team 只调用一次 |
+| availability callback reject | 吞掉，不改变已完成投影 |
+| stale daemon socket disconnect | 不写 offline、不刷新；新 socket 继续拥有 route |
+
+#### 5. Good/Base/Bad Cases
+
+- Good：daemon runtime report → Device snapshot/status、受影响 Agent/Channel 刷新、runtime 增量、availability 按固定顺序完成。
+- Base：Web Device list → snapshot 后补发持久化 runtimes；late subscriber 获得当前事实。
+- Bad：projection 直接修改 `agentSocketsByDeviceId`、调用 `markDeviceOffline`、发送 `device:removed`，或操作 Task Claim disconnected fence。
+
+#### 6. Tests Required
+
+- `device-socket-projection.test.ts`：覆盖订阅 snapshot/runtime 首推、Team 定向 refresh 与 snapshot/status 顺序、mutation 跨投影顺序/去重、失败静默。
+- `agent-socket-projection.test.ts`：继续覆盖 Device mutation 复用的 Agent refresh、权限撤销和 availability 隔离。
+- `socket-integration.test.ts`：继续通过真实 Socket.IO 覆盖 hello/runtime、late subscriber、disconnect/reconnect、alias delete 与 `device:removed`。
+- `device-management.test.ts` / `device-agent-lifecycle.test.ts`：继续覆盖 Device authority、别名、撤销、offline 与 hosted Agent 级联，不把领域规则搬入 transport module。
+
+#### 7. Wrong vs Correct
+
+```typescript
+// Wrong：projection 接管连接身份、offline authority 或 Claim fence。
+agentSocketsByDeviceId.set(deviceId, socket);
+taskClaimBroker.disconnectDevice(deviceId);
+await app.markDeviceOffline({ deviceId, timestamp });
+
+// Correct：组装根先处理 route/authority，再把 committed result 交给投影。
+connectedDeviceTeamId = teamId;
+await deviceSocketProjection.handleMutation(payload, result);
 ```
 
 ### Task Claim Socket Delivery interface
@@ -491,7 +694,10 @@ interface AgentEligibilityModule {
 - **不要把 Message 事件映射、mutation 投影 fan-out、send dispatch quiet window 或 claim wake 散回 `socket-handlers.ts`**：统一调用 Message socket module；module 通过本地 port 依赖 use case，不得重新 import `ServerNextUseCases` god-interface。
 - **不要从 Task projection 发送 Message 或 Dispatch/Agent 事件**：Task 投影只调用 `taskSocketProjection.handleMutation(result)`；同一结果必须按 Task id 去重、按 Team 单次刷新 snapshot 与 Memory invalidation。
 - **不要在 handler 或 Message adapter 外重复解释 Dispatch 结果**：统一传入明确 source 并调用 `dispatchSocketProjection.handleMutation(...)`；Task 结果的 Memory invalidation 只由 Task module 发送。
+- **不要在 Web/Agent/Device callback 中重写 Agent snapshot/status 与权限复验**：Agent mutation 统一调用 `agentSocketProjection.handleMutation(source, payload, result)`，Device/disconnect/realtime 只调用 `refresh(teamId)`；模块不得接管 Device 路由、offline write 或 Claim fencing。
+- **不要在 Device list/hello/runtime/disconnect 路径中重写 Device snapshot/status/runtime 顺序**：订阅首推、mutation 与显式刷新统一委托 `deviceSocketProjection`；`agentSocketsByDeviceId`、`device:removed`、offline write 与 Claim fencing 必须留在组装根和领域 owner。
 - **不要在 `socket-server.ts` 解释 Task Offer ACK、Claim expiry 接收方或自动 re-offer**：前两者委托 `task-claim-socket-delivery.ts`，自动 re-offer 继续由 Host scheduler 与 Broker authority 决定。
+- **不要仅因 Workspace revision 通知仍在 `socket-server.ts` 就包一层 module**：它目前是单一 committed-facts seam；在没有多入口状态/顺序/重试策略前，额外 facade 不会形成深模块。
 
 ## 验证命令
 
@@ -509,8 +715,14 @@ npx vitest run apps/server-next/tests/message-route-analysis-service.test.ts app
 npx vitest run apps/server-next/tests/message-socket-handlers.test.ts apps/server-next/tests/message-socket-adapter.test.ts apps/server-next/tests/socket-handlers.test.ts
 # Task transport seam
 npx vitest run apps/server-next/tests/task-socket-projection.test.ts apps/server-next/tests/socket-integration.test.ts
+# Agent transport seam
+npx vitest run apps/server-next/tests/agent-socket-projection.test.ts apps/server-next/tests/socket-handlers.test.ts apps/server-next/tests/socket-integration.test.ts
+# Device transport seam
+npx vitest run apps/server-next/tests/device-socket-projection.test.ts apps/server-next/tests/agent-socket-projection.test.ts apps/server-next/tests/socket-integration.test.ts apps/server-next/tests/device-management.test.ts apps/server-next/tests/device-agent-lifecycle.test.ts
 # Task Claim Agent Socket delivery seam
 npx vitest run apps/server-next/tests/task-claim-socket-delivery.test.ts apps/server-next/tests/management-socket-integration.test.ts apps/server-next/tests/dev-server.test.ts
+# Workspace revision committed seam（Server fan-out + daemon materialize/reconcile）
+npx vitest run apps/server-next/tests/workspace-revision-fanout.test.ts apps/daemon-next/tests/workspace-revision-fanout.test.ts
 # Dispatch transport seam
 npx vitest run apps/server-next/tests/dispatch-socket-projection.test.ts apps/server-next/tests/message-socket-adapter.test.ts apps/server-next/tests/socket-handlers.test.ts apps/server-next/tests/socket-integration.test.ts
 # Agent eligibility 边界与关键调用方
