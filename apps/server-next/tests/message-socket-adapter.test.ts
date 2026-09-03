@@ -17,7 +17,7 @@ describe('MessageSocketAdapter', () => {
     const afterMessageSend = vi.fn();
     const afterProjectReferencesUpdated = vi.fn();
     const afterTaskMutation = vi.fn();
-    const afterAgentMutation = vi.fn();
+    const afterDispatchMutation = vi.fn();
     const adapter = createMessageSocketAdapter(
       { getDispatchRequest } satisfies MessageDispatchPort,
       {
@@ -25,7 +25,7 @@ describe('MessageSocketAdapter', () => {
         afterMessageSend,
         afterProjectReferencesUpdated,
         afterTaskMutation,
-        afterAgentMutation,
+        afterDispatchMutation,
       },
     );
     const payload = { channelId: 'channel-1', body: 'ship it' };
@@ -42,7 +42,7 @@ describe('MessageSocketAdapter', () => {
     expect(afterMessageSend).toHaveBeenCalledWith(payload, result);
     expect(afterProjectReferencesUpdated).toHaveBeenCalledWith(payload, result);
     expect(afterTaskMutation).toHaveBeenCalledWith(payload, result);
-    expect(afterAgentMutation).toHaveBeenCalledWith(payload, result);
+    expect(afterDispatchMutation).toHaveBeenCalledWith(payload, result);
     await vi.waitFor(() => {
       expect(dispatch).toHaveBeenCalledWith(dispatchRequest('dispatch-1'));
     });

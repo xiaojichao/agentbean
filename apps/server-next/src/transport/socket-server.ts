@@ -37,6 +37,7 @@ import {
   createProjectSocketBroadcast,
   recordProjectSocketMutationFailure,
 } from './project-socket-broadcast.js';
+import { createTaskSocketProjection } from './task-socket-projection.js';
 
 export interface NamespaceLike {
   on(event: 'connection', handler: (socket: SocketLike) => void): void;
@@ -133,6 +134,9 @@ export function attachServerNextNamespaces(
     listProjectDocumentBundles: (input) => app.listProjectDocumentBundles(input),
   }, {
     metrics: options.projectCollaborationMetrics,
+  });
+  const taskSocketProjection = createTaskSocketProjection(webSubscribers, {
+    listTasks: (input) => app.listTasks(input),
   });
   let managementConnectionSequence = 0;
   let serverWorkerConnectionSequence = 0;
@@ -575,6 +579,21 @@ export function attachServerNextNamespaces(
           await refreshChannelSubscribers(webSubscribers, app, teamId);
         }
       },
+      async afterDispatchMutation(payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        const teamIds = uniqueStrings([
+          payloadTeamId(payload),
+          resultDispatchTeamId(result),
+        ]);
+        for (const teamId of teamIds) {
+          await refreshAgentSubscribers(webSubscribers, app, teamId);
+          if (!resultHasTaskProjection(result)) {
+            emitMemoryChanged(webSubscribers, teamId);
+          }
+        }
+      },
       async afterTeamMutation(payload, result) {
         if (!isSuccessAck(result)) {
           return;
@@ -584,19 +603,7 @@ export function attachServerNextNamespaces(
         if (teamId) emitMemoryChanged(webSubscribers, teamId);
       },
       async afterTaskMutation(_payload, result) {
-        if (!isSuccessAck(result)) {
-          return;
-        }
-        const tasks = resultTasks(result);
-        for (const task of tasks) {
-          emitTaskUpdated(webSubscribers, task);
-          const teamId = taskTeamId(task);
-          if (teamId && !isMessageSendResult(result)) {
-            await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
-          }
-          await refreshTaskSubscribers(webSubscribers, app, task);
-          if (teamId) emitMemoryChanged(webSubscribers, teamId);
-        }
+        await taskSocketProjection.handleMutation(result);
       },
       async afterProjectMutation(payload, result) {
         await projectSocketBroadcast.handleMutation('overview', payload, result);
@@ -835,19 +842,31 @@ export function attachServerNextNamespaces(
         if (!teamId) {
           return;
         }
-        emitDispatchStatus(webSubscribers, resultDispatch(result));
-        await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
-        const task = (result as { task?: unknown }).task;
-        if (task) {
-          emitTaskUpdated(webSubscribers, task);
-          await refreshTaskSubscribers(webSubscribers, app, task);
-        }
         const refreshTeamIds = uniqueStrings([teamId, payloadTargetTeamId(payload), ...resultAgentVisibleTeamIds(result)]);
         for (const refreshTeamId of refreshTeamIds) {
           await refreshAgentSubscribers(webSubscribers, app, refreshTeamId);
           await options.onAgentAvailabilityChanged?.(refreshTeamId).catch(() => undefined);
         }
         await emitDiscoveredAgents(webSubscribers, app, payload);
+      },
+      async afterDispatchMutation(payload, result) {
+        if (!isSuccessAck(result)) {
+          return;
+        }
+        const teamId = payloadTeamId(payload) ?? resultDispatchTeamId(result);
+        if (!teamId) {
+          return;
+        }
+        emitDispatchStatus(webSubscribers, resultDispatch(result));
+        await emitChannelMessageSubscribers(webSubscribers, app, teamId, result);
+        const refreshTeamIds = uniqueStrings([teamId, payloadTargetTeamId(payload), ...resultAgentVisibleTeamIds(result)]);
+        for (const refreshTeamId of refreshTeamIds) {
+          await refreshAgentSubscribers(webSubscribers, app, refreshTeamId);
+          await options.onAgentAvailabilityChanged?.(refreshTeamId).catch(() => undefined);
+        }
+      },
+      async afterTaskMutation(_payload, result) {
+        await taskSocketProjection.handleMutation(result);
       },
       // hello 首推 scanRequested：复用 web 端的下发通道（按 deviceId emit 给对应 device socket）
       deviceScan(request) {
@@ -1134,39 +1153,6 @@ async function resolveSubscriberUserId(
   }
   subscriber.userId = result.user.id;
   return subscriber.userId;
-}
-
-function emitTaskUpdated(subscribers: Set<WebSocketSubscription>, task: unknown): void {
-  const teamId = taskTeamId(task);
-  if (!teamId) {
-    return;
-  }
-  for (const subscriber of subscribers) {
-    if (!subscriberBelongsToTeam(subscriber, teamId)) {
-      continue;
-    }
-    subscriber.socket.emit?.(WEB_EVENTS.task.updated, task);
-  }
-}
-
-async function refreshTaskSubscribers(
-  subscribers: Set<WebSocketSubscription>,
-  app: ServerNextUseCases,
-  task: unknown,
-): Promise<void> {
-  const teamId = taskTeamId(task);
-  if (!teamId) {
-    return;
-  }
-  for (const subscriber of subscribers) {
-    if (subscriber.channels?.teamId !== teamId) {
-      continue;
-    }
-    const result = await app.listTasks(subscriber.channels);
-    if (result.ok) {
-      subscriber.socket.emit?.(WEB_EVENTS.task.snapshot, result.tasks);
-    }
-  }
 }
 
 async function emitChannelMessageSubscribers(
@@ -1697,16 +1683,10 @@ function resultDispatch(result: unknown): unknown {
   return (result as { dispatch?: unknown }).dispatch ?? null;
 }
 
-function resultTasks(result: unknown): unknown[] {
-  if (!result || typeof result !== 'object') {
-    return [];
-  }
-  const single = (result as { task?: unknown }).task;
-  const many = (result as { tasks?: unknown }).tasks;
-  return [
-    ...(single ? [single] : []),
-    ...(Array.isArray(many) ? many : []),
-  ];
+function resultHasTaskProjection(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const taskResult = result as { task?: unknown; tasks?: unknown };
+  return Boolean(taskResult.task) || (Array.isArray(taskResult.tasks) && taskResult.tasks.length > 0);
 }
 
 function dispatchTeamId(dispatch: unknown): string | null {
@@ -1740,10 +1720,6 @@ function resultChannelId(result: unknown): string | null {
   return typeof message?.channelId === 'string' ? message.channelId : null;
 }
 
-function isMessageSendResult(result: unknown): boolean {
-  return Boolean(result && typeof result === 'object' && Array.isArray((result as { dispatches?: unknown }).dispatches));
-}
-
 function resultPinnedMessageId(result: unknown): string | null {
   if (!result || typeof result !== 'object') {
     return null;
@@ -1758,14 +1734,6 @@ function resultPinnedChannelId(result: unknown): string | null {
   }
   const channelId = (result as { channelId?: unknown }).channelId;
   return typeof channelId === 'string' ? channelId : null;
-}
-
-function taskTeamId(task: unknown): string | null {
-  if (!task || typeof task !== 'object') {
-    return null;
-  }
-  const teamId = (task as { teamId?: unknown }).teamId;
-  return typeof teamId === 'string' ? teamId : null;
 }
 
 function resultDeviceTeamId(result: unknown): string | null {
