@@ -16,9 +16,9 @@
  * 这样 daemon-next deps 锁旧时 npm 装旧版（嵌套），真实复现幽灵路径。
  */
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
@@ -30,9 +30,50 @@ const rootDir = join(fileURLToPath(new URL('.', import.meta.url)), '..');
  * 首项 agent-memory-projection-policy.js = FORMAL_MEMORY_KINDS（历史幽灵崩点）。
  * 新增 contracts 值导出引用时，把对应 dist 模块路径加入此列表即可扩大覆盖。
  */
-const CONTRACTS_VALUE_IMPORTER_DIST_PATHS = [
+/**
+ * 历史幽灵崩点（Bug C：FORMAL_MEMORY_KINDS）。扫描结果必须包含它们——
+ * 若扫描逻辑退化成空集，此处 fail-closed，防止门禁恒真绿灯。
+ */
+const CONTRACTS_VALUE_IMPORTER_MUST_INCLUDE = [
   'dist/packages/domain/src/agent-memory-projection-policy.js',
 ];
+
+/** dist 是 tsc 产物，`import type` 已被擦除：凡静态 import/export 自 contracts 的模块都触发 ESM link。 */
+const CONTRACTS_STATIC_BINDING_RE = /^\s*(?:import|export)\s+[^'']*?from\s*'@agentbean\/contracts'/m;
+
+/** 扫描安装后的 daemon-next dist，找出所有静态绑定 @agentbean/contracts 的模块（相对 daemon-next 根）。 */
+function scanContractsValueImporters(daemonNextRoot, log) {
+  const importers = [];
+  const distRoot = join(daemonNextRoot, 'dist');
+  const stack = [distRoot];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const entryPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(entryPath);
+        continue;
+      }
+      if (!entry.name.endsWith('.js')) continue;
+      const source = readFileSync(entryPath, 'utf8');
+      if (CONTRACTS_STATIC_BINDING_RE.test(source)) {
+        importers.push(relative(daemonNextRoot, entryPath));
+      }
+    }
+  }
+  importers.sort();
+  const missingAnchor = CONTRACTS_VALUE_IMPORTER_MUST_INCLUDE.filter((p) => !importers.includes(p));
+  if (missingAnchor.length > 0) {
+    throw new Error(
+      `contracts importer scan found ${importers.length} modules but missed known importer(s): ${missingAnchor.join(', ')}`,
+    );
+  }
+  if (importers.length === 0) {
+    throw new Error('contracts importer scan found zero modules; the gate cannot verify anything');
+  }
+  log(`  · scanned daemon-next dist: ${importers.length} module(s) statically bind @agentbean/contracts`);
+  return importers;
+}
 
 function run(command, args, options) {
   return execFileSync(command, args, {
@@ -108,7 +149,7 @@ export function runSmokeDaemonNextPublishedContracts({
       ? readJson(installedContractsJsonPath).version
       : '(missing)';
 
-    for (const importerPath of CONTRACTS_VALUE_IMPORTER_DIST_PATHS) {
+    for (const importerPath of scanContractsValueImporters(daemonNextRoot, log)) {
       const moduleFile = join(daemonNextRoot, importerPath);
       // 动态 import 该模块：触发其 `import { FORMAL_MEMORY_KINDS, ... } from '@agentbean/contracts'`。
       // 若解析到的 npm contracts 缺该值绑定，ESM link 抛 SyntaxError，execFileSync 非 0 退出。

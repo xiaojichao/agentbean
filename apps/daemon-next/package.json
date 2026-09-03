@@ -1,6 +1,6 @@
 {
   "name": "@agentbean/daemon-next",
-  "version": "0.3.56",
+  "version": "0.3.57",
   "private": false,
   "type": "module",
   "main": "./dist/apps/daemon-next/src/index.js",
@@ -26,7 +26,7 @@
     "postinstall": "node -e \"try{require('node:fs').chmodSync(require('node:path').join(__dirname,'dist','apps','daemon-next','src','bin.js'),0o755)}catch{}\""
   },
   "dependencies": {
-    "@agentbean/contracts": "0.2.6",
+    "@agentbean/contracts": "0.2.7",
     "@agentbean/pi-management-runtime": "0.1.3",
     "js-yaml": "^4.1.0",
     "socket.io-client": "^4.8.3"
