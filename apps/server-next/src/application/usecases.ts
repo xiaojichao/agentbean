@@ -9991,6 +9991,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return {
           schemaVersion: 1 as const,
           task: overview.task,
+          taskRevision: overview.acceptanceContract.taskRevision,
           governance: overview.governance ?? governance,
           responsibilityFocus: overview.responsibilityFocus,
           ...(stage ? { stage } : {}),
@@ -10021,6 +10022,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               },
             } : {}),
           },
+          availableActions: overview.availableActions,
         };
       }));
       const watermark = await repositories.systemActivity?.watermarks

@@ -571,6 +571,19 @@ for (const variant of variants) {
 
       const readyOverview = await queryOverview(seedValue, taskId);
       expect(readyOverview.availableActions.find((action) => action.action === 'accept-delivery')?.disabled).toBeUndefined();
+      const readyChannelWorkspace = await seedValue.app.queryChannelTaskWorkspace({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+      });
+      expect(readyChannelWorkspace.ok).toBe(true);
+      if (!readyChannelWorkspace.ok) throw new Error(readyChannelWorkspace.error);
+      expect(readyChannelWorkspace.workspace.entries.find((entry) => entry.task.id === taskId)).toMatchObject({
+        taskRevision: readyOverview.acceptanceContract.taskRevision,
+        availableActions: expect.arrayContaining([
+          expect.objectContaining({ action: 'accept-delivery', label: '验收本次交付' }),
+        ]),
+      });
       await seedValue.repositories.channels.update({
         channelId: seedValue.channelId,
         changes: { visibility: 'private', humanMemberIds: [] },
