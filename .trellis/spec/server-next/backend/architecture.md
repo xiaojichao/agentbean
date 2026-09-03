@@ -55,7 +55,7 @@
 - `src/application/agent-eligibility-module.ts`：统一解释 Team Exposure、restriction、legacy capability 与 Project Document InputSet 合同；broker 与项目阶段调用方继续拥有各自的通道、设备、依赖和策略诊断。
 - `src/server-runtime-assembly.ts`：统一组装 TaskClaimBroker、management runtime、use cases、readiness 与 server worker。Memory/SQLite adapter 只准备仓储、目录、迁移与 cleanup，再把准备好的依赖交给该模块。
 - `src/transport/message-socket-handlers.ts` + `message-socket-adapter.ts`：前者通过本地 `MessageSocketPort` 统一拥有 Message 事件映射与 send 认证输入增强声明，后者拥有 send/edit/delete/convert-to-task 投影 fan-out，以及 send dispatch 的 quiet window、claim wake 与终态取消。共享 binder 仍统一执行认证身份注入和 ACK/error 整形。
-- `src/transport/project-socket-broadcast.ts`：通过单一 `handleMutation(kind, payload, result)` interface 拥有 Project overview / artifact / document bundle 的 mutation failure 分类、Team 过滤、逐订阅者身份解析与 Server 投影重读、事件发送及 latency 观测。References 更新使用不同的频道可见性语义，暂不进入该 module。
+- `src/transport/project-socket-broadcast.ts`：通过单一 `handleMutation(kind, payload, result)` interface 拥有 Project overview / artifact / document bundle 的 mutation failure 分类、Team 过滤、逐订阅者身份解析与 Server 投影重读、事件发送及 latency 观测。References 更新使用不同的频道可见性语义，由 Message socket module 只在提交成功且存在冻结引用集时触发，暂不进入该 module。
 - `src/transport/task-socket-projection.ts`：通过单一 `handleMutation(result)` interface 拥有 `task` / `tasks` 归一化、Task identity 去重、按 Team 聚合，以及 `task.updated` → `task.snapshot` → `memory.changed` 顺序；Message 与 Dispatch 投影不得进入该 module。
 
 抽新模块时**必须**沿用相对路径 import（见 gotchas.md）。
@@ -69,7 +69,7 @@
 - Task socket projection 已通过删除测试：删除 `task-socket-projection.ts` 会把 Task identity 去重、按 Team 单次 snapshot/Memory invalidation、受众差异和事件顺序重新泄漏到 Web Task、Message convert/send、Dispatch cancel 与 Agent result/error 路径。它不能与 Message/Project 共用泛型 fan-out seam。
 - Channel Work Intake 已通过删除测试且保持现有边界：删除 `channel-work-intake.ts` 会把 authority、freshness、promotion、replay 与 Offer publication 顺序泄漏回 composition root；在没有第二个 route writer 或重复 authority 流程前，不要再包一层 facade。
 
-未来只有当 Project references 出现可由单一 module 完整拥有的状态机、顺序策略或多个调用方共享的 fan-out 规则时，才重新评估对应 adapter；事件数量本身不是抽取理由。
+- Project references 当前**未通过独立 module 的删除测试**：删除候选只会把单一 Message send callback 的频道可见性循环放回原处，不会把状态机、顺序或共享 fan-out 泄漏到多个调用方。其 interface 应保持窄的 committed facts，不得为复用 Project mutation failure policy 而重新接收任意 payload/result。未来只有当 references 出现可由单一 module 完整拥有的状态机、顺序策略或多个调用方共享规则时，才重新评估对应 adapter；事件数量本身不是抽取理由。
 
 ### Repository 接口 + 双实现
 
@@ -147,6 +147,74 @@ interface MessageSocketHandlers {
 行为合同：`message-socket-handlers.ts` 拥有全部 Message event → use case 映射；为保持既有跨领域事件注册序列，facade 分 `registerIngress`（send / message-tracer）与 `registerOperations`（其余 Message query/mutation）两阶段注册。send 输入在认证身份注入后追加 connected/claim Device IDs，事件名、注册顺序、ACK/error 语义和 after-result 时序保持兼容。send 先执行 `afterMessageSend`，只有成功 ACK 才继续触发引用/Task/Dispatch 投影，其中 Dispatch refresh 仅在确实产生 dispatch 时执行；edit 只执行 `afterMessageSend`；delete 按 `afterMessageSend` → `afterMemoryMutation` 执行；convert-to-task 按 `afterTaskMutation` → `afterMessageSend` 执行。Task projection 不再发送 Message，因此 convert-to-task 的 Message 只由 `afterMessageSend` 投影一次。每个 send dispatch 的 quiet window 独立维护；支持 claim 的 dispatch 可以提前发 wake，终态 dispatch 必须取消尚未发出的 wake。Message module 只依赖本地 `MessageSocketPort` / `MessageDispatchPort`，不得 import 完整 `ServerNextUseCases` interface。
 
 接口测试在 `apps/server-next/tests/message-socket-handlers.test.ts` 与 `message-socket-adapter.test.ts`，覆盖完整事件映射、send 输入增强、mutation 投影顺序、send 投影 fan-out、独立 quiet window、claim wake 与取消。共享 binder 与 `socket-handlers.test.ts` 继续覆盖认证输入注入、ACK 和错误整形。
+
+### Project References Socket seam
+
+#### 1. Scope / Trigger
+
+- Trigger：`WEB_EVENTS.message.send` 已成功提交 Message，且结果包含冻结 `ProjectReferenceSetDto`。
+- Scope：只向当前仍可见该频道的 Team 订阅者发送 `WEB_EVENTS.project.referencesUpdated`；不拥有引用解析、冻结、持久化、Message/Task/Dispatch 投影或 Project overview 重读。
+
+#### 2. Signatures
+
+```typescript
+interface CommittedProjectReferences {
+  readonly teamId: string;
+  readonly channelId: string;
+  readonly referenceSet: ProjectReferenceSetDto;
+}
+
+interface MessageSocketAdapterOptions {
+  afterProjectReferencesUpdated?(
+    committed: CommittedProjectReferences,
+  ): Promise<void> | void;
+}
+```
+
+#### 3. Contracts
+
+- Message socket module 固定 send 顺序为 `afterMessageSend` → references → Task → Dispatch；references callback 只接收已提交 Message 的 `teamId/channelId` 与必有的冻结引用集。
+- Message adapter 从 committed Message 读取 `teamId/channelId`，不得信任原始 payload 重建 scope；scope 不完整时不得调用 callback。
+- 订阅者必须先匹配 Team，再以自己的 channel subscription 调用 `listChannels` 复核具体频道可见性；同 Team 不等于可见该频道。
+- 每个可见订阅 socket 对一次 callback 恰好收到一次 `{ channelId, referenceSet }`；不重新解析 current/final revision。
+- Project overview / artifact / document bundle 的逐用户投影重读和 failure/latency policy 继续由 `ProjectSocketBroadcast` 独占，references 不复用该 module 的 result interface。
+
+#### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|---|---|
+| send ACK 失败 | Message adapter 不调用 references callback |
+| 成功 send 无 `referenceSet` | 不调用 references callback |
+| committed Message 缺 `teamId` 或 `channelId` | Message adapter 不调用 references callback |
+| subscriber Team 不匹配 | 跳过且不调用 `listChannels` |
+| `listChannels` 返回失败或不含目标频道 | 不广播 |
+| `listChannels` 抛异常 | after-result 失败向现有 socket 错误日志路径冒泡；已发送 ACK 不回滚 Message |
+
+#### 5. Good/Base/Bad Cases
+
+- Good：私有频道发送带冻结引用集的 Message → 频道成员收到一次 references 更新，同 Team 非成员收到零次。
+- Base：成功发送普通 Message → 只执行 Message 投影，不触发 references callback。
+- Bad：把任意 payload/result 交给 references callback、从 payload 取 scope，或因事件同属 Project 命名空间而并入 Team-only Project broadcast module。
+
+#### 6. Tests Required
+
+- `message-socket-adapter.test.ts`：断言 committed-facts 参数形状、Message → references → Task → Dispatch 顺序，以及失败 ACK/无引用集不触发。
+- `socket-integration.test.ts`：通过真实 Socket.IO 断言私有频道可见订阅者收到一次、同 Team 不可见订阅者零次，并校验冻结引用集 id。
+
+#### 7. Wrong vs Correct
+
+```typescript
+// Wrong：重新暴露任意 result，并复用不属于 references seam 的失败策略。
+afterProjectReferencesUpdated(payload, result);
+recordProjectSocketMutationFailure(metrics, result);
+
+// Correct：Message module 只在成功提交且存在引用集时交付最小 committed facts。
+afterProjectReferencesUpdated({
+  teamId: result.message.teamId,
+  channelId: result.message.channelId,
+  referenceSet: result.referenceSet,
+});
+```
 
 ### Task Socket Projection interface
 

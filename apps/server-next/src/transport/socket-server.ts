@@ -33,10 +33,7 @@ import {
   type AuthenticatedUserProvider,
   type SocketLike,
 } from './socket-handlers.js';
-import {
-  createProjectSocketBroadcast,
-  recordProjectSocketMutationFailure,
-} from './project-socket-broadcast.js';
+import { createProjectSocketBroadcast } from './project-socket-broadcast.js';
 import { createTaskSocketProjection } from './task-socket-projection.js';
 
 export interface NamespaceLike {
@@ -614,16 +611,7 @@ export function attachServerNextNamespaces(
       async afterProjectDocumentBundleMutation(payload, result) {
         await projectSocketBroadcast.handleMutation('document-bundles', payload, result);
       },
-      async afterProjectReferencesUpdated(_payload, result) {
-        if (!isSuccessAck(result)) {
-          recordProjectSocketMutationFailure(options.projectCollaborationMetrics, result);
-          return;
-        }
-        if (!result || typeof result !== 'object') return;
-        const referenceSet = (result as { referenceSet?: unknown }).referenceSet;
-        const teamId = resultMessageTeamId(result);
-        const channelId = resultChannelId(result);
-        if (!referenceSet || !teamId || !channelId) return;
+      async afterProjectReferencesUpdated({ teamId, channelId, referenceSet }) {
         for (const subscriber of webSubscribers) {
           if (subscriber.channels?.teamId !== teamId) continue;
           const channels = await app.listChannels(subscriber.channels);

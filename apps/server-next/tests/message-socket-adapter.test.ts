@@ -14,10 +14,11 @@ describe('MessageSocketAdapter', () => {
     const getDispatchRequest = vi.fn(async ({ dispatchId }: { dispatchId: string }) =>
       makeSuccess({ request: dispatchRequest(dispatchId) }));
     const dispatch = vi.fn();
-    const afterMessageSend = vi.fn();
-    const afterProjectReferencesUpdated = vi.fn();
-    const afterTaskMutation = vi.fn();
-    const afterDispatchMutation = vi.fn();
+    const calls: string[] = [];
+    const afterMessageSend = vi.fn(async () => { calls.push('message'); });
+    const afterProjectReferencesUpdated = vi.fn(async () => { calls.push('references'); });
+    const afterTaskMutation = vi.fn(async () => { calls.push('task'); });
+    const afterDispatchMutation = vi.fn(async () => { calls.push('dispatch'); });
     const adapter = createMessageSocketAdapter(
       { getDispatchRequest } satisfies MessageDispatchPort,
       {
@@ -31,7 +32,12 @@ describe('MessageSocketAdapter', () => {
     const payload = { channelId: 'channel-1', body: 'ship it' };
     const result = {
       ok: true,
-      message: { id: 'message-1', body: 'ship it' },
+      message: {
+        id: 'message-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        body: 'ship it',
+      },
       referenceSet: { id: 'reference-set-1' },
       task: { id: 'task-1' },
       dispatches: [dispatchAck('dispatch-1')],
@@ -40,12 +46,42 @@ describe('MessageSocketAdapter', () => {
     await adapter.handleMutation('send', payload, result);
 
     expect(afterMessageSend).toHaveBeenCalledWith(payload, result);
-    expect(afterProjectReferencesUpdated).toHaveBeenCalledWith(payload, result);
+    expect(afterProjectReferencesUpdated).toHaveBeenCalledWith({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      referenceSet: result.referenceSet,
+    });
     expect(afterTaskMutation).toHaveBeenCalledWith(payload, result);
     expect(afterDispatchMutation).toHaveBeenCalledWith(payload, result);
+    expect(calls).toEqual(['message', 'references', 'task', 'dispatch']);
     await vi.waitFor(() => {
       expect(dispatch).toHaveBeenCalledWith(dispatchRequest('dispatch-1'));
     });
+  });
+
+  test('only projects frozen references from a successful send ack that contains a reference set', async () => {
+    const afterMessageSend = vi.fn();
+    const afterProjectReferencesUpdated = vi.fn();
+    const adapter = createMessageSocketAdapter(
+      { getDispatchRequest: vi.fn() } as unknown as MessageDispatchPort,
+      { afterMessageSend, afterProjectReferencesUpdated },
+    );
+
+    await adapter.handleMutation('send', {}, { ok: false, error: 'VALIDATION_ERROR' });
+    await adapter.handleMutation('send', {}, {
+      ok: true,
+      message: { id: 'message-1', body: 'plain message' },
+      dispatches: [],
+    });
+    await adapter.handleMutation('send', {}, {
+      ok: true,
+      message: { id: 'message-2', body: 'missing committed scope' },
+      referenceSet: { id: 'reference-set-1' },
+      dispatches: [],
+    });
+
+    expect(afterMessageSend).toHaveBeenCalledTimes(3);
+    expect(afterProjectReferencesUpdated).not.toHaveBeenCalled();
   });
 
   test('preserves edit, delete, and convert-to-task projection order', async () => {
