@@ -38,8 +38,8 @@ const CONTRACTS_VALUE_IMPORTER_MUST_INCLUDE = [
   'dist/packages/domain/src/agent-memory-projection-policy.js',
 ];
 
-/** dist 是 tsc 产物，`import type` 已被擦除：凡静态 import/export 自 contracts 的模块都触发 ESM link。 */
-const CONTRACTS_STATIC_BINDING_RE = /^\s*(?:import|export)\s+[^'']*?from\s*'@agentbean\/contracts'/m;
+/** dist 是 tsc 产物，`import type` 已被擦除：凡静态 import/export 自 contracts 的模块都触发 ESM link。单/双引号都匹配。 */
+const CONTRACTS_STATIC_BINDING_RE = /^\s*(?:import|export)\s+[^'']*?from\s*['"]@agentbean\/contracts['"]/m;
 
 /** 扫描安装后的 daemon-next dist，找出所有静态绑定 @agentbean/contracts 的模块（相对 daemon-next 根）。 */
 function scanContractsValueImporters(daemonNextRoot, log) {
