@@ -48,6 +48,14 @@ interface AccessReadWarningReporter {
 }
 
 const ACCESS_READ_WARNING_WINDOW_MS = 60_000;
+const ACCESS_READ_WARNING_RETENTION_MS = ACCESS_READ_WARNING_WINDOW_MS * 2;
+
+interface AccessReadWarningState {
+  readonly token: symbol;
+  readonly cleanupTimer: ReturnType<typeof setTimeout>;
+  readonly lastLoggedAt: number;
+  suppressedCount: number;
+}
 
 /**
  * Dispatch mutation 的唯一 Socket 投影 owner。
@@ -148,7 +156,7 @@ async function authorizeTeamAudience(
 function createAccessReadWarningReporter(): AccessReadWarningReporter {
   const failuresByAudience = new Map<
     string,
-    Map<string, { lastLoggedAt: number; suppressedCount: number }>
+    Map<string, AccessReadWarningState>
   >();
 
   return {
@@ -171,11 +179,24 @@ function createAccessReadWarningReporter(): AccessReadWarningReporter {
         errorClass,
         suppressedCount: previous?.suppressedCount ?? 0,
       });
-      failures.set(errorClass, { lastLoggedAt: now, suppressedCount: 0 });
+      if (previous) clearTimeout(previous.cleanupTimer);
+      const token = Symbol();
+      const cleanupTimer = setTimeout(() => {
+        const currentFailures = failuresByAudience.get(audienceKey);
+        if (currentFailures?.get(errorClass)?.token !== token) return;
+        currentFailures.delete(errorClass);
+        if (currentFailures.size === 0) failuresByAudience.delete(audienceKey);
+      }, ACCESS_READ_WARNING_RETENTION_MS);
+      cleanupTimer.unref?.();
+      failures.set(errorClass, { token, cleanupTimer, lastLoggedAt: now, suppressedCount: 0 });
       failuresByAudience.set(audienceKey, failures);
     },
     succeeded(subscription, teamId) {
-      failuresByAudience.delete(JSON.stringify([teamId, subscription.userId]));
+      const audienceKey = JSON.stringify([teamId, subscription.userId]);
+      const failures = failuresByAudience.get(audienceKey);
+      if (!failures) return;
+      for (const failure of failures.values()) clearTimeout(failure.cleanupTimer);
+      failuresByAudience.delete(audienceKey);
     },
   };
 }

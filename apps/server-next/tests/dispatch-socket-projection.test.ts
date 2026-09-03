@@ -272,6 +272,21 @@ describe('Dispatch socket projection', () => {
         },
       );
       expect(warn).toHaveBeenCalledTimes(3);
+
+      vi.advanceTimersByTime(120_000);
+      await projection.emitStatus(dispatch);
+
+      expect(warn).toHaveBeenLastCalledWith(
+        '[server-next] Dispatch Socket Team access read failed (non-blocking):',
+        {
+          event: 'dispatch_socket_team_access_read_failed',
+          teamId: 'team-1',
+          userId: 'user-1',
+          errorClass: 'Error',
+          suppressedCount: 0,
+        },
+      );
+      expect(warn).toHaveBeenCalledTimes(4);
       expect(warn.mock.calls.flat()).not.toContain('repository unavailable');
     } finally {
       warn.mockRestore();
