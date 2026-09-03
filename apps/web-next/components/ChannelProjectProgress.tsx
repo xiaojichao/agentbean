@@ -7,16 +7,18 @@ import {
   PackageCheck,
   Settings2,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type {
   ChannelProjectOverviewDto,
   ChannelTaskWorkspaceEntryV1,
   ChannelTaskWorkspaceV1,
+  TaskLevelAvailableActionDto,
 } from '@agentbean/contracts';
 
 import { TaskCardReviewEntryPanel, type TaskCardReviewProjection } from '@/components/TaskCardReviewEntryPanel';
 import { channelTaskEntrySubview, channelTaskResponsibilityFocusFilterValue } from '@/lib/channel-task-workspace-route';
 import { reviewStateLabel } from '@/lib/delivery-labels';
+import { mutationErrorCopy, submitDeliveryMutation, type DeliveryMutationTarget } from '@/lib/package-review-actions';
 import { taskStatusText } from '@/lib/task-status';
 
 export type ChannelProjectProgressState = 'loading' | 'not_ready' | 'no_permission' | 'error' | 'ready';
@@ -281,6 +283,7 @@ function ProjectWorkCard({
   const inputSummary = stage
     ? `${stage.upstreamStageIds.length > 0 ? stage.upstreamStageIds.map((id) => stageName(id, overview)).join('、') : '无前置阶段'} · ${stage.dependenciesSatisfied ? '已满足' : '未满足'}`
     : '来自讨论串中的 Agent 执行';
+  const acceptDeliveryAction = entry?.availableActions?.find((action) => action.action === 'accept-delivery');
   return (
     <article
       aria-current={selected ? 'true' : undefined}
@@ -350,6 +353,14 @@ function ProjectWorkCard({
             onOpenThread={(threadRootMessageId) => onBackToThread(threadRootMessageId, task.id)}
             onProjection={setReviewProjection}
           />
+          {item.lane === 'review' && acceptDeliveryAction && entry.taskRevision !== undefined ? (
+            <TaskCardDeliveryAcceptance
+              action={acceptDeliveryAction}
+              taskId={task.id}
+              taskRevision={entry.taskRevision}
+              archived={archived}
+            />
+          ) : null}
         </>
       ) : null}
 
@@ -392,6 +403,178 @@ function ProjectWorkCard({
         </div>
       ) : null}
     </article>
+  );
+}
+
+function TaskCardDeliveryAcceptance({
+  action,
+  taskId,
+  taskRevision,
+  archived,
+}: {
+  action: TaskLevelAvailableActionDto;
+  taskId: string;
+  taskRevision: number;
+  archived: boolean;
+}) {
+  const [frozenAcceptance, setFrozenAcceptance] = useState<{
+    readonly generation: number;
+    readonly target: DeliveryMutationTarget;
+  } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const titleId = useId();
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const initialFocusRef = useRef<HTMLButtonElement | null>(null);
+  const acceptanceGenerationRef = useRef(0);
+  const acceptanceIdentityRef = useRef({ taskId, taskRevision });
+  const currentAcceptance = frozenAcceptance?.target.taskId === taskId
+    && frozenAcceptance.target.expectedTaskRevision === taskRevision
+    ? frozenAcceptance
+    : null;
+
+  const close = useCallback(() => {
+    setFrozenAcceptance(null);
+    setError(null);
+    const trigger = triggerRef.current;
+    queueMicrotask(() => {
+      if (trigger?.isConnected) trigger.focus();
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    acceptanceIdentityRef.current = { taskId, taskRevision };
+    acceptanceGenerationRef.current += 1;
+    setFrozenAcceptance(null);
+    setSubmitting(false);
+    setError(null);
+  }, [taskId, taskRevision]);
+
+  useEffect(() => {
+    if (!currentAcceptance) return;
+    queueMicrotask(() => {
+      if (initialFocusRef.current?.isConnected) initialFocusRef.current.focus();
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !submitting) close();
+      if (event.key !== 'Tab') return;
+      const buttons = [...(dialogRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
+      if (buttons.length === 0) return;
+      const first = buttons[0]!;
+      const last = buttons[buttons.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [close, currentAcceptance, submitting]);
+
+  const confirm = async () => {
+    if (!currentAcceptance || submitting) return;
+    const submittedAcceptance = currentAcceptance;
+    const requestIsCurrent = () => (
+      acceptanceGenerationRef.current === submittedAcceptance.generation
+      && acceptanceIdentityRef.current.taskId === submittedAcceptance.target.taskId
+      && acceptanceIdentityRef.current.taskRevision === submittedAcceptance.target.expectedTaskRevision
+    );
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await submitDeliveryMutation(submittedAcceptance.target, { comment: '', rejectReason: '' });
+      if (!requestIsCurrent()) return;
+      if (!result.ok) {
+        setError(mutationErrorCopy(result));
+        return;
+      }
+      close();
+    } catch (acceptError) {
+      if (!requestIsCurrent()) return;
+      setError(acceptError instanceof Error ? acceptError.message : '验收失败，请稍后重试');
+    } finally {
+      if (requestIsCurrent()) setSubmitting(false);
+    }
+  };
+
+  const disabled = archived || Boolean(action.disabled);
+  const disabledReason = archived ? '归档频道只读' : action.disabledReason;
+  return (
+    <>
+      <div className="mt-2.5" data-smoke="project-card-delivery-acceptance">
+        <button
+          ref={triggerRef}
+          type="button"
+          disabled={disabled}
+          title={disabledReason}
+          onClick={() => {
+            if (disabled) return;
+            setError(null);
+            setFrozenAcceptance({
+              generation: ++acceptanceGenerationRef.current,
+              target: { taskId, expectedTaskRevision: taskRevision, kind: 'accept-delivery' },
+            });
+          }}
+          className="inline-flex h-8 items-center rounded-md border border-emerald-300 bg-emerald-50 px-3 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+          data-smoke="project-card-accept-delivery"
+        >
+          {action.label}
+        </button>
+        {disabledReason ? <p className="mt-1 text-[11px] text-neutral-500">{disabledReason}</p> : null}
+      </div>
+
+      {currentAcceptance ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !submitting) close();
+          }}
+        >
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+            className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-4 shadow-xl"
+            data-smoke="project-card-delivery-acceptance-dialog"
+          >
+            <h2 id={titleId} className="text-sm font-semibold text-neutral-900">验收本次交付</h2>
+            <p className="mt-2 text-xs leading-5 text-neutral-600">
+              确认后，Server 会再次校验验收权限、Task revision 与逐文件审核覆盖；校验通过后 Task 才进入完成态。
+            </p>
+            {error ? (
+              <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-2 text-xs text-rose-700" role="alert">
+                {error}
+              </div>
+            ) : null}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                ref={initialFocusRef}
+                type="button"
+                disabled={submitting}
+                onClick={close}
+                className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => { void confirm(); }}
+                className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-40"
+              >
+                {submitting ? '提交中…' : '确认验收'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -452,6 +635,13 @@ function projectFinalSummary(delivery: ChannelTaskWorkspaceEntryV1['delivery']):
 function projectTimelineSummary(entry: ChannelTaskWorkspaceEntryV1, lane: ProjectLaneId): string {
   if (lane === 'complete') {
     return `当前状态：任务已结束；${projectDeliverySummary(entry.delivery)}。`;
+  }
+  const acceptDeliveryAction = entry.availableActions?.find((action) => action.action === 'accept-delivery');
+  if (acceptDeliveryAction && !acceptDeliveryAction.disabled && entry.taskRevision !== undefined) {
+    return `当前状态：待验收；${projectDeliverySummary(entry.delivery)}。下一步验收本次交付。`;
+  }
+  if (acceptDeliveryAction?.disabledReason) {
+    return `当前状态：待审核；${projectDeliverySummary(entry.delivery)}。下一步：${acceptDeliveryAction.disabledReason}。`;
   }
   return `当前状态：待审核；${projectDeliverySummary(entry.delivery)}。下一步在交付工作台处理当前版本。`;
 }

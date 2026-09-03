@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from 'react';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type {
   ChannelProjectOverviewDto,
@@ -16,6 +16,7 @@ import { ChannelProjectProgress } from '../components/ChannelProjectProgress';
 
 const mocks = vi.hoisted(() => ({
   getOutputPackage: vi.fn(),
+  acceptRootDelivery: vi.fn(),
   onUpdated: vi.fn(() => () => {}),
   onArtifactsUpdated: vi.fn(() => () => {}),
 }));
@@ -27,11 +28,16 @@ vi.mock('@/lib/socket', () => ({
     onUpdated: mocks.onUpdated,
     onArtifactsUpdated: mocks.onArtifactsUpdated,
   }),
+  taskEvents: () => ({
+    acceptRootDelivery: mocks.acceptRootDelivery,
+  }),
 }));
 
 beforeEach(() => {
   mocks.getOutputPackage.mockReset();
   mocks.getOutputPackage.mockResolvedValue({ ok: false, error: 'NOT_FOUND' });
+  mocks.acceptRootDelivery.mockReset();
+  mocks.acceptRootDelivery.mockResolvedValue({ ok: true });
   mocks.onUpdated.mockReset();
   mocks.onUpdated.mockReturnValue(() => {});
   mocks.onArtifactsUpdated.mockReset();
@@ -135,6 +141,58 @@ describe('频道项目推进工作区', () => {
     expect(card?.textContent).not.toContain('查看交付文件与审核');
     expect(card?.textContent).not.toContain('任务卡片只做状态摘要和入口');
     expect(document.querySelector('[data-smoke="task-card-review-entry"]')).toBeNull();
+  });
+
+  test('文件审核已全通过但 Task 仍为 in_review 时展示并提交 Server 投影的交付验收动作', async () => {
+    const fixture = reviewProgressFixture('pkg-approved');
+    const entry = fixture.workspace.entries[0]!;
+    const taskRevision = 7;
+    renderProgress({
+      ...fixture,
+      workspace: {
+        ...fixture.workspace,
+        entries: [{
+          ...entry,
+          taskRevision,
+          delivery: {
+            ...entry.delivery,
+            focusReviewState: 'approved' as const,
+            fileReviewApprovedCount: 3,
+            fileReviewRequiredCount: 3,
+            fileReviewComplete: true,
+          },
+          availableActions: [{ action: 'accept-delivery' as const, label: '验收本次交付' }],
+          review: {
+            reviewerIds: ['reviewer-1'],
+            latest: {
+              reviewId: 'review-approved',
+              reviewedBy: 'reviewer-1',
+              decision: 'approved' as const,
+              comment: '全部通过',
+              createdAt: 3,
+            },
+          },
+        }],
+      },
+    });
+
+    const reviewLane = document.querySelector('[data-smoke="channel-project-lane-review"]')!;
+    expect(reviewLane.textContent).toContain('当前状态：待验收');
+    expect(reviewLane.textContent).toContain('下一步验收本次交付');
+    fireEvent.click(within(reviewLane as HTMLElement).getByRole('button', { name: '验收本次交付' }));
+    expect(screen.getByRole('dialog', { name: '验收本次交付' })).toBeTruthy();
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: '取消' }));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '确认验收' }));
+    await waitFor(() => {
+      expect(mocks.acceptRootDelivery).toHaveBeenCalledWith({
+        taskId: 'task-review',
+        expectedTaskRevision: taskRevision,
+      });
+    });
+    expect(screen.queryByRole('dialog', { name: '验收本次交付' })).toBeNull();
   });
 
   test('待审核输出按 Server 投影顺序渲染语义列表，并按当前成员版本展示审核态', async () => {

@@ -9991,6 +9991,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return {
           schemaVersion: 1 as const,
           task: overview.task,
+          taskRevision: overview.acceptanceContract.taskRevision,
           governance: overview.governance ?? governance,
           responsibilityFocus: overview.responsibilityFocus,
           ...(stage ? { stage } : {}),
@@ -10021,6 +10022,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               },
             } : {}),
           },
+          availableActions: overview.availableActions,
         };
       }));
       const watermark = await repositories.systemActivity?.watermarks
@@ -18452,17 +18454,19 @@ async function buildTaskDeliveryOverview(
     ? `还有文件未通过审核：${fileReviewGate.blockers.map((item) =>
       `${item.filename}${fileReviewStateLabels[item.reviewState as keyof typeof fileReviewStateLabels] ?? '未通过'}`).join('，')}`
     : undefined;
-  const acceptDeliveryAction: TaskLevelAvailableActionDto = task.status !== 'in_review'
-    ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '当前任务不在待验收状态' }
-    : !humanAcceptanceAuthorityIds.includes(input.userId)
-      ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '你不是当前交付的验收人' }
-      : pendingDeliveries.length > 0
-        ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '新交付仍在处理中，请刷新后重试' }
-        : !fileReviewProjectionAvailable
-          ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '当前交付文件包不可用，请刷新后重试' }
-          : fileReviewGate.kind === 'rejected'
-            ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: incompleteFileReviewReason }
-            : { action: 'accept-delivery', label: '验收本次交付' };
+  const acceptDeliveryAction: TaskLevelAvailableActionDto = coordination?.nodeKind === 'subtask'
+    ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '子任务需由协调验收流程处理' }
+    : task.status !== 'in_review'
+      ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '当前任务不在待验收状态' }
+      : !humanAcceptanceAuthorityIds.includes(input.userId)
+        ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '你不是当前交付的验收人' }
+        : pendingDeliveries.length > 0
+          ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '新交付仍在处理中，请刷新后重试' }
+          : !fileReviewProjectionAvailable
+            ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '当前交付文件包不可用，请刷新后重试' }
+            : fileReviewGate.kind === 'rejected'
+              ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: incompleteFileReviewReason }
+              : { action: 'accept-delivery', label: '验收本次交付' };
   const terminalRoot = ['done', 'cancelled', 'closed'].includes(task.status)
     && coordination?.nodeKind === 'root';
   const continuationRun = terminalRoot ? managementRun : null;

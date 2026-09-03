@@ -204,6 +204,11 @@ export interface QueryTaskDeliveryOverviewInputV1 {
 export interface ChannelTaskWorkspaceEntryV1 {
   readonly schemaVersion: 1;
   readonly task: TaskDto;
+  /**
+   * V1 滚动发布兼容：旧 Server 响应可能缺失；新 Server 始终投影。
+   * Task 级 mutation 必须冻结并回传该 revision，Web 不从时间戳或 Stage 自行推断。
+   */
+  readonly taskRevision?: number;
   readonly governance: TaskGovernanceV1;
   readonly responsibilityFocus: TaskResponsibilityFocusV1;
   readonly stage?: ProjectStageDto;
@@ -232,6 +237,11 @@ export interface ChannelTaskWorkspaceEntryV1 {
       readonly createdAt: UnixMs;
     };
   };
+  /**
+   * V1 滚动发布兼容：旧 Server 响应可能缺失；新 Server 始终投影。
+   * 仅用于动作可发现性；command 提交时 Server 仍完整复验 authority 与 revision。
+   */
+  readonly availableActions?: readonly TaskLevelAvailableActionDto[];
 }
 
 /** 单次频道查询，避免 Task 看板逐卡请求 delivery overview。 */
