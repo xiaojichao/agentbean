@@ -980,7 +980,10 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('taskSortOrder'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('in_progress'))).toBe(true);
     const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
-    expect(evaluateJsonCalls.some((call) => call[1].includes('task-reorder-top'))).toBe(true);
+    const reorderCalls = evaluateJsonCalls.filter((call) => call[1].includes('task-reorder-top'));
+    expect(reorderCalls).toHaveLength(2);
+    expect(reorderCalls[0]?.[1]).toContain('WebUI smoke task secondary task-smoke');
+    expect(reorderCalls[1]?.[1]).toContain('WebUI smoke task task-smoke');
     expect(evaluateJsonCalls.some((call) => call[1].includes('task-delete'))).toBe(true);
   });
 
