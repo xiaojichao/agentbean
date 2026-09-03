@@ -24,7 +24,6 @@ import {
   type TaskClaimExpiredV1,
   type WorkspaceRevisionCommittedPayload,
 } from '../../../../packages/contracts/src/index.js';
-import { normalizeAdapterKind } from '../../../../packages/domain/src/index.js';
 import {
   registerAgentSocketHandlers,
   registerWebSocketHandlers,
@@ -37,6 +36,8 @@ import { createProjectSocketBroadcast } from './project-socket-broadcast.js';
 import { createDispatchSocketProjection } from './dispatch-socket-projection.js';
 import { createTaskSocketProjection } from './task-socket-projection.js';
 import { createTaskClaimSocketDelivery } from './task-claim-socket-delivery.js';
+import { createAgentSocketProjection } from './agent-socket-projection.js';
+import { createDeviceSocketProjection } from './device-socket-projection.js';
 
 export interface NamespaceLike {
   on(event: 'connection', handler: (socket: SocketLike) => void): void;
@@ -102,18 +103,6 @@ interface WebSocketSubscription {
   devices?: ChannelSubscription;
 }
 
-interface DiscoveredAgentReport {
-  name: string;
-  adapterKind: string;
-  category: string;
-  command?: string;
-  args?: string[];
-  cwd?: string;
-  discoverySource?: 'runtime' | 'gateway' | 'filesystem';
-  gatewayInstanceKey?: string;
-  projectDocumentInputSetVersions?: number[];
-}
-
 export function attachServerNextNamespaces(
   server: SocketServerLike,
   app: ServerNextUseCases,
@@ -136,6 +125,23 @@ export function attachServerNextNamespaces(
   });
   const taskSocketProjection = createTaskSocketProjection(webSubscribers, {
     listTasks: (input) => app.listTasks(input),
+  });
+  const agentSocketProjection = createAgentSocketProjection(webSubscribers, {
+    listChannels: (input) => app.listChannels(input),
+    listVisibleAgents: (input) => app.listVisibleAgents(input),
+    getDevice: (input) => app.getDevice(input),
+  }, {
+    emitMemoryChanged: (teamId) => emitMemoryChanged(webSubscribers, teamId),
+    refreshChannels: (teamId) => refreshChannelSubscribers(webSubscribers, app, teamId),
+    onAgentAvailabilityChanged: options.onAgentAvailabilityChanged,
+  });
+  const deviceSocketProjection = createDeviceSocketProjection(webSubscribers, {
+    listDevices: (input) => app.listDevices(input),
+    getDevice: (input) => app.getDevice(input),
+  }, {
+    refreshAgents: (teamId) => agentSocketProjection.refresh(teamId),
+    refreshChannels: (teamId) => refreshChannelSubscribers(webSubscribers, app, teamId),
+    onAgentAvailabilityChanged: options.onAgentAvailabilityChanged,
   });
   const taskClaimSocketDelivery = createTaskClaimSocketDelivery(
     options.taskClaimBroker,
@@ -334,9 +340,7 @@ export function attachServerNextNamespaces(
         const result = await app.listDevices(input);
         ack?.(result);
         if (result.ok) {
-          subscriber.devices = input;
-          socket.emit?.(WEB_EVENTS.device.snapshot, result.devices);
-          await emitStoredDeviceRuntimes(socket, app, input, result.devices);
+          await deviceSocketProjection.subscribe(subscriber, input, result.devices);
         }
       } catch (error) {
         ack?.(subscriptionErrorAck(error, WEB_EVENTS.device.list));
@@ -567,23 +571,7 @@ export function attachServerNextNamespaces(
         emitMemoryChanged(webSubscribers, teamId);
       },
       async afterAgentMutation(payload, result) {
-        if (!isSuccessAck(result)) {
-          return;
-        }
-        const agentTeamIds = uniqueStrings([
-          payloadTeamId(payload),
-          payloadTargetTeamId(payload),
-          ...payloadTeamIds(payload, 'affectedTeamIds'),
-          ...resultAgentVisibleTeamIds(result),
-          resultDispatchTeamId(result),
-        ]);
-        for (const teamId of agentTeamIds) {
-          await refreshAgentSubscribers(webSubscribers, app, teamId);
-          emitMemoryChanged(webSubscribers, teamId);
-        }
-        for (const teamId of payloadTeamIds(payload, 'channelTeamIds')) {
-          await refreshChannelSubscribers(webSubscribers, app, teamId);
-        }
+        await agentSocketProjection.handleMutation('web-command', payload, result);
       },
       async afterDispatchMutation(source, payload, result) {
         await dispatchSocketProjection.handleMutation(source, payload, result);
@@ -730,9 +718,9 @@ export function attachServerNextNamespaces(
         try {
           const result = await app.markDeviceOffline({ deviceId, timestamp: Date.now() });
           if (result.ok && teamId) {
-            await refreshDeviceSubscribers(webSubscribers, app, teamId);
+            await deviceSocketProjection.refresh(teamId);
             for (const affectedTeamId of result.affectedTeamIds) {
-              await refreshAgentSubscribers(webSubscribers, app, affectedTeamId);
+              await agentSocketProjection.refresh(affectedTeamId);
             }
           }
         } catch (error) {
@@ -809,30 +797,10 @@ export function attachServerNextNamespaces(
           return;
         }
         connectedDeviceTeamId = teamId;
-        await refreshDeviceSubscribers(webSubscribers, app, teamId);
-        for (const affectedTeamId of payloadTeamIds(result, 'affectedTeamIds')) {
-          await refreshAgentSubscribers(webSubscribers, app, affectedTeamId);
-        }
-        for (const channelTeamId of payloadTeamIds(result, 'channelTeamIds')) {
-          await refreshChannelSubscribers(webSubscribers, app, channelTeamId);
-        }
-        emitDeviceRuntimes(webSubscribers, teamId, result);
-        await options.onAgentAvailabilityChanged?.(teamId).catch(() => undefined);
+        await deviceSocketProjection.handleMutation(payload, result);
       },
       async afterAgentMutation(payload, result) {
-        if (!isSuccessAck(result)) {
-          return;
-        }
-        const teamId = payloadTeamId(payload) ?? resultDispatchTeamId(result);
-        if (!teamId) {
-          return;
-        }
-        const refreshTeamIds = uniqueStrings([teamId, payloadTargetTeamId(payload), ...resultAgentVisibleTeamIds(result)]);
-        for (const refreshTeamId of refreshTeamIds) {
-          await refreshAgentSubscribers(webSubscribers, app, refreshTeamId);
-          await options.onAgentAvailabilityChanged?.(refreshTeamId).catch(() => undefined);
-        }
-        await emitDiscoveredAgents(webSubscribers, app, payload);
+        await agentSocketProjection.handleMutation('agent-report', payload, result);
       },
       async afterDispatchMutation(source, payload, result) {
         await dispatchSocketProjection.handleMutation(source, payload, result);
@@ -931,7 +899,7 @@ export function attachServerNextNamespaces(
       agentNamespace.emit(AGENT_EVENTS.dispatch.request, result.request);
     },
     async refreshAgents(teamId) {
-      await refreshAgentSubscribers(webSubscribers, app, teamId);
+      await agentSocketProjection.refresh(teamId);
     },
     async scheduleManagementRun(input) {
       if (!options.managementWorkerScheduler) {
@@ -1051,30 +1019,6 @@ async function refreshChannelSubscribers(
       subscriber.socket.emit?.(WEB_EVENTS.channel.snapshot, result.channels);
     }
     await emitDmSnapshotForSubscriber(subscriber, app);
-  }
-}
-
-async function refreshAgentSubscribers(
-  subscribers: Set<WebSocketSubscription>,
-  app: ServerNextUseCases,
-  teamId: string,
-): Promise<void> {
-  for (const subscriber of subscribers) {
-    if (subscriber.agents?.teamId !== teamId) {
-      continue;
-    }
-    const teamAccess = await app.listChannels(subscriber.agents);
-    if (!teamAccess.ok) {
-      subscriber.agents = undefined;
-      continue;
-    }
-    const result = await app.listVisibleAgents({ teamId: subscriber.agents.teamId });
-    if (result.ok) {
-      subscriber.socket.emit?.(WEB_EVENTS.agent.snapshot, result.agents);
-      for (const agent of result.agents) {
-        subscriber.socket.emit?.(WEB_EVENTS.agent.status, agent);
-      }
-    }
   }
 }
 
@@ -1343,81 +1287,6 @@ function serverWorkerUnauthorized() {
     diagnosticCode: 'SERVER_WORKER_TRANSPORT_NOT_AUTHORIZED', retryable: false as const };
 }
 
-async function refreshDeviceSubscribers(
-  subscribers: Set<WebSocketSubscription>,
-  app: ServerNextUseCases,
-  teamId: string,
-): Promise<void> {
-  for (const subscriber of subscribers) {
-    if (subscriber.devices?.teamId !== teamId) {
-      continue;
-    }
-    const result = await app.listDevices(subscriber.devices);
-    if (result.ok) {
-      subscriber.socket.emit?.(WEB_EVENTS.device.snapshot, result.devices);
-      for (const device of result.devices) {
-        subscriber.socket.emit?.(WEB_EVENTS.device.status, device);
-      }
-    }
-  }
-}
-
-function emitDeviceRuntimes(subscribers: Set<WebSocketSubscription>, teamId: string, result: unknown): void {
-  const runtimesPayload = resultRuntimesPayload(result);
-  if (!runtimesPayload) {
-    return;
-  }
-  for (const subscriber of subscribers) {
-    if (subscriber.devices?.teamId === teamId) {
-      subscriber.socket.emit?.(WEB_EVENTS.device.runtimes, runtimesPayload);
-    }
-  }
-}
-
-async function emitDiscoveredAgents(
-  subscribers: Set<WebSocketSubscription>,
-  app: ServerNextUseCases,
-  payload: unknown,
-): Promise<void> {
-  const teamId = payloadTeamId(payload);
-  const deviceId = payloadDeviceId(payload);
-  const agents = payloadDiscoveredAgents(payload);
-  if (!teamId || !deviceId || agents.length === 0) {
-    return;
-  }
-
-  for (const subscriber of subscribers) {
-    if (subscriber.devices?.teamId !== teamId) {
-      continue;
-    }
-    const result = await app.getDevice({ userId: subscriber.devices.userId, deviceId });
-    if (!result.ok) {
-      continue;
-    }
-    const runtimes = result.device.runtimes ?? [];
-    const runtimesByAdapter = new Map(
-      runtimes.map((runtime) => [normalizeAdapterKind(runtime.adapterKind), runtime]),
-    );
-    subscriber.socket.emit?.(WEB_EVENTS.agent.discovered, {
-      runtimes,
-      agents: agents.map((agent) => {
-        const adapterKind = normalizeAdapterKind(agent.adapterKind);
-        const runtime = runtimesByAdapter.get(adapterKind);
-        return {
-          name: agent.name,
-          adapterKind,
-          category: agent.category,
-          source: discoveredAgentSource(agent, runtime),
-          command: agent.command ?? runtime?.command ?? '',
-          args: agent.args,
-          cwd: agent.cwd ?? runtime?.cwd,
-          projectDocumentInputSetVersions: agent.projectDocumentInputSetVersions,
-        };
-      }),
-    });
-  }
-}
-
 function emitMemoryChanged(subscribers: Set<WebSocketSubscription>, teamId: string): void {
   for (const subscriber of subscribers) {
     if (subscriberBelongsToTeam(subscriber, teamId)) {
@@ -1428,23 +1297,6 @@ function emitMemoryChanged(subscribers: Set<WebSocketSubscription>, teamId: stri
 
 function subscriberBelongsToTeam(subscriber: WebSocketSubscription, teamId: string): boolean {
   return subscriber.channels?.teamId === teamId || subscriber.agents?.teamId === teamId || subscriber.devices?.teamId === teamId;
-}
-
-async function emitStoredDeviceRuntimes(
-  socket: SocketLike,
-  app: ServerNextUseCases,
-  subscription: ChannelSubscription,
-  devices: Array<{ id: string }>,
-): Promise<void> {
-  for (const device of devices) {
-    const result = await app.getDevice({ userId: subscription.userId, deviceId: device.id });
-    if (result.ok && result.device.runtimes.length > 0) {
-      socket.emit?.(WEB_EVENTS.device.runtimes, {
-        deviceId: device.id,
-        runtimes: result.device.runtimes,
-      });
-    }
-  }
 }
 
 function isSuccessAck(result: unknown): result is { ok: true } {
@@ -1500,75 +1352,6 @@ function payloadTeamIds(payload: unknown, key: string): string[] {
     return [];
   }
   return uniqueStrings(value.filter((teamId): teamId is string => typeof teamId === 'string'));
-}
-
-function payloadDiscoveredAgents(payload: unknown): DiscoveredAgentReport[] {
-  if (!payload || typeof payload !== 'object') {
-    return [];
-  }
-  const agents = (payload as { agents?: unknown }).agents;
-  if (!Array.isArray(agents)) {
-    return [];
-  }
-  return agents.flatMap((agent) => {
-    if (!agent || typeof agent !== 'object') {
-      return [];
-    }
-    const candidate = agent as {
-      name?: unknown;
-      adapterKind?: unknown;
-      category?: unknown;
-      command?: unknown;
-      args?: unknown;
-      cwd?: unknown;
-      discoverySource?: unknown;
-      gatewayInstanceKey?: unknown;
-      projectDocumentInputSetVersions?: unknown;
-    };
-    if (
-      typeof candidate.name !== 'string' ||
-      typeof candidate.adapterKind !== 'string' ||
-      typeof candidate.category !== 'string'
-    ) {
-      return [];
-    }
-    return [{
-      name: candidate.name,
-      adapterKind: candidate.adapterKind,
-      category: candidate.category,
-      command: typeof candidate.command === 'string' ? candidate.command : undefined,
-      args: Array.isArray(candidate.args) ? candidate.args.map(String) : undefined,
-      cwd: typeof candidate.cwd === 'string' ? candidate.cwd : undefined,
-      discoverySource: readDiscoverySource(candidate.discoverySource),
-      gatewayInstanceKey:
-        typeof candidate.gatewayInstanceKey === 'string' ? candidate.gatewayInstanceKey : undefined,
-      projectDocumentInputSetVersions: Array.isArray(candidate.projectDocumentInputSetVersions)
-        ? candidate.projectDocumentInputSetVersions.filter(
-            (version): version is number => Number.isInteger(version) && version > 0,
-          )
-        : undefined,
-    }];
-  });
-}
-
-function readDiscoverySource(value: unknown): DiscoveredAgentReport['discoverySource'] {
-  return value === 'runtime' || value === 'gateway' || value === 'filesystem' ? value : undefined;
-}
-
-function discoveredAgentSource(
-  agent: DiscoveredAgentReport,
-  runtime?: { command?: string; cwd?: string },
-): 'runtime' | 'gateway' | 'filesystem' {
-  if (agent.discoverySource) {
-    return agent.discoverySource;
-  }
-  if (agent.gatewayInstanceKey) {
-    return 'gateway';
-  }
-  if (!agent.command && !agent.cwd && !agent.args && runtime) {
-    return 'runtime';
-  }
-  return 'filesystem';
 }
 
 function resultAgentVisibleTeamIds(result: unknown): string[] {
@@ -1664,14 +1447,6 @@ function resultPinnedChannelId(result: unknown): string | null {
   return typeof channelId === 'string' ? channelId : null;
 }
 
-function resultDeviceTeamId(result: unknown): string | null {
-  if (!result || typeof result !== 'object') {
-    return null;
-  }
-  const device = (result as { device?: { teamId?: unknown } }).device;
-  return typeof device?.teamId === 'string' ? device.teamId : null;
-}
-
 function resultDeviceId(result: unknown): string | null {
   if (!result || typeof result !== 'object') {
     return null;
@@ -1708,22 +1483,12 @@ function resultDeletedDeviceIds(result: unknown): string[] {
   return single ? [single] : [];
 }
 
-function resultRuntimesPayload(result: unknown): { deviceId: string; runtimes: unknown[] } | null {
+function resultDeviceTeamId(result: unknown): string | null {
   if (!result || typeof result !== 'object') {
     return null;
   }
-  const candidate = result as { runtimes?: unknown };
-  if (!Array.isArray(candidate.runtimes) || candidate.runtimes.length === 0) {
-    return null;
-  }
-  const firstRuntime = candidate.runtimes[0] as { deviceId?: unknown };
-  if (typeof firstRuntime.deviceId !== 'string') {
-    return null;
-  }
-  return {
-    deviceId: firstRuntime.deviceId,
-    runtimes: candidate.runtimes,
-  };
+  const device = (result as { device?: { teamId?: unknown } }).device;
+  return typeof device?.teamId === 'string' ? device.teamId : null;
 }
 
 async function resolveAuthenticatedUserId(
