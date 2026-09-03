@@ -15,9 +15,9 @@ interface DispatchSubscription {
 
 export interface DispatchSocketSubscriber {
   readonly socket: DispatchProjectionSocket;
-  readonly channels?: DispatchSubscription;
+  channels?: DispatchSubscription;
   agents?: DispatchSubscription;
-  readonly devices?: DispatchSubscription;
+  devices?: DispatchSubscription;
 }
 
 export interface DispatchSocketProjectionPort extends Pick<
@@ -27,7 +27,12 @@ export interface DispatchSocketProjectionPort extends Pick<
 
 export interface DispatchSocketProjection {
   handleMutation(source: DispatchSocketMutationSource, payload: unknown, result: unknown): Promise<void>;
-  emitStatus(dispatch: unknown): void;
+  emitStatus(dispatch: unknown): Promise<void>;
+}
+
+interface AuthorizedDispatchSubscriber {
+  readonly subscriber: DispatchSocketSubscriber;
+  readonly visibleChannelIds: ReadonlySet<string>;
 }
 
 /**
@@ -40,14 +45,11 @@ export function createDispatchSocketProjection(
   subscribers: Iterable<DispatchSocketSubscriber>,
   port: DispatchSocketProjectionPort,
 ): DispatchSocketProjection {
-  const emitStatus = (dispatch: unknown): void => {
+  const emitStatus = async (dispatch: unknown): Promise<void> => {
     const teamId = objectString(dispatch, 'teamId');
     if (!teamId) return;
-    for (const subscriber of subscribers) {
-      if (subscriberBelongsToTeam(subscriber, teamId)) {
-        subscriber.socket.emit?.(WEB_EVENTS.message.dispatchStatus, dispatch);
-      }
-    }
+    const audience = await authorizeTeamAudience(subscribers, port, teamId);
+    emitStatusToAudience(audience, dispatch);
   };
 
   return {
@@ -60,16 +62,6 @@ export function createDispatchSocketProjection(
       const messages = source === 'agent-report'
         ? resultItems(result, 'message', 'messages')
         : [];
-      for (const dispatch of dispatches) {
-        emitStatus(dispatch);
-      }
-      for (const message of messages) {
-        const teamId = objectString(message, 'teamId') ?? firstTeamId(dispatches) ?? objectString(payload, 'teamId');
-        if (teamId) {
-          await emitVisibleMessage(subscribers, port, teamId, message);
-        }
-      }
-
       const teamIds = uniqueStrings([
         objectString(payload, 'teamId'),
         objectString(payload, 'targetTeamId'),
@@ -77,10 +69,29 @@ export function createDispatchSocketProjection(
         ...dispatches.map((dispatch) => objectString(dispatch, 'teamId')),
         ...messages.map((message) => objectString(message, 'teamId')),
       ]);
+      const audienceByTeam = new Map<string, AuthorizedDispatchSubscriber[]>();
       for (const teamId of teamIds) {
-        await refreshAgentSubscribers(subscribers, port, teamId);
+        audienceByTeam.set(teamId, await authorizeTeamAudience(subscribers, port, teamId));
+      }
+
+      for (const dispatch of dispatches) {
+        const teamId = objectString(dispatch, 'teamId');
+        if (teamId) {
+          emitStatusToAudience(audienceByTeam.get(teamId) ?? [], dispatch);
+        }
+      }
+      for (const message of messages) {
+        const teamId = objectString(message, 'teamId') ?? firstTeamId(dispatches) ?? objectString(payload, 'teamId');
+        if (teamId) {
+          await emitVisibleMessage(audienceByTeam.get(teamId) ?? [], port, teamId, message);
+        }
+      }
+
+      for (const teamId of teamIds) {
+        const audience = audienceByTeam.get(teamId) ?? [];
+        await refreshAgentSubscribers(audience, port, teamId);
         if (!resultHasTaskProjection(result)) {
-          emitMemoryChanged(subscribers, teamId);
+          emitMemoryChanged(audience, teamId);
         }
       }
     },
@@ -88,18 +99,45 @@ export function createDispatchSocketProjection(
   };
 }
 
-async function emitVisibleMessage(
+async function authorizeTeamAudience(
   subscribers: Iterable<DispatchSocketSubscriber>,
+  port: DispatchSocketProjectionPort,
+  teamId: string,
+): Promise<AuthorizedDispatchSubscriber[]> {
+  const audience: AuthorizedDispatchSubscriber[] = [];
+  for (const subscriber of subscribers) {
+    const subscription = teamSubscription(subscriber, teamId);
+    if (!subscription) continue;
+    const access = await port.listChannels(subscription);
+    if (!access.ok) {
+      clearTeamSubscriptions(subscriber, teamId);
+      continue;
+    }
+    audience.push({
+      subscriber,
+      visibleChannelIds: new Set(access.channels.map((channel) => channel.id)),
+    });
+  }
+  return audience;
+}
+
+function emitStatusToAudience(audience: readonly AuthorizedDispatchSubscriber[], dispatch: unknown): void {
+  for (const { subscriber } of audience) {
+    subscriber.socket.emit?.(WEB_EVENTS.message.dispatchStatus, dispatch);
+  }
+}
+
+async function emitVisibleMessage(
+  audience: readonly AuthorizedDispatchSubscriber[],
   port: DispatchSocketProjectionPort,
   teamId: string,
   message: unknown,
 ): Promise<void> {
   const channelId = objectString(message, 'channelId');
   if (!channelId) return;
-  for (const subscriber of subscribers) {
+  for (const { subscriber, visibleChannelIds } of audience) {
     if (subscriber.channels?.teamId !== teamId) continue;
-    const channels = await port.listChannels(subscriber.channels);
-    if (channels.ok && channels.channels.some((channel) => channel.id === channelId)) {
+    if (visibleChannelIds.has(channelId)) {
       subscriber.socket.emit?.(WEB_EVENTS.channel.message, message);
       continue;
     }
@@ -111,20 +149,13 @@ async function emitVisibleMessage(
 }
 
 async function refreshAgentSubscribers(
-  subscribers: Iterable<DispatchSocketSubscriber>,
+  audience: readonly AuthorizedDispatchSubscriber[],
   port: DispatchSocketProjectionPort,
   teamId: string,
 ): Promise<void> {
-  const eligibleSubscribers: DispatchSocketSubscriber[] = [];
-  for (const subscriber of subscribers) {
-    if (subscriber.agents?.teamId !== teamId) continue;
-    const teamAccess = await port.listChannels(subscriber.agents);
-    if (!teamAccess.ok) {
-      subscriber.agents = undefined;
-      continue;
-    }
-    eligibleSubscribers.push(subscriber);
-  }
+  const eligibleSubscribers = audience
+    .map(({ subscriber }) => subscriber)
+    .filter((subscriber) => subscriber.agents?.teamId === teamId);
   if (eligibleSubscribers.length === 0) return;
 
   const result = await port.listVisibleAgents({ teamId });
@@ -137,18 +168,23 @@ async function refreshAgentSubscribers(
   }
 }
 
-function emitMemoryChanged(subscribers: Iterable<DispatchSocketSubscriber>, teamId: string): void {
-  for (const subscriber of subscribers) {
-    if (subscriberBelongsToTeam(subscriber, teamId)) {
-      subscriber.socket.emit?.(WEB_EVENTS.memory.changed, { teamId });
-    }
+function emitMemoryChanged(audience: readonly AuthorizedDispatchSubscriber[], teamId: string): void {
+  for (const { subscriber } of audience) {
+    subscriber.socket.emit?.(WEB_EVENTS.memory.changed, { teamId });
   }
 }
 
-function subscriberBelongsToTeam(subscriber: DispatchSocketSubscriber, teamId: string): boolean {
-  return subscriber.channels?.teamId === teamId
-    || subscriber.agents?.teamId === teamId
-    || subscriber.devices?.teamId === teamId;
+function teamSubscription(subscriber: DispatchSocketSubscriber, teamId: string): DispatchSubscription | null {
+  if (subscriber.channels?.teamId === teamId) return subscriber.channels;
+  if (subscriber.agents?.teamId === teamId) return subscriber.agents;
+  if (subscriber.devices?.teamId === teamId) return subscriber.devices;
+  return null;
+}
+
+function clearTeamSubscriptions(subscriber: DispatchSocketSubscriber, teamId: string): void {
+  if (subscriber.channels?.teamId === teamId) subscriber.channels = undefined;
+  if (subscriber.agents?.teamId === teamId) subscriber.agents = undefined;
+  if (subscriber.devices?.teamId === teamId) subscriber.devices = undefined;
 }
 
 function resultItems(result: unknown, singleKey: 'dispatch' | 'message', manyKey: 'dispatches' | 'messages'): unknown[] {

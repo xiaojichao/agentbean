@@ -305,7 +305,7 @@ interface DispatchSocketProjection {
     payload: unknown,
     result: unknown,
   ): Promise<void>;
-  emitStatus(dispatch: unknown): void;
+  emitStatus(dispatch: unknown): Promise<void>;
 }
 
 interface DispatchSocketProjectionPort {
@@ -318,19 +318,21 @@ interface DispatchSocketProjectionPort {
 #### 3. Contracts
 
 - 调用方必须显式传入 source；不得以 `dispatch` / `dispatches` 的 shape 推断 Message 是否已被其他 owner 投影。
+- 发送任何事件前，按 Team 为每个匹配 subscriber 使用其 channel/agent/device subscription 调用一次 `listChannels` 复验当前成员权限；失败时清除该 socket 对此 Team 的三类缓存 subscription，并从本次 audience 排除。
 - 成功结果将单个 `dispatch` 与 `dispatches[]` 合并并按 Dispatch `id` 首次出现去重；每个 Dispatch 按其 `teamId` 向 channels/agents/devices 任一属于该 Team 的 subscriber 发送一次 `WEB_EVENTS.message.dispatchStatus`。
 - 只有 `agent-report` source 才读取 `message` / `messages[]`；`message-send` 的原消息已由 Message adapter 唯一投影，Dispatch module 不得重复发送。
 - Agent reply Message 必须先匹配 Team，再以 subscriber 自己的 channel subscription 重读 `listChannels` / `listDirectMessages` 复核频道或 DM 可见性；不得先广播正文再由客户端隐藏。
 - 受影响 Team 从 payload team/targetTeam、Agent visibility、Dispatch 与 Message 的 committed team facts 合并去重；每 Team、每 agents subscriber 最多重读一次 `listVisibleAgents`，固定发送 snapshot 后逐 Agent status。
 - 固定顺序为全部 Dispatch status → 全部可见 Agent reply Message → 每 Team Agent snapshot/status → Memory invalidation。
 - 结果包含 `task` 或非空 `tasks[]` 时，Memory invalidation 由后续 `TaskSocketProjection` 唯一发送；否则 Dispatch module 每 Team 发送一次。
-- `emitStatus` 供 realtime timeout 等已提交 Dispatch 状态入口复用相同 audience 规则，不触发 Message、Agent 或 Memory 投影。
+- `emitStatus` 供 realtime timeout 等已提交 Dispatch 状态入口异步复用相同权限复验与 audience 规则，不触发 Message、Agent 或 Memory 投影；调用方必须 `await`。
 
 #### 4. Validation & Error Matrix
 
 | 条件 | 行为 |
 |---|---|
 | `result.ok !== true` | 不发送、不重读 |
+| Team access 复验失败 | 清除该 Team 的 channels/agents/devices subscription；不向该 socket 发送任何事件 |
 | Dispatch 缺少字符串 `teamId` | 不发送该 status；仍可由其他 committed Team fact 驱动 refresh |
 | 重复 Dispatch `id` | 只发送第一次 |
 | source 非 `agent-report` 且结果含 Message | 不发送 Message |
@@ -347,7 +349,7 @@ interface DispatchSocketProjectionPort {
 
 #### 6. Tests Required
 
-- `dispatch-socket-projection.test.ts`：断言顺序、Dispatch/Team 去重、频道与 DM 可见性、Task/Memory 唯一 owner、失败与缺失 Team 输入。
+- `dispatch-socket-projection.test.ts`：断言顺序、Dispatch/Team 去重、Team 权限复验与撤权清理、频道与 DM 可见性、Task/Memory 唯一 owner、失败与缺失 Team 输入。
 - `message-socket-adapter.test.ts`：断言 `message-send` source 与 Message → references → Task → Dispatch callback 顺序。
 - `socket-handlers.test.ts`：断言 `web-command` / `agent-report` source，以及 Dispatch → Task callback 顺序。
 - `socket-integration.test.ts`：真实 Socket.IO 断言 message send 与 cancel 各发送一次 status、Agent busy/online refresh、reply Message 不重复及 Memory 精确次数。

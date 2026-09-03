@@ -42,7 +42,7 @@ describe('Dispatch socket projection', () => {
       { event: WEB_EVENTS.agent.status, payload: { id: 'agent-1', status: 'busy' } },
       { event: WEB_EVENTS.memory.changed, payload: { teamId: 'team-1' } },
     ]);
-    expect(listChannels).toHaveBeenCalledTimes(2);
+    expect(listChannels).toHaveBeenCalledTimes(1);
     expect(listDirectMessages).not.toHaveBeenCalled();
     expect(listVisibleAgents).toHaveBeenCalledWith({ teamId: 'team-1' });
   });
@@ -97,7 +97,7 @@ describe('Dispatch socket projection', () => {
 
   test('does not reproject the Message already owned by message-send', async () => {
     const events: Array<{ event: string; payload: unknown }> = [];
-    const listChannels = vi.fn();
+    const listChannels = vi.fn().mockResolvedValue({ ok: true, channels: [{ id: 'channel-1' }] });
     const projection = createDispatchSocketProjection(new Set([
       {
         socket: { emit: (event: string, payload: unknown) => events.push({ event, payload }) },
@@ -120,7 +120,67 @@ describe('Dispatch socket projection', () => {
       { event: WEB_EVENTS.message.dispatchStatus, payload: dispatch },
       { event: WEB_EVENTS.memory.changed, payload: { teamId: 'team-1' } },
     ]);
-    expect(listChannels).not.toHaveBeenCalled();
+    expect(listChannels).toHaveBeenCalledTimes(1);
+  });
+
+  test('revalidates Team access before broadcasting and clears revoked subscriptions', async () => {
+    const emit = vi.fn();
+    const subscriber = {
+      socket: { emit },
+      channels: { userId: 'user-1', teamId: 'team-1' },
+      agents: { userId: 'user-1', teamId: 'team-1' },
+      devices: { userId: 'user-1', teamId: 'team-1' },
+    };
+    const listChannels = vi.fn().mockResolvedValue({ ok: false, error: 'FORBIDDEN' });
+    const projection = createDispatchSocketProjection(new Set([subscriber]), {
+      listChannels,
+      listDirectMessages: vi.fn(),
+      listVisibleAgents: vi.fn(),
+    });
+    const dispatch = { id: 'dispatch-1', teamId: 'team-1', status: 'queued' };
+
+    await projection.handleMutation('message-send', { teamId: 'team-1' }, {
+      ok: true,
+      dispatches: [dispatch],
+    });
+    await projection.emitStatus(dispatch);
+
+    expect(emit).not.toHaveBeenCalled();
+    expect(listChannels).toHaveBeenCalledTimes(1);
+    expect(subscriber).toEqual({
+      socket: { emit },
+      channels: undefined,
+      agents: undefined,
+      devices: undefined,
+    });
+  });
+
+  test('does not send a Team Message through another Team channel subscription', async () => {
+    const events: Array<{ event: string; payload: unknown }> = [];
+    const projection = createDispatchSocketProjection(new Set([
+      {
+        socket: { emit: (event: string, payload: unknown) => events.push({ event, payload }) },
+        channels: { userId: 'user-1', teamId: 'team-2' },
+        agents: { userId: 'user-1', teamId: 'team-1' },
+      },
+    ]), {
+      listChannels: vi.fn().mockResolvedValue({ ok: true, channels: [{ id: 'channel-1' }] }),
+      listDirectMessages: vi.fn().mockResolvedValue({ ok: true, dms: [{ channel: { id: 'channel-1' } }] }),
+      listVisibleAgents: vi.fn().mockResolvedValue({ ok: true, agents: [] }),
+    });
+    const dispatch = { id: 'dispatch-1', teamId: 'team-1', status: 'running' };
+
+    await projection.handleMutation('agent-report', {}, {
+      ok: true,
+      dispatch,
+      message: { id: 'message-1', teamId: 'team-1', channelId: 'channel-1' },
+    });
+
+    expect(events).toEqual([
+      { event: WEB_EVENTS.message.dispatchStatus, payload: dispatch },
+      { event: WEB_EVENTS.agent.snapshot, payload: [] },
+      { event: WEB_EVENTS.memory.changed, payload: { teamId: 'team-1' } },
+    ]);
   });
 
   test('enforces Message visibility and ignores failed or Team-less results', async () => {

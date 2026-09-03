@@ -47,7 +47,7 @@ export interface SocketServerLike {
 }
 
 export interface ServerNextRealtime {
-  emitDispatchStatus(dispatch: unknown): void;
+  emitDispatchStatus(dispatch: unknown): Promise<void>;
   /** #921 outbox 投递：通知能看到该 channel 的订阅者「有新消息，去 fetch」（轻量通知，无正文）。 */
   emitMessageDelivered(input: { teamId: string; channelId: string; messageId: string }): Promise<void>;
   /**
@@ -891,8 +891,8 @@ export function attachServerNextNamespaces(
     });
   });
   return {
-    emitDispatchStatus(dispatch) {
-      dispatchSocketProjection.emitStatus(dispatch);
+    async emitDispatchStatus(dispatch) {
+      await dispatchSocketProjection.emitStatus(dispatch);
     },
     async emitMessageDelivered(delivery) {
       await emitDeliveredToSubscribers(webSubscribers, app, delivery);
