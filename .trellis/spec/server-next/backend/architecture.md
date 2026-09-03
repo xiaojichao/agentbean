@@ -181,6 +181,7 @@ interface TaskSocketProjectionPort {
 - 每个 Team 向 channels/agents/devices 任一归属该 Team 的 subscriber 发送一次 `WEB_EVENTS.memory.changed`。
 - 固定顺序为同 Team 全部 `task.updated` → 每订阅者 `task.snapshot` → `memory.changed`。
 - Message 由 `afterMessageSend` 或 Agent Dispatch projection 唯一发送；Task module 不检查 `dispatches`，也不发送 `channel.message`。
+- `WEB_EVENTS.task.update` 的成功结果可能包含已提交的 `task-status-updated` Message；该来源必须在 Task projection 之后显式调用 `afterMessageSend`，其他 Task mutation 不得用泛化 Task module 代发 Message。
 
 #### 4. Validation & Error Matrix
 
@@ -203,7 +204,7 @@ interface TaskSocketProjectionPort {
 
 - `task-socket-projection.test.ts`：断言 Task id 去重、Team 单次重读、事件精确次数与顺序、失败/空结果静默。
 - `socket-integration.test.ts`：断言 Task-linked send/result、convert-to-task、dispatch cancel 的 Message/Task/Memory 精确次数。
-- `message-socket-adapter.test.ts` 与 `socket-handlers.test.ts`：断言 Message/Task/Dispatch callback 的职责与调用顺序。
+- `message-socket-adapter.test.ts` 与 `socket-handlers.test.ts`：断言 Message/Task/Dispatch callback 的职责与调用顺序，并覆盖 task.update 的 Task → Message 投影顺序。
 
 #### 7. Wrong vs Correct
 

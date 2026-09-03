@@ -1102,7 +1102,7 @@ describe('server-next Socket.IO namespaces', () => {
   test('pushes task:updated to subscribers after task mutations', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
-      ids: createIds(['user-1', 'team-1', 'channel-1', 'task-1']),
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'task-1', 'message-1']),
     });
     const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
     cleanups.push(async () => {
@@ -1126,12 +1126,14 @@ describe('server-next Socket.IO namespaces', () => {
     });
 
     const updates: Array<{ id: string; title?: string }> = [];
+    const channelMessages: unknown[] = [];
     owner.on(WEB_EVENTS.task.updated, (task) => {
       if (typeof task !== 'object' || task === null) {
         throw new Error('Expected task:updated payload to be an object');
       }
       updates.push(task as { id: string; title?: string });
     });
+    owner.on(WEB_EVENTS.channel.message, (message) => channelMessages.push(message));
 
     // task:updated is team-scoped: subscribe so the owner belongs to team-1.
     await expect(
@@ -1151,6 +1153,22 @@ describe('server-next Socket.IO namespaces', () => {
       expect(updates.length).toBeGreaterThan(0);
       expect(updates.at(-1)!.title).toBe('My Task');
     });
+
+    await expect(owner.emitWithAck(WEB_EVENTS.task.update, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'task-1',
+      status: 'done',
+    })).resolves.toMatchObject({
+      ok: true,
+      task: { id: 'task-1', status: 'done' },
+      message: { id: 'message-1', meta: { kind: 'task-status-updated' } },
+    });
+    await eventually(async () => expect(channelMessages.length).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(channelMessages).toEqual([
+      expect.objectContaining({ id: 'message-1', meta: expect.objectContaining({ kind: 'task-status-updated' }) }),
+    ]);
   });
 
   test('queries a selected Stage delivery review workspace through authenticated Socket.IO', async () => {

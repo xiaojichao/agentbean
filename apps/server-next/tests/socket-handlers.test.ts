@@ -1736,6 +1736,29 @@ describe('server-next socket handlers', () => {
     expect(afterAgentMutation).not.toHaveBeenCalled();
   });
 
+  test('projects a Task status update before its committed system Message', async () => {
+    const socket = new FakeSocket();
+    const calls: string[] = [];
+    const result = makeSuccess({
+      task: { id: 'task-1', teamId: 'team-1', status: 'done' },
+      message: { id: 'message-1', teamId: 'team-1', channelId: 'channel-1' },
+    });
+    const app = {
+      updateTask: vi.fn(async () => result),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, {
+      afterTaskMutation: async () => { calls.push('task'); },
+      afterMessageSend: async () => { calls.push('message'); },
+    });
+
+    await socket.trigger(WEB_EVENTS.task.update, {
+      userId: 'user-1', teamId: 'team-1', taskId: 'task-1', status: 'done',
+    });
+
+    expect(calls).toEqual(['task', 'message']);
+  });
+
   test('Agent promotion escalation 注入已认证连接的 deviceId', async () => {
     const socket = new FakeSocket();
     const app = {
