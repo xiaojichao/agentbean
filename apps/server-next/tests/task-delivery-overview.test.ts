@@ -696,6 +696,7 @@ for (const variant of variants) {
       const taskId = 'task-coordinated-delivery';
       await seedTask(seedValue, taskId, {
         status: 'in_review',
+        preboundAuthorityIds: [seedValue.userId],
       });
       const coordination = await seedValue.repositories.taskCoordination.coordinations.getByTaskId(taskId);
       if (!coordination) throw new Error('coordination not found');
@@ -708,10 +709,10 @@ for (const variant of variants) {
       ], { agentId: seedValue.agentId, taskId, taskAttempt: 1 });
 
       const overview = await queryOverview(seedValue, taskId);
-      expect(overview.acceptanceContract.humanAcceptanceAuthorityIds).toEqual([]);
+      expect(overview.acceptanceContract.humanAcceptanceAuthorityIds).toEqual([seedValue.userId]);
       expect(overview.availableActions.find((action) => action.action === 'accept-delivery')).toMatchObject({
         disabled: true,
-        disabledReason: '你不是当前交付的验收人',
+        disabledReason: '子任务需由协调验收流程处理',
       });
 
       const accepted = await seedValue.app.acceptRootDelivery({
