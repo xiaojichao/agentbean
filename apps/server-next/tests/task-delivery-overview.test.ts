@@ -688,6 +688,8 @@ for (const variant of variants) {
           packageId: packageRecord.package.packageId,
         }),
       }));
+      const visibleMessages = await seedValue.repositories.messages.listVisibleByChannel(seedValue.channelId, 50);
+      expect(visibleMessages.some((message) => message.meta?.kind === 'task-delivery-accepted')).toBe(false);
     });
 
     test('#1217:已有 coordination 的 Task 不得误入 direct 交付验收', async () => {
