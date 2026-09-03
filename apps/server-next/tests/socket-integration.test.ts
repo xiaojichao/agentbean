@@ -1054,6 +1054,109 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('broadcasts frozen project references once only to subscribers who can view the channel', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1000 },
+      ids: {
+        nextId: createIds([
+          'user-1', 'team-1', 'channel-all', 'channel-private',
+          'message-1', 'reference-set-1', 'reference-selection-1', 'reference-item-1',
+        ]),
+      },
+      messageIngestionMode: 'legacy',
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await repositories.teams.addMember({
+      teamId: 'team-1',
+      userId: 'user-2',
+      username: 'teammate',
+      role: 'member',
+      joinedAt: 1000,
+    });
+    await app.createChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      name: 'private-project',
+      visibility: 'private',
+    });
+    await repositories.channelDocuments.create({
+      document: {
+        id: 'document-1',
+        teamId: 'team-1',
+        channelId: 'channel-private',
+        filename: 'plan.md',
+        currentRevisionId: 'revision-1',
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+      revision: {
+        id: 'revision-1',
+        documentId: 'document-1',
+        artifact: {
+          id: 'artifact-1',
+          teamId: 'team-1',
+          channelId: 'channel-private',
+          uploaderId: 'user-1',
+          filename: 'plan.md',
+          mimeType: 'text/markdown',
+          sizeBytes: 20,
+          createdAt: 1000,
+        },
+        revision: 1,
+        createdBy: 'user-1',
+        createdAt: 1000,
+        source: 'attachment',
+        published: false,
+      },
+    });
+
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const owner = await connectClient(`${baseUrl}/web`);
+    const teammate = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => {
+      owner.disconnect();
+      teammate.disconnect();
+    });
+
+    const ownerUpdates: unknown[] = [];
+    const teammateUpdates: unknown[] = [];
+    owner.on(WEB_EVENTS.project.referencesUpdated, (payload) => { ownerUpdates.push(payload); });
+    teammate.on(WEB_EVENTS.project.referencesUpdated, (payload) => { teammateUpdates.push(payload); });
+    await owner.emitWithAck(WEB_EVENTS.channel.subscribe, { userId: 'user-1', teamId: 'team-1' });
+    await teammate.emitWithAck(WEB_EVENTS.channel.subscribe, { userId: 'user-2', teamId: 'team-1' });
+
+    const ack = await owner.emitWithAck(WEB_EVENTS.message.send, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-private',
+      clientMessageId: 'client-message-1',
+      body: '请按冻结计划执行',
+      selections: [{
+        kind: 'document',
+        documentId: 'document-1',
+        expectedRevisionId: 'revision-1',
+      }],
+    });
+    expect(ack).toMatchObject({
+      ok: true,
+      referenceSet: { id: 'reference-set-1' },
+    });
+    await eventually(() => {
+      expect(ownerUpdates).toEqual([{
+        channelId: 'channel-private',
+        referenceSet: expect.objectContaining({ id: 'reference-set-1' }),
+      }]);
+    });
+    await delay(20);
+    expect(teammateUpdates).toEqual([]);
+  });
+
   test('refreshes team snapshots after team mutations', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,

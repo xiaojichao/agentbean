@@ -1,4 +1,8 @@
-import type { Ack, DispatchRequestDto } from '../../../../packages/contracts/src/index.js';
+import type {
+  Ack,
+  DispatchRequestDto,
+  ProjectReferenceSetDto,
+} from '../../../../packages/contracts/src/index.js';
 
 export interface MessageDispatchPort {
   getDispatchRequest(input: {
@@ -31,8 +35,14 @@ type SendMessageAck = {
   dispatches: SendMessageDispatchAck[];
   coalescedDispatchId?: string;
   task?: unknown;
-  referenceSet?: unknown;
+  referenceSet?: ProjectReferenceSetDto;
 };
+
+export interface CommittedProjectReferences {
+  readonly teamId: string;
+  readonly channelId: string;
+  readonly referenceSet: ProjectReferenceSetDto;
+}
 
 interface PendingDispatchRequest {
   readonly dispatchId: string;
@@ -44,7 +54,7 @@ export interface MessageSocketAdapterOptions {
   shouldUseDispatchClaim?(request: DispatchRequestDto & { id: string }): boolean;
   dispatchRequestCoalesceMs?: number;
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
-  afterProjectReferencesUpdated?(payload: unknown, result: unknown): Promise<void> | void;
+  afterProjectReferencesUpdated?(committed: CommittedProjectReferences): Promise<void> | void;
   afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterDispatchMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterMemoryMutation?(payload: unknown, result: unknown): Promise<void> | void;
@@ -127,8 +137,14 @@ export function createMessageSocketAdapter(
       }
 
       if (!isSendMessageAck(result)) return;
-      if (result.referenceSet) {
-        await options.afterProjectReferencesUpdated?.(payload, result);
+      const teamId = result.message.teamId;
+      const channelId = result.message.channelId;
+      if (result.referenceSet && typeof teamId === 'string' && typeof channelId === 'string') {
+        await options.afterProjectReferencesUpdated?.({
+          teamId,
+          channelId,
+          referenceSet: result.referenceSet,
+        });
       }
       if (result.task) {
         await options.afterTaskMutation?.(payload, result);
