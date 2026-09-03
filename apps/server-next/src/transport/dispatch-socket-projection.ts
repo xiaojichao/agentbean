@@ -111,8 +111,14 @@ async function authorizeTeamAudience(
     let access: Awaited<ReturnType<DispatchSocketProjectionPort['listChannels']>>;
     try {
       access = await port.listChannels(subscription);
-    } catch {
+    } catch (error) {
       // 单个订阅者的瞬时权限读取异常不得阻断其他合法受众；保留 subscription 供后续重试。
+      console.warn('[server-next] Dispatch Socket Team access read failed (non-blocking):', {
+        event: 'dispatch_socket_team_access_read_failed',
+        teamId,
+        userId: subscription.userId,
+        errorClass: error instanceof Error ? error.name : 'UnknownError',
+      });
       continue;
     }
     if (!access.ok) {

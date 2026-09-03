@@ -186,6 +186,7 @@ describe('Dispatch socket projection', () => {
   test('isolates an access read error to one subscriber', async () => {
     const failingEmit = vi.fn();
     const healthyEvents: Array<{ event: string; payload: unknown }> = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const failingSubscriber = {
       socket: { emit: failingEmit },
       channels: { userId: 'user-1', teamId: 'team-1' },
@@ -206,17 +207,31 @@ describe('Dispatch socket projection', () => {
     });
     const dispatch = { id: 'dispatch-1', teamId: 'team-1', status: 'queued' };
 
-    await expect(projection.handleMutation('message-send', { teamId: 'team-1' }, {
-      ok: true,
-      dispatches: [dispatch],
-    })).resolves.toBeUndefined();
+    try {
+      await expect(projection.handleMutation('message-send', { teamId: 'team-1' }, {
+        ok: true,
+        dispatches: [dispatch],
+      })).resolves.toBeUndefined();
 
-    expect(failingEmit).not.toHaveBeenCalled();
-    expect(failingSubscriber.channels).toEqual({ userId: 'user-1', teamId: 'team-1' });
-    expect(healthyEvents).toEqual([
-      { event: WEB_EVENTS.message.dispatchStatus, payload: dispatch },
-      { event: WEB_EVENTS.memory.changed, payload: { teamId: 'team-1' } },
-    ]);
+      expect(failingEmit).not.toHaveBeenCalled();
+      expect(failingSubscriber.channels).toEqual({ userId: 'user-1', teamId: 'team-1' });
+      expect(healthyEvents).toEqual([
+        { event: WEB_EVENTS.message.dispatchStatus, payload: dispatch },
+        { event: WEB_EVENTS.memory.changed, payload: { teamId: 'team-1' } },
+      ]);
+      expect(warn).toHaveBeenCalledWith(
+        '[server-next] Dispatch Socket Team access read failed (non-blocking):',
+        {
+          event: 'dispatch_socket_team_access_read_failed',
+          teamId: 'team-1',
+          userId: 'user-1',
+          errorClass: 'Error',
+        },
+      );
+      expect(warn.mock.calls.flat()).not.toContain('repository unavailable');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('enforces Message visibility and ignores failed or Team-less results', async () => {
