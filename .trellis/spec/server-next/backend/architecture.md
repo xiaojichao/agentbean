@@ -32,7 +32,7 @@
 | `src/application/management/` | PI 内核（路由、worker 池、claim broker） | `management-kernel.ts`、`management-router.ts`、`server-worker-pool.ts`、`task-claim-broker.ts` |
 | `src/infra/sqlite/` | SQLite 实现 + 迁移 | `repositories.ts`、`migrations/global/`、`migrations/team/` |
 | `src/infra/memory/` | 测试用内存实现 | `repositories.ts` |
-| `src/transport/` | socket.io adapter、事件绑定与 Server-owned projection | `socket-server.ts`、`socket-handlers.ts`、`message-socket-handlers.ts`、`message-socket-adapter.ts`、`dispatch-socket-projection.ts`、`task-socket-projection.ts` |
+| `src/transport/` | socket.io adapter、事件绑定与 Server-owned projection | `socket-server.ts`、`socket-handlers.ts`、`message-socket-handlers.ts`、`message-socket-adapter.ts`、`dispatch-socket-projection.ts`、`task-socket-projection.ts`、`task-claim-socket-delivery.ts` |
 | `src/` 根 | 入口与组装根 | `dev-server.ts`（生产 host/storage）、`server-runtime-assembly.ts`（通用 runtime assembly）、`index.ts`（内存）、`bin.ts`（CLI） |
 
 ### god-interface 工厂：createServerNextUseCases
@@ -58,6 +58,7 @@
 - `src/transport/project-socket-broadcast.ts`：通过单一 `handleMutation(kind, payload, result)` interface 拥有 Project overview / artifact / document bundle 的 mutation failure 分类、Team 过滤、逐订阅者身份解析与 Server 投影重读、事件发送及 latency 观测。References 更新使用不同的频道可见性语义，由 Message socket module 只在提交成功且存在冻结引用集时触发，暂不进入该 module。
 - `src/transport/task-socket-projection.ts`：通过单一 `handleMutation(result)` interface 拥有 `task` / `tasks` 归一化、Task identity 去重、按 Team 聚合，以及 `task.updated` → `task.snapshot` → `memory.changed` 顺序；Message 与 Dispatch 投影不得进入该 module。
 - `src/transport/dispatch-socket-projection.ts`：通过 `handleMutation(source, payload, result)` interface 拥有 Dispatch status、Agent reply Message、Agent snapshot/status 与非 Task Memory invalidation 的统一顺序；调用方必须显式标注 mutation source，不能从 result shape 猜 owner。
+- `src/transport/task-claim-socket-delivery.ts`：通过 `offerTaskClaims(...)` / `expireTaskClaims()` interface 拥有 Task Offer 的 Device Socket 定向交付、ACK/timeout 解释、接受计数，以及过期 Claim 的当前 Device 复验与定向通知；Broker 继续唯一拥有 eligibility、Offer/Claim 事实与状态机。
 
 抽新模块时**必须**沿用相对路径 import（见 gotchas.md）。
 
@@ -69,6 +70,7 @@
 - Project projection broadcast 已通过删除测试：删除 `project-socket-broadcast.ts` 会把三类投影共用的 failure policy、逐用户重读和 latency 观测重新泄漏回 `socket-server.ts`；入口认证与声明式 event → use case 映射仍留在 `socket-handlers.ts`。
 - Task socket projection 已通过删除测试：删除 `task-socket-projection.ts` 会把 Task identity 去重、按 Team 单次 snapshot/Memory invalidation、受众差异和事件顺序重新泄漏到 Web Task、Message convert/send、Dispatch cancel 与 Agent result/error 路径。它不能与 Message/Project 共用泛型 fan-out seam。
 - Dispatch socket projection 已通过删除测试：删除 `dispatch-socket-projection.ts` 会把 status audience、Agent reply 可见性、Team 去重、Agent refresh 与 Task/Memory 唯一 owner 顺序重新泄漏到 Message send、Web cancel/cancelChannel、Agent message/result/error 及 realtime timeout 路径。
+- Task Claim socket delivery 已通过删除测试：删除 `task-claim-socket-delivery.ts` 会把 Offer 准备、当前 Device Socket 定位、ACK timeout/接受计数、Claim expiry 的候选解析与定向通知重新泄漏到 `socket-server.ts` 组装根；它不能吸收 Broker 的 authority 或自动重试策略。
 - Channel Work Intake 已通过删除测试且保持现有边界：删除 `channel-work-intake.ts` 会把 authority、freshness、promotion、replay 与 Offer publication 顺序泄漏回 composition root；在没有第二个 route writer 或重复 authority 流程前，不要再包一层 facade。
 
 - Project references 当前**未通过独立 module 的删除测试**：删除候选只会把单一 Message send callback 的频道可见性循环放回原处，不会把状态机、顺序或共享 fan-out 泄漏到多个调用方。其 interface 应保持窄的 committed facts，不得为复用 Project mutation failure policy 而重新接收任意 payload/result。未来只有当 references 出现可由单一 module 完整拥有的状态机、顺序策略或多个调用方共享规则时，才重新评估对应 adapter；事件数量本身不是抽取理由。
@@ -287,6 +289,76 @@ await taskSocketProjection.handleMutation(result);
 await afterMessageSend(payload, result);
 ```
 
+### Task Claim Socket Delivery interface
+
+#### 1. Scope / Trigger
+
+- Trigger：Server runtime 发布已准备的 Task Offer，或周期回收已过期 Agent execution claim。
+- Scope：只拥有 Agent Socket 的定向 delivery、Offer ACK/timeout 解释与过期通知；不拥有 eligibility、Offer/Claim 持久事实、accept/acquire、allocation round、自动 re-offer 或 execution attempt。
+
+#### 2. Signatures
+
+```typescript
+interface TaskClaimSocketDelivery {
+  offerTaskClaims(
+    taskId: string,
+    options?: {
+      readonly allowedAgentIds?: readonly string[];
+      readonly projectStageAuto?: boolean;
+    },
+  ): Promise<{ taskId: string; offered: number; accepted: number }>;
+  expireTaskClaims(): Promise<readonly TaskClaimExpiredV1[]>;
+}
+
+interface TaskClaimSocketDeliveryPort extends Pick<
+  TaskClaimBroker,
+  'prepareOffers' | 'expireClaims' | 'resolveCandidates'
+> {}
+```
+
+#### 3. Contracts
+
+- `prepareOffers`、`expireClaims` 与 `resolveCandidates` 仍由 Broker 实现；delivery module 不解释 eligibility、Offer kind、Claim revision/attempt 或状态转换。
+- 每个已准备 Offer 使用其 committed `deviceId` 在发送时解析当前 Socket；离线或不支持 ACK 的 Device 不接收，但仍计入 `offered`。
+- Offer 通过 `timeout(offerTimeoutMs).emitWithAck` 并发交付；只有 `{ ok: true }` 计入 `accepted`，negative ACK、timeout 与单 Device 异常只影响该候选。
+- Claim expiry 每轮只调用一次 `expireClaims`，保持返回 notice 顺序；每个 notice 都通过当前候选事实重新解析 `agentId → deviceId`，再定向发送 `taskClaim.expired`。
+- 未配置 Broker 时保持 transport 可选：Offer 返回零计数、expiry 返回空列表，并且不读取 Socket。
+
+#### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|---|---|
+| Broker 未配置 | Offer `{ offered: 0, accepted: 0 }`；expiry `[]` |
+| Offer 对应 Device 离线或无 `emitWithAck` | 不发送、不计 accepted；其他候选继续 |
+| Offer ACK 为 `{ ok: false }` 或其他 shape | 不计 accepted；不改变 Broker 事实 |
+| Offer delivery timeout/抛异常 | 仅当前候选视为未接受；不向调用方抛出 |
+| `prepareOffers` / `expireClaims` / `resolveCandidates` 抛异常 | 向调用方传播，保留 Host scheduler 的现有失败处理 |
+| expiry 找不到 Agent 的当前 Device | 保留并返回 expired notice，不发送 Socket event |
+
+#### 5. Good/Base/Bad Cases
+
+- Good：连续两个过期 Claim notice → 各自复验当前 Agent Device，并按原 notice 顺序定向通知。
+- Base：三个 Offer 中一台接受、一台拒绝、一台离线 → `offered: 3, accepted: 1`。
+- Bad：transport 自行判断 Agent 是否 eligible、在 timeout 后创建新 Offer，或把 Socket ACK 当作 Claim acceptance。
+
+#### 6. Tests Required
+
+- `task-claim-socket-delivery.test.ts`：覆盖在线/离线 Device、positive/negative ACK、timeout 隔离、逐 notice Device 复验、缺失 Agent 与无 Broker no-op。
+- `management-socket-integration.test.ts`：继续通过完整 namespace 接线覆盖 Offer/expiry 事件、ACK 计数和目标 Agent 隔离。
+- `dev-server.test.ts`：继续覆盖 Host expiry scheduler 的有界自动 re-offer 与关闭清理；该策略不进入 delivery module。
+
+#### 7. Wrong vs Correct
+
+```typescript
+// Wrong：组装根重新解释 ACK，并把 timeout 当作领域拒绝或自动重试。
+const offer = await broker.prepareOffers(taskId);
+await socket.emitWithAck(AGENT_EVENTS.taskClaim.offer, offer);
+await broker.prepareOffers(taskId);
+
+// Correct：组装根只委托 transport delivery；Broker/Host 保留各自 authority。
+return taskClaimSocketDelivery.offerTaskClaims(taskId, options);
+```
+
 ### Dispatch Socket Projection interface
 
 #### 1. Scope / Trigger
@@ -419,6 +491,7 @@ interface AgentEligibilityModule {
 - **不要把 Message 事件映射、mutation 投影 fan-out、send dispatch quiet window 或 claim wake 散回 `socket-handlers.ts`**：统一调用 Message socket module；module 通过本地 port 依赖 use case，不得重新 import `ServerNextUseCases` god-interface。
 - **不要从 Task projection 发送 Message 或 Dispatch/Agent 事件**：Task 投影只调用 `taskSocketProjection.handleMutation(result)`；同一结果必须按 Task id 去重、按 Team 单次刷新 snapshot 与 Memory invalidation。
 - **不要在 handler 或 Message adapter 外重复解释 Dispatch 结果**：统一传入明确 source 并调用 `dispatchSocketProjection.handleMutation(...)`；Task 结果的 Memory invalidation 只由 Task module 发送。
+- **不要在 `socket-server.ts` 解释 Task Offer ACK、Claim expiry 接收方或自动 re-offer**：前两者委托 `task-claim-socket-delivery.ts`，自动 re-offer 继续由 Host scheduler 与 Broker authority 决定。
 
 ## 验证命令
 
@@ -436,6 +509,8 @@ npx vitest run apps/server-next/tests/message-route-analysis-service.test.ts app
 npx vitest run apps/server-next/tests/message-socket-handlers.test.ts apps/server-next/tests/message-socket-adapter.test.ts apps/server-next/tests/socket-handlers.test.ts
 # Task transport seam
 npx vitest run apps/server-next/tests/task-socket-projection.test.ts apps/server-next/tests/socket-integration.test.ts
+# Task Claim Agent Socket delivery seam
+npx vitest run apps/server-next/tests/task-claim-socket-delivery.test.ts apps/server-next/tests/management-socket-integration.test.ts apps/server-next/tests/dev-server.test.ts
 # Dispatch transport seam
 npx vitest run apps/server-next/tests/dispatch-socket-projection.test.ts apps/server-next/tests/message-socket-adapter.test.ts apps/server-next/tests/socket-handlers.test.ts apps/server-next/tests/socket-integration.test.ts
 # Agent eligibility 边界与关键调用方

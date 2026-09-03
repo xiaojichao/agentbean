@@ -36,6 +36,7 @@ import {
 import { createProjectSocketBroadcast } from './project-socket-broadcast.js';
 import { createDispatchSocketProjection } from './dispatch-socket-projection.js';
 import { createTaskSocketProjection } from './task-socket-projection.js';
+import { createTaskClaimSocketDelivery } from './task-claim-socket-delivery.js';
 
 export interface NamespaceLike {
   on(event: 'connection', handler: (socket: SocketLike) => void): void;
@@ -136,6 +137,11 @@ export function attachServerNextNamespaces(
   const taskSocketProjection = createTaskSocketProjection(webSubscribers, {
     listTasks: (input) => app.listTasks(input),
   });
+  const taskClaimSocketDelivery = createTaskClaimSocketDelivery(
+    options.taskClaimBroker,
+    (deviceId) => agentSocketsByDeviceId.get(deviceId),
+    { offerTimeoutMs: options.taskClaimOfferTimeoutMs },
+  );
   const dispatchSocketProjection = createDispatchSocketProjection(webSubscribers, {
     listChannels: (input) => app.listChannels(input),
     listDirectMessages: (input) => app.listDirectMessages(input),
@@ -940,31 +946,10 @@ export function attachServerNextNamespaces(
       return options.managementWorkerScheduler.scheduleManagementRun(input);
     },
     async offerTaskClaims(taskId, offerOptions) {
-      if (!options.taskClaimBroker) return { taskId, offered: 0, accepted: 0 };
-      const offers = await options.taskClaimBroker.prepareOffers(taskId, offerOptions);
-      let accepted = 0;
-      await Promise.all(offers.map(async (offer) => {
-        const socket = agentSocketsByDeviceId.get(offer.deviceId);
-        const ackSocket = socket?.timeout?.(options.taskClaimOfferTimeoutMs ?? 5_000) ?? socket;
-        if (!ackSocket?.emitWithAck) return;
-        try {
-          const ack = await ackSocket.emitWithAck(AGENT_EVENTS.taskClaim.offer, offer);
-          if (ack && typeof ack === 'object' && (ack as { ok?: unknown }).ok === true) accepted += 1;
-        } catch {
-          // Offer timeout only rejects this candidate; no execution has started.
-        }
-      }));
-      return { taskId, offered: offers.length, accepted };
+      return taskClaimSocketDelivery.offerTaskClaims(taskId, offerOptions);
     },
     async expireTaskClaims() {
-      if (!options.taskClaimBroker) return [];
-      const expired = await options.taskClaimBroker.expireClaims();
-      for (const notice of expired) {
-        const resolution = await options.taskClaimBroker.resolveCandidates(notice.taskId);
-        const deviceId = resolution.candidates.find((candidate) => candidate.agentId === notice.agentId)?.deviceId;
-        if (deviceId) agentSocketsByDeviceId.get(deviceId)?.emit?.(AGENT_EVENTS.taskClaim.expired, notice);
-      }
-      return expired;
+      return taskClaimSocketDelivery.expireTaskClaims();
     },
   };
 }
