@@ -33,6 +33,10 @@ import {
   type AuthenticatedUserProvider,
   type SocketLike,
 } from './socket-handlers.js';
+import {
+  createProjectSocketBroadcast,
+  recordProjectSocketMutationFailure,
+} from './project-socket-broadcast.js';
 
 export interface NamespaceLike {
   on(event: 'connection', handler: (socket: SocketLike) => void): void;
@@ -122,33 +126,16 @@ export function attachServerNextNamespaces(
   const dispatchClaimDeviceIds = new Set<string>();
   const waitingDeviceInviteSocketsByCode = new Map<string, SocketLike>();
   const waitingDeviceInviteCodeBySocket = new Map<SocketLike, string>();
+  const projectSocketBroadcast = createProjectSocketBroadcast(webSubscribers, {
+    resolveSubscriberUserId: (subscriber) => resolveSubscriberUserId(subscriber, app),
+    getChannelProjectOverview: (input) => app.getChannelProjectOverview(input),
+    listProjectArtifactCollections: (input) => app.listProjectArtifactCollections(input),
+    listProjectDocumentBundles: (input) => app.listProjectDocumentBundles(input),
+  }, {
+    metrics: options.projectCollaborationMetrics,
+  });
   let managementConnectionSequence = 0;
   let serverWorkerConnectionSequence = 0;
-  const recordProjectMutationFailure = (result: unknown) => {
-    if (!result || typeof result !== 'object') {
-      options.projectCollaborationMetrics?.recordMutationFailure('unknown');
-      return;
-    }
-    const failure = result as { error?: unknown; message?: unknown };
-    const error = typeof failure.error === 'string' ? failure.error : '';
-    const message = typeof failure.message === 'string' ? failure.message.toLowerCase() : '';
-    if (message.includes('disabled')) return;
-    if (message.includes('idempotency')) {
-      options.projectCollaborationMetrics?.recordMutationFailure('idempotency_conflict');
-    } else if (error === 'CONFLICT' && (message.includes('revision') || message.includes('stale'))) {
-      options.projectCollaborationMetrics?.recordMutationFailure('revision_conflict');
-    } else if (message.includes('scope') || message.includes('team and channel')) {
-      options.projectCollaborationMetrics?.recordMutationFailure('scope_conflict');
-    } else if (message.includes('archived')) {
-      options.projectCollaborationMetrics?.recordMutationFailure('archived');
-    } else if (error === 'FORBIDDEN') {
-      options.projectCollaborationMetrics?.recordMutationFailure('permission');
-    } else if (error === 'VALIDATION_ERROR') {
-      options.projectCollaborationMetrics?.recordMutationFailure('validation');
-    } else {
-      options.projectCollaborationMetrics?.recordMutationFailure('unknown');
-    }
-  };
 
   if (options.serverWorkerPool && options.serverWorkerAuthToken) {
     const serverWorkerNamespace = (server as SocketServerLike & {
@@ -612,94 +599,17 @@ export function attachServerNextNamespaces(
         }
       },
       async afterProjectMutation(payload, result) {
-        if (!isSuccessAck(result)) {
-          recordProjectMutationFailure(result);
-          return;
-        }
-        const broadcastStartedAt = Date.now();
-        const teamId = payloadTeamId(payload);
-        const channelId = payloadChannelId(payload);
-        if (!teamId || !channelId) return;
-        try {
-          for (const subscriber of webSubscribers) {
-            if (subscriber.channels?.teamId !== teamId) continue;
-            const userId = await resolveSubscriberUserId(subscriber, app);
-            if (!userId) continue;
-            const overview = await app.getChannelProjectOverview({ userId, teamId, channelId });
-            if (overview.ok) {
-              subscriber.socket.emit?.(WEB_EVENTS.project.updated, {
-                channelId,
-                overview: overview.overview,
-              });
-            }
-          }
-        } finally {
-          options.projectCollaborationMetrics?.observeEventBroadcastLatency(
-            Date.now() - broadcastStartedAt,
-          );
-        }
+        await projectSocketBroadcast.handleMutation('overview', payload, result);
       },
       async afterProjectArtifactMutation(payload, result) {
-        if (!isSuccessAck(result)) {
-          recordProjectMutationFailure(result);
-          return;
-        }
-        const broadcastStartedAt = Date.now();
-        const teamId = payloadTeamId(payload);
-        const channelId = payloadChannelId(payload);
-        if (!teamId || !channelId) return;
-        try {
-          for (const subscriber of webSubscribers) {
-            if (subscriber.channels?.teamId !== teamId) continue;
-            const userId = await resolveSubscriberUserId(subscriber, app);
-            if (!userId) continue;
-            const library = await app.listProjectArtifactCollections({ userId, teamId, channelId });
-            if (library.ok) {
-              subscriber.socket.emit?.(WEB_EVENTS.project.artifactsUpdated, {
-                channelId,
-                library: library.library,
-              });
-            }
-          }
-        } finally {
-          options.projectCollaborationMetrics?.observeEventBroadcastLatency(
-            Date.now() - broadcastStartedAt,
-          );
-        }
+        await projectSocketBroadcast.handleMutation('artifacts', payload, result);
       },
       async afterProjectDocumentBundleMutation(payload, result) {
-        if (!isSuccessAck(result)) {
-          recordProjectMutationFailure(result);
-          return;
-        }
-        const broadcastStartedAt = Date.now();
-        const teamId = payloadTeamId(payload);
-        const channelId = payloadChannelId(payload);
-        if (!teamId || !channelId) return;
-        // 每个订阅者各自复验可见性：广播只承载 Server 投影，不复用创建者的读取结果。
-        try {
-          for (const subscriber of webSubscribers) {
-            if (subscriber.channels?.teamId !== teamId) continue;
-            const userId = await resolveSubscriberUserId(subscriber, app);
-            if (!userId) continue;
-            const bundles = await app.listProjectDocumentBundles({ userId, teamId, channelId });
-            if (bundles.ok) {
-              subscriber.socket.emit?.(WEB_EVENTS.project.documentBundlesUpdated, {
-                channelId,
-                bundles: bundles.bundles,
-                archived: bundles.archived,
-              });
-            }
-          }
-        } finally {
-          options.projectCollaborationMetrics?.observeEventBroadcastLatency(
-            Date.now() - broadcastStartedAt,
-          );
-        }
+        await projectSocketBroadcast.handleMutation('document-bundles', payload, result);
       },
       async afterProjectReferencesUpdated(_payload, result) {
         if (!isSuccessAck(result)) {
-          recordProjectMutationFailure(result);
+          recordProjectSocketMutationFailure(options.projectCollaborationMetrics, result);
           return;
         }
         if (!result || typeof result !== 'object') return;
