@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from 'react';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -122,6 +122,18 @@ describe('Channel Project Workspace 深模块', () => {
     expect(Number(screen.getByTestId('workspace').getAttribute('data-revision'))).toBeGreaterThan(1);
   });
 
+  test('output package 列表刷新失败时仍推进卡片失效令牌', async () => {
+    render(<Probe channelId="channel-a" />);
+    await waitFor(() => expect(attribute('data-package-id')).toBe('package-channel-a'));
+    const initialRevision = Number(attribute('data-revision'));
+    mocks.listOutputPackages.mockResolvedValueOnce({ ok: false, error: 'NETWORK_ERROR' });
+
+    fireEvent.click(screen.getByRole('button', { name: '刷新文件包投影' }));
+
+    await waitFor(() => expect(Number(attribute('data-revision'))).toBe(initialRevision + 1));
+    expect(attribute('data-package-id')).toBe('package-channel-a');
+  });
+
   test('task 更新同时刷新 Tasks workspace 与项目 overview', async () => {
     let taskUpdated: ((task: ReturnType<typeof taskFixture>) => void) | undefined;
     mocks.socketOn.mockImplementation((event: string, handler: (task: ReturnType<typeof taskFixture>) => void) => {
@@ -189,19 +201,22 @@ function Probe({ channelId }: { channelId: string }) {
     fileFactsActive: true,
   });
   return (
-    <div
-      data-testid="workspace"
-      data-overview-channel={workspace.overview?.profile.channelId ?? ''}
-      data-overview-revision={workspace.overview?.profile.revision ?? ''}
-      data-library-channel={(workspace.artifactLibrary as { channelId?: string } | null)?.channelId ?? ''}
-      data-library-id={(workspace.artifactLibrary as { id?: string } | null)?.id ?? ''}
-      data-bundle-id={(workspace.documentBundles[0] as { id?: string } | undefined)?.id ?? ''}
-      data-package-id={workspace.outputPackages[0]?.packageId ?? ''}
-      data-pending-id={workspace.outputPackagePendings[0]?.deliveryId ?? ''}
-      data-task-id={workspace.tasks[0]?.id ?? ''}
-      data-files-ready={String(workspace.filesReady)}
-      data-revision={workspace.dataRevision}
-    />
+    <>
+      <div
+        data-testid="workspace"
+        data-overview-channel={workspace.overview?.profile.channelId ?? ''}
+        data-overview-revision={workspace.overview?.profile.revision ?? ''}
+        data-library-channel={(workspace.artifactLibrary as { channelId?: string } | null)?.channelId ?? ''}
+        data-library-id={(workspace.artifactLibrary as { id?: string } | null)?.id ?? ''}
+        data-bundle-id={(workspace.documentBundles[0] as { id?: string } | undefined)?.id ?? ''}
+        data-package-id={workspace.outputPackages[0]?.packageId ?? ''}
+        data-pending-id={workspace.outputPackagePendings[0]?.deliveryId ?? ''}
+        data-task-id={workspace.tasks[0]?.id ?? ''}
+        data-files-ready={String(workspace.filesReady)}
+        data-revision={workspace.dataRevision}
+      />
+      <button type="button" onClick={() => void workspace.refreshOutputPackages()}>刷新文件包投影</button>
+    </>
   );
 }
 

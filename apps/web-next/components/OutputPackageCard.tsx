@@ -87,6 +87,7 @@ export interface ReviseVersionRequest {
 export function OutputPackageCard({
   packageMeta,
   channelId,
+  dataRevision = 0,
   onAddReference,
   onOpenTask,
   onContinueWithAgent,
@@ -94,6 +95,8 @@ export function OutputPackageCard({
 }: {
   packageMeta: OutputPackageMeta;
   channelId?: string;
+  /** 统一 Project Workspace 投影刷新后递增，触发卡片重读 Server 审核状态。 */
+  dataRevision?: number;
   /** #1063:父组件注入——把选择加进 composer(chat page 的 onAddPackageReference)。 */
   onAddReference?: (selection: ProjectReferenceSelectionRequestDto) => void;
   /** 暂时不在文件包卡片展示修订入口；保留回调契约供后续恢复，不影响 Files 修订入口。 */
@@ -177,7 +180,7 @@ export function OutputPackageCard({
     return () => {
       cancelled = true;
     };
-  }, [channelId, packageMeta.packageId]);
+  }, [channelId, dataRevision, packageMeta.packageId]);
 
   // #1063:整包投影选择(构建逻辑在 lib/output-package-reference,与文件库工具栏共用)。
   // 预览 ready → 产生选择;not_ready → 展示阻断清单。

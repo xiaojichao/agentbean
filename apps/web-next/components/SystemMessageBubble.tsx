@@ -23,6 +23,8 @@ export interface SystemMessageBubbleProps {
   msg: ChatMessage;
   meta: Record<string, unknown> | null | undefined;
   selected?: boolean;
+  /** Channel Project Workspace 的统一投影刷新令牌。 */
+  dataRevision?: number;
   onOpenTaskDetailById?: (taskId: string) => void;
   onAddPackageReference?: (selection: ProjectReferenceSelectionRequestDto) => void;
   /** 已含 channelId 的修订回调(与 ChatBubble.onReviseVersion 同签名)。 */
@@ -36,6 +38,7 @@ export function SystemMessageBubble({
   msg,
   meta,
   selected = false,
+  dataRevision = 0,
   onOpenTaskDetailById,
   onAddPackageReference,
   onReviseVersion,
@@ -92,6 +95,7 @@ export function SystemMessageBubble({
         <OutputPackageCard
           packageMeta={pkg}
           channelId={msg.channelId}
+          dataRevision={dataRevision}
           onAddReference={onAddPackageReference}
           onReviseVersion={
             onReviseVersion

@@ -2614,6 +2614,7 @@ export default function ChatPage() {
                         {showDateDivider && <MessageDateDivider timestamp={msg.createdAt} now={messageDateReference} />}
                         <ChatBubble
                           msg={msg}
+                          dataRevision={projectDataRevision}
                           groupedWithPrevious={!showDateDivider && isMessageGroupContinuation(previousMessage, msg)}
                           task={task}
                           taskStatusOptions={task
@@ -2930,6 +2931,7 @@ export default function ChatPage() {
           />
           <ThreadPanel
             width={threadPanelWidth}
+            dataRevision={projectDataRevision}
             root={threadRoot}
             replies={threadReplies}
             agents={agents}
@@ -3020,7 +3022,10 @@ export default function ChatPage() {
           {...(openPackagePreview.readOnly || activeChannelObj?.archivedAt ? { readOnly: true } : {})}
           renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources collapsible={false} />}
           onClose={() => setOpenPackagePreview(null)}
-          onSaved={() => refreshProjectArtifactLibrary()}
+          onSaved={() => {
+            refreshProjectArtifactLibrary();
+            void refreshOutputPackages();
+          }}
           prepareReturnThread={async (threadRootMessageId) => {
             const context = await messageReactionEvents().context(threadRootMessageId).catch(() => null);
             if (!context?.ok) return false;
@@ -3942,6 +3947,7 @@ function projectReferenceSelectionLabel(
 
 function ThreadPanel({
   width,
+  dataRevision,
   root,
   replies,
   agents,
@@ -4000,6 +4006,8 @@ function ThreadPanel({
   artifactLibrary,
 }: {
   width: number;
+  /** 预览浮窗保存/审核后刷新讨论串文件包卡片的 Server 投影。 */
+  dataRevision: number;
   root: ChatMessage;
   replies: ChatMessage[];
   agents: Record<string, AgentSnapshot>;
@@ -4196,6 +4204,7 @@ function ThreadPanel({
       <ChatBubble
         key={msg.id}
         msg={msg}
+        dataRevision={dataRevision}
         hasAgentUpdate={Boolean(
           msg.dispatchId
           && replies.some((reply) =>
@@ -4623,6 +4632,7 @@ function AttachmentStrip({ attachments, onRemove }: { attachments: ComposerAttac
 
 function ChatBubble({
   msg,
+  dataRevision = 0,
   groupedWithPrevious = false,
   task,
   taskStatusOptions = [],
@@ -4668,6 +4678,8 @@ function ChatBubble({
   showReplyCount = true,
 }: {
   msg: ChatMessage;
+  /** Channel Project Workspace 的统一投影刷新令牌。 */
+  dataRevision?: number;
   groupedWithPrevious?: boolean;
   task?: TaskItem | null;
   taskStatusOptions?: readonly TaskStatus[];
@@ -4750,6 +4762,7 @@ function ChatBubble({
         msg={msg}
         meta={meta}
         selected={selected}
+        dataRevision={dataRevision}
         onOpenTaskDetailById={onOpenTaskDetailById}
         onAddPackageReference={onAddPackageReference}
         onReviseVersion={onReviseVersion}
@@ -5041,6 +5054,7 @@ function ChatBubble({
           <OutputPackageCard
             packageMeta={outputPackageMeta}
             channelId={msg.channelId}
+            dataRevision={dataRevision}
             onAddReference={onAddPackageReference}
             onReviseVersion={(request) => onReviseVersion?.({ ...request, channelId: msg.channelId })}
             // #1065 AC2：「打开审核 Task」导航到 Task 详情;「继续 @Agent」只预填

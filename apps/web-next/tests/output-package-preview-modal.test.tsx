@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import React from 'react';
+import React, { useState } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { OutputPackagePreviewModal } from '../components/OutputPackagePreviewModal';
+import { OutputPackageCard } from '../components/OutputPackageCard';
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
@@ -139,6 +140,37 @@ function renderModal(options: {
       prepareReturnThread={options.prepareReturnThread ?? vi.fn().mockResolvedValue(true)}
       onReturnToThread={options.onReturnToThread ?? vi.fn()}
     />,
+  );
+}
+
+function ReviewStatusSyncHarness() {
+  const [open, setOpen] = useState(true);
+  const [dataRevision, setDataRevision] = useState(0);
+  const syncPackageMeta = {
+    ...packageMeta,
+    memberCount: 1,
+    members: [packageMeta.members[0]!],
+  };
+
+  return (
+    <>
+      <OutputPackageCard
+        packageMeta={syncPackageMeta}
+        channelId="channel-1"
+        dataRevision={dataRevision}
+      />
+      {open ? (
+        <OutputPackagePreviewModal
+          packageMeta={syncPackageMeta}
+          channelId="channel-1"
+          renderPreview={(content) => <div data-testid="rendered-markdown">{content}</div>}
+          onClose={() => setOpen(false)}
+          onSaved={() => setDataRevision((revision) => revision + 1)}
+          prepareReturnThread={vi.fn().mockResolvedValue(true)}
+          onReturnToThread={vi.fn()}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -507,6 +539,43 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     })));
     expect(mocks.submitPackageArtifactReview.mock.calls[0]?.[0]).not.toHaveProperty('saveRevision');
     expect(mocks.saveArtifactVersionRevision).not.toHaveBeenCalled();
+  });
+
+  test('讨论串浮窗审核完成并关闭后，文件包卡片同步显示最新审核状态', async () => {
+    const initialPackage = await mocks.getOutputPackage();
+    let reviewApproved = false;
+    mocks.getOutputPackage.mockImplementation(async () => ({
+      ...initialPackage,
+      availableActions: initialPackage.availableActions.map((entry: { collectionId: string }) => (
+        entry.collectionId === 'collection-1'
+          ? { ...entry, reviewState: reviewApproved ? 'approved' : 'pending' }
+          : entry
+      )),
+    }));
+    mocks.submitPackageArtifactReview.mockImplementationOnce(async (input) => {
+      reviewApproved = true;
+      return {
+        ok: true,
+        review: { id: 'review-new', versionId: input.versionId, decision: input.decision },
+      };
+    });
+
+    render(<ReviewStatusSyncHarness />);
+
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    await waitFor(() => expect(
+      document.querySelector('[data-smoke="package-review-state"]')?.textContent,
+    ).toBe('待审核'));
+
+    fireEvent.click(screen.getByRole('button', { name: '通过' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认通过' }));
+    await screen.findByText(/已通过：审核记录绑定 Server v4/);
+    fireEvent.click(screen.getByTitle('关闭'));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(
+      document.querySelector('[data-smoke="package-review-state"]')?.textContent,
+    ).toBe('通过'));
   });
 
   test('要求修改原子退回 delivery，并把原智能体、稳定版本与新 attempt 上抛给讨论串预填', async () => {

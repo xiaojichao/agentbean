@@ -99,11 +99,13 @@ export function useChannelProjectWorkspace(input: {
     if (!channelId || !connected) return;
     const ticket = requestFence.begin('output-packages', channelId);
     const result = await projectEvents().listOutputPackages({ channelId }).catch(() => null);
-    if (!requestFence.isCurrent(ticket, channelRef.current)
-      || !result?.ok) return;
+    if (!requestFence.isCurrent(ticket, channelRef.current)) return;
+    // dataRevision 也是消息内文件包卡片的失效令牌。列表刷新失败时仍让卡片
+    // 独立重读 getOutputPackage，避免已成功的审核被后续列表请求失败掩盖。
+    setDataRevision((revision) => revision + 1);
+    if (!result?.ok) return;
     setOutputPackages(result.packages ?? []);
     setOutputPackagePendings(result.pendingDeliveries ?? []);
-    setDataRevision((revision) => revision + 1);
   }, [channelId, connected, requestFence]);
 
   const refreshArtifactLibrary = useCallback(async () => {
