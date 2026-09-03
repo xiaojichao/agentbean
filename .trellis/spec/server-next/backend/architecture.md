@@ -333,7 +333,7 @@ interface DispatchSocketProjectionPort {
 |---|---|
 | `result.ok !== true` | 不发送、不重读 |
 | Team access 复验失败 | 清除该 Team 的 channels/agents/devices subscription；不向该 socket 发送任何事件 |
-| 单个 subscriber 的 Team access 读取抛异常 | 本次排除该 subscriber、保留 subscription 供后续重试，并继续处理其他合法受众；warning 包含固定 event、Team/User correlation、error class 与 suppressed count，按 Team/User/error class 使用 60 秒窗口去重，首次立即记录、窗口后汇总；成功读取后清除去重状态；不得记录原始错误消息或对象 |
+| 单个 subscriber 的 Team access 读取抛异常 | 本次排除该 subscriber、保留 subscription 供后续重试，并继续处理其他合法受众；warning 包含固定 event、Team/User correlation、error class 与 suppressed count，在 projection 内跨 Socket 共享 Team/User/error class 的 60 秒去重窗口，首次立即记录、窗口后汇总；成功读取后清除该 Team/User 去重状态；不得记录原始错误消息或对象 |
 | Dispatch 缺少字符串 `teamId` | 不发送该 status；仍可由其他 committed Team fact 驱动 refresh |
 | 重复 Dispatch `id` | 只发送第一次 |
 | source 非 `agent-report` 且结果含 Message | 不发送 Message |
@@ -350,7 +350,7 @@ interface DispatchSocketProjectionPort {
 
 #### 6. Tests Required
 
-- `dispatch-socket-projection.test.ts`：断言顺序、Dispatch/Team 去重、Team 权限复验、撤权清理、单订阅者异常隔离与限流汇总诊断、频道与 DM 可见性、Task/Memory 唯一 owner、失败与缺失 Team 输入。
+- `dispatch-socket-projection.test.ts`：断言顺序、Dispatch/Team 去重、Team 权限复验、撤权清理、单订阅者异常隔离、同用户多 Socket 的限流汇总诊断、频道与 DM 可见性、Task/Memory 唯一 owner、失败与缺失 Team 输入。
 - `message-socket-adapter.test.ts`：断言 `message-send` source 与 Message → references → Task → Dispatch callback 顺序。
 - `socket-handlers.test.ts`：断言 `web-command` / `agent-report` source，以及 Dispatch → Task callback 顺序。
 - `socket-integration.test.ts`：真实 Socket.IO 断言 message send 与 cancel 各发送一次 status、Agent busy/online refresh、reply Message 不重复及 Memory 精确次数。

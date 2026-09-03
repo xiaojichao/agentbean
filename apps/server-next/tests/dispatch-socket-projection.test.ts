@@ -185,6 +185,7 @@ describe('Dispatch socket projection', () => {
 
   test('isolates an access read error to one subscriber', async () => {
     const failingEmit = vi.fn();
+    const secondFailingEmit = vi.fn();
     const healthyEvents: Array<{ event: string; payload: unknown }> = [];
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     let accessUnavailable = true;
@@ -196,6 +197,10 @@ describe('Dispatch socket projection', () => {
     };
     const projection = createDispatchSocketProjection(new Set([
       failingSubscriber,
+      {
+        socket: { emit: secondFailingEmit },
+        channels: { userId: 'user-1', teamId: 'team-1' },
+      },
       {
         socket: { emit: (event: string, payload: unknown) => healthyEvents.push({ event, payload }) },
         channels: { userId: 'user-2', teamId: 'team-1' },
@@ -217,6 +222,7 @@ describe('Dispatch socket projection', () => {
       })).resolves.toBeUndefined();
 
       expect(failingEmit).not.toHaveBeenCalled();
+      expect(secondFailingEmit).not.toHaveBeenCalled();
       expect(failingSubscriber.channels).toEqual({ userId: 'user-1', teamId: 'team-1' });
       expect(healthyEvents).toEqual([
         { event: WEB_EVENTS.message.dispatchStatus, payload: dispatch },
@@ -245,7 +251,7 @@ describe('Dispatch socket projection', () => {
           teamId: 'team-1',
           userId: 'user-1',
           errorClass: 'Error',
-          suppressedCount: 1,
+          suppressedCount: 3,
         },
       );
       expect(warn).toHaveBeenCalledTimes(2);

@@ -37,13 +37,11 @@ interface AuthorizedDispatchSubscriber {
 
 interface AccessReadWarningReporter {
   failed(
-    subscriber: DispatchSocketSubscriber,
     subscription: DispatchSubscription,
     teamId: string,
     error: unknown,
   ): void;
   succeeded(
-    subscriber: DispatchSocketSubscriber,
     subscription: DispatchSubscription,
     teamId: string,
   ): void;
@@ -131,10 +129,10 @@ async function authorizeTeamAudience(
       access = await port.listChannels(subscription);
     } catch (error) {
       // 单个订阅者的瞬时权限读取异常不得阻断其他合法受众；保留 subscription 供后续重试。
-      accessReadWarnings.failed(subscriber, subscription, teamId, error);
+      accessReadWarnings.failed(subscription, teamId, error);
       continue;
     }
-    accessReadWarnings.succeeded(subscriber, subscription, teamId);
+    accessReadWarnings.succeeded(subscription, teamId);
     if (!access.ok) {
       clearTeamSubscriptions(subscriber, teamId);
       continue;
@@ -148,25 +146,21 @@ async function authorizeTeamAudience(
 }
 
 function createAccessReadWarningReporter(): AccessReadWarningReporter {
-  const failuresBySubscriber = new WeakMap<
-    DispatchSocketSubscriber,
-    Map<string, { errorClass: string; lastLoggedAt: number; suppressedCount: number }>
+  const failuresByAudience = new Map<
+    string,
+    Map<string, { lastLoggedAt: number; suppressedCount: number }>
   >();
 
   return {
-    failed(subscriber, subscription, teamId, error) {
+    failed(subscription, teamId, error) {
       const errorClass = error instanceof Error ? error.name : 'UnknownError';
-      const failureKey = JSON.stringify([teamId, subscription.userId]);
-      const failures = failuresBySubscriber.get(subscriber) ?? new Map();
-      const previous = failures.get(failureKey);
+      const audienceKey = JSON.stringify([teamId, subscription.userId]);
+      const failures = failuresByAudience.get(audienceKey) ?? new Map();
+      const previous = failures.get(errorClass);
       const now = Date.now();
-      if (
-        previous
-        && previous.errorClass === errorClass
-        && now - previous.lastLoggedAt < ACCESS_READ_WARNING_WINDOW_MS
-      ) {
+      if (previous && now - previous.lastLoggedAt < ACCESS_READ_WARNING_WINDOW_MS) {
         previous.suppressedCount += 1;
-        failuresBySubscriber.set(subscriber, failures);
+        failuresByAudience.set(audienceKey, failures);
         return;
       }
 
@@ -175,16 +169,13 @@ function createAccessReadWarningReporter(): AccessReadWarningReporter {
         teamId,
         userId: subscription.userId,
         errorClass,
-        suppressedCount: previous?.errorClass === errorClass ? previous.suppressedCount : 0,
+        suppressedCount: previous?.suppressedCount ?? 0,
       });
-      failures.set(failureKey, { errorClass, lastLoggedAt: now, suppressedCount: 0 });
-      failuresBySubscriber.set(subscriber, failures);
+      failures.set(errorClass, { lastLoggedAt: now, suppressedCount: 0 });
+      failuresByAudience.set(audienceKey, failures);
     },
-    succeeded(subscriber, subscription, teamId) {
-      const failures = failuresBySubscriber.get(subscriber);
-      if (!failures) return;
-      failures.delete(JSON.stringify([teamId, subscription.userId]));
-      if (failures.size === 0) failuresBySubscriber.delete(subscriber);
+    succeeded(subscription, teamId) {
+      failuresByAudience.delete(JSON.stringify([teamId, subscription.userId]));
     },
   };
 }
