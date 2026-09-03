@@ -902,9 +902,27 @@ describe('AgentBean Next browser smoke script', () => {
     expect(matrix).toContain('Release B 后旧页面 alias 返回 404');
   });
 
-  test('seeds ordinary Task facts and exercises reorder, delete, status update, and refresh restore', async () => {
+  test.each([
+    {
+      name: '主任务初始已置顶',
+      primaryTaskStartsAbove: true,
+      expectedReorderTitles: [
+        'WebUI smoke task secondary task-smoke',
+        'WebUI smoke task task-smoke',
+      ],
+    },
+    {
+      name: '主任务初始未置顶',
+      primaryTaskStartsAbove: false,
+      expectedReorderTitles: ['WebUI smoke task task-smoke'],
+    },
+  ])('seeds ordinary Task facts and exercises reorder when $name', async ({
+    primaryTaskStartsAbove,
+    expectedReorderTitles,
+  }) => {
     const { exerciseWebUiTaskBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
+    let evaluateJsonCount = 0;
     const page = {
       async navigate(url: string) {
         calls.push(['navigate', url]);
@@ -920,6 +938,7 @@ describe('AgentBean Next browser smoke script', () => {
       },
       async evaluateJson(expression: string) {
         calls.push(['evaluateJson', expression]);
+        if (evaluateJsonCount++ === 0) return primaryTaskStartsAbove;
         return true;
       },
       async reload() {
@@ -981,9 +1000,9 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('in_progress'))).toBe(true);
     const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
     const reorderCalls = evaluateJsonCalls.filter((call) => call[1].includes('task-reorder-top'));
-    expect(reorderCalls).toHaveLength(2);
-    expect(reorderCalls[0]?.[1]).toContain('WebUI smoke task secondary task-smoke');
-    expect(reorderCalls[1]?.[1]).toContain('WebUI smoke task task-smoke');
+    expect(reorderCalls).toHaveLength(expectedReorderTitles.length);
+    expect(reorderCalls.map((call) => expectedReorderTitles.find((title) => call[1].includes(title))))
+      .toEqual(expectedReorderTitles);
     expect(evaluateJsonCalls.some((call) => call[1].includes('task-delete'))).toBe(true);
   });
 
