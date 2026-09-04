@@ -50,3 +50,4 @@ export * from './task-lifecycle.js';
 export * from './task-failure-remediation.js';
 export * from './system-activity.js';
 export * from './pi-authority-cutover.js';
+export * from './completion-notification.js';

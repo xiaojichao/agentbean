@@ -1,3 +1,4 @@
+import { createSqliteCompletionNotifications } from './completion-notification-repository.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -337,6 +338,10 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0086_agent_auto_accept_policies.sql');
   // #1270：未指派频道消息的可恢复语义路由状态。
   applyMigration(db, 'team/0087_message_route_analyses.sql');
+  if (sqliteTableExists(db, 'tasks') && sqliteTableExists(db, 'messages')) {
+    applyMigration(db, 'team/0088_completion_notifications.sql');
+    applyMigration(db, 'team/0089_browser_push.sql');
+  }
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -4283,6 +4288,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
     },
     experiencePack: createSqliteExperiencePackRepositories(teamDb),
+    completionNotifications: createSqliteCompletionNotifications(teamDb),
     systemActivity,
     systemActivityUnitOfWork,
     teamPiAuthorityMigrations: {

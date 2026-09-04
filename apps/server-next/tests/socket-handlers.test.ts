@@ -265,6 +265,11 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.message.messageTracer.command,
       WEB_EVENTS.systemActivity.command,
       WEB_EVENTS.systemActivity.query,
+      WEB_EVENTS.notifications.list,
+      WEB_EVENTS.notifications.markRead,
+      WEB_EVENTS.notifications.pushConfig,
+      WEB_EVENTS.notifications.pushSubscribe,
+      WEB_EVENTS.notifications.pushUnsubscribe,
       WEB_EVENTS.piAuthorityCutover.command,
       WEB_EVENTS.piAuthorityCutover.query,
       WEB_EVENTS.taskRemediation.command,
@@ -1042,6 +1047,35 @@ describe('server-next socket handlers', () => {
       newPassword: 'new-password',
       currentDeviceId: null,
     });
+  });
+
+  test('完成提醒使用登录身份，拒绝匿名查询和伪造收件人已读', async () => {
+    const app = {
+      listCompletionNotifications: vi.fn(async () => makeSuccess({ items: [], unreadCount: 0 })),
+      markCompletionNotificationRead: vi.fn(async () => makeSuccess({})),
+      getBrowserPushConfig: vi.fn(async () => makeSuccess({ publicKey: null })),
+      subscribeBrowserPush: vi.fn(async () => makeSuccess({})),
+      unsubscribeBrowserPush: vi.fn(async () => makeSuccess({})),
+    } as unknown as ServerNextUseCases;
+    for (const hasToken of [false, true]) {
+      const socket = new FakeSocket();
+      registerWebSocketHandlers(socket, app, {
+        authenticatedUser: async () => ({
+          hasToken, userId: hasToken ? 'user-session' : null,
+          currentTeamId: 'team-session', currentDeviceId: null,
+        }),
+      });
+      for (const event of [WEB_EVENTS.notifications.list, WEB_EVENTS.notifications.markRead,
+        WEB_EVENTS.notifications.pushConfig, WEB_EVENTS.notifications.pushSubscribe, WEB_EVENTS.notifications.pushUnsubscribe]) {
+        const result = await socket.trigger(event, { userId: 'spoofed', teamId: 'team-session', id: 'notice' });
+        expect(result).toMatchObject(hasToken ? { ok: true } : { ok: false, error: 'UNAUTHENTICATED' });
+      }
+    }
+    for (const method of [app.listCompletionNotifications, app.markCompletionNotificationRead,
+      app.getBrowserPushConfig, app.subscribeBrowserPush, app.unsubscribeBrowserPush]) {
+      expect(method).toHaveBeenCalledTimes(1);
+      expect(method).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-session', teamId: 'team-session' }));
+    }
   });
 
   test('PI Provider Supply events require authentication and ignore a spoofed payload userId', async () => {

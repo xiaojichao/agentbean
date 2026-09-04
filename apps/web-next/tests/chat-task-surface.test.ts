@@ -8,6 +8,7 @@ const projectWorkspaceSource = readFileSync(
 );
 const appShellSource = readFileSync(new URL('../components/app-shell.tsx', import.meta.url), 'utf8');
 const sidebarSource = readFileSync(new URL('../components/sidebar.tsx', import.meta.url), 'utf8');
+const notificationsSource = readFileSync(new URL('../components/completion-notifications.tsx', import.meta.url), 'utf8');
 const settingsSource = readFileSync(new URL('../app/[teamPath]/settings/page.tsx', import.meta.url), 'utf8');
 const searchPageSource = readFileSync(new URL('../app/[teamPath]/search/page.tsx', import.meta.url), 'utf8');
 const activityPageSource = readFileSync(new URL('../app/[teamPath]/activity/page.tsx', import.meta.url), 'utf8');
@@ -32,7 +33,7 @@ describe('chat task surface', () => {
     expect(sidebarSource.indexOf('label="搜索"')).toBeLessThan(sidebarSource.indexOf('label="聊天"'));
     expect(sidebarSource.indexOf('label="聊天"')).toBeLessThan(sidebarSource.indexOf('label="活动"'));
     expect(sidebarSource.indexOf('label="活动"')).toBeLessThan(sidebarSource.indexOf('label="任务"'));
-    expect(sidebarSource).toContain('label="提醒"');
+    expect(sidebarSource).toContain('<CompletionNotifications');
     expect(sidebarSource).toContain('label="帮助和资源"');
     expect(sidebarSource).toContain('label="设置"');
     expect(chatSource).toContain("activeChannel && !mobileConversationListOpen ? 'hidden md:flex md:w-60' : 'flex w-full md:w-60'");
@@ -56,7 +57,7 @@ describe('chat task surface', () => {
     expect(sidebarSource).toContain('bg-[#F7F7F5]');
     expect(sidebarSource).toContain('rounded-bl-none');
     expect(sidebarSource).not.toContain('gap-1 border-t border-neutral-900/20');
-    expect(sidebarSource).toContain('data-smoke="notifications-menu"');
+    expect(notificationsSource).toContain('data-smoke="notifications-menu"');
     expect(sidebarSource).toContain('data-smoke="help-resources-menu"');
     expect(settingsSource).not.toContain('data-smoke="settings-admin-console-link"');
     expect(settingsSource).not.toContain('管理后台');

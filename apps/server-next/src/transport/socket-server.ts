@@ -49,6 +49,7 @@ export interface SocketServerLike {
 }
 
 export interface ServerNextRealtime {
+  emitCompletionNotificationWake(input: { teamId: string; recipientId: string }): Promise<void>;
   emitDispatchStatus(dispatch: unknown): Promise<void>;
   /** #921 outbox 投递：通知能看到该 channel 的订阅者「有新消息，去 fetch」（轻量通知，无正文）。 */
   emitMessageDelivered(input: { teamId: string; channelId: string; messageId: string }): Promise<void>;
@@ -867,6 +868,14 @@ export function attachServerNextNamespaces(
   return {
     async emitDispatchStatus(dispatch) {
       await dispatchSocketProjection.emitStatus(dispatch);
+    },
+    async emitCompletionNotificationWake(wake) {
+      for (const subscriber of webSubscribers) {
+        const userId = await resolveSubscriberUserId(subscriber, app);
+        if (userId !== wake.recipientId) continue;
+        const visible = await app.listCompletionNotifications({ userId, teamId: wake.teamId });
+        if (visible.ok) subscriber.socket.emit?.(WEB_EVENTS.notifications.changed, wake);
+      }
     },
     async emitMessageDelivered(delivery) {
       await emitDeliveredToSubscribers(webSubscribers, app, delivery);

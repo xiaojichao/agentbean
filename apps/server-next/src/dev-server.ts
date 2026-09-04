@@ -1,5 +1,6 @@
 import { closeSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isUtf8 } from 'node:buffer';
+import { createWebPushSender, parseWebPushConfig, type WebPushConfig } from './infra/web-push.js';
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import { createRequire } from 'node:module';
 import { createHash, randomUUID } from 'node:crypto';
@@ -57,6 +58,7 @@ export interface ServerNextDevConfig {
   projectCollaborationRollout?: ProjectCollaborationRolloutConfig;
   projectCollaborationMetrics?: ReturnType<typeof createProjectCollaborationMetrics>;
   maxArtifactBytes?: number;
+  webPush?: WebPushConfig;
   serverWorker?: {
     workerPoolId: string;
     providerCredentialRef: string;
@@ -228,6 +230,7 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
   } : undefined;
   // 启动配置解析阶段先执行依赖校验；非法或乱序项目 rollout 必须在监听端口前 fail closed。
   const projectCollaborationRollout = parseProjectCollaborationRolloutConfig(env);
+  const webPush = parseWebPushConfig(env);
   return {
     host,
     port,
@@ -236,6 +239,7 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
     sessionSecret: sessionSecret || 'agentbean-next-dev-session-secret',
     webEntry,
     projectCollaborationRollout,
+    ...(webPush ? { webPush } : {}),
     ...(maxArtifactBytes ? { maxArtifactBytes } : {}),
     ...(serverWorker ? { serverWorker } : {}),
     ...(changelogInternalToken ? { changelogInternalToken } : {}),
@@ -386,6 +390,29 @@ export async function startServerNextDevServer(
     },
   });
   realtimeRef = realtime; // #921 接通 outbox 投递 late-bind
+  let completionNotificationRunning: Promise<void> | null = null;
+  const pumpCompletionNotifications = () => {
+    if (completionNotificationRunning) return;
+    completionNotificationRunning = (async () => {
+      const wakes = await app.processCompletionNotifications();
+      for (const wake of wakes) await realtime.emitCompletionNotificationWake(wake);
+    })().catch((error) => {
+      console.warn('[completion-notifications] delivery deferred', error instanceof Error ? error.message : 'UNKNOWN');
+    }).finally(() => { completionNotificationRunning = null; });
+  };
+  pumpCompletionNotifications();
+  const completionNotificationInterval = setInterval(pumpCompletionNotifications, 500);
+  completionNotificationInterval.unref();
+  // 推送请求独立重试，不阻塞在线提醒投影。
+  let pushRunning: Promise<void> | null = null;
+  const pumpPush = () => {
+    if (pushRunning) return;
+    pushRunning = app.processBrowserPush().catch(() => {
+      console.warn('[web-push] delivery cycle deferred');
+    }).finally(() => { pushRunning = null; });
+  };
+  const pushInterval = setInterval(pumpPush, 1000);
+  pushInterval.unref();
   appWithCleanup.bindManagementDispatchEmitter?.((dispatchId) => realtime.dispatchRequest(dispatchId));
   appWithCleanup.bindTaskClaimEmitter?.(async (taskId, options) => {
     return realtime.offerTaskClaims(taskId, options);
@@ -486,6 +513,10 @@ export async function startServerNextDevServer(
     httpServer,
     ioServer,
     async close() {
+      clearInterval(completionNotificationInterval);
+      clearInterval(pushInterval);
+      await completionNotificationRunning;
+      await pushRunning;
       if (dispatchTimeoutInterval) {
         clearInterval(dispatchTimeoutInterval);
       }
@@ -2274,6 +2305,7 @@ function createDefaultApp(
       clock,
       ids,
       sessionSecret: config.sessionSecret,
+      webPush: config.webPush ? createWebPushSender(config.webPush) : undefined,
       artifactContentStore,
       stagingContentStore,
       channelFileRollout,
@@ -2328,6 +2360,7 @@ function createDefaultApp(
     clock,
     ids,
     sessionSecret: config.sessionSecret,
+    webPush: config.webPush ? createWebPushSender(config.webPush) : undefined,
     artifactContentStore,
     stagingContentStore,
     channelFileRollout,
