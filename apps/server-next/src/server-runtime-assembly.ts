@@ -85,6 +85,7 @@ export interface ServerRuntimeAssembly {
 export type CreateServerRuntimeAssemblyInput = Pick<
   CreateServerNextUseCasesInput,
   | 'sessionSecret'
+  | 'webPush'
   | 'resolveArtifactPreview'
   | 'onArtifactCommitted'
 > & {
@@ -168,6 +169,7 @@ export function createServerRuntimeAssembly(
     clock,
     ids,
     sessionSecret: input.sessionSecret,
+    webPush: input.webPush,
     artifactContentStore: input.artifactContentStore,
     stagingContentStore: input.stagingContentStore,
     channelFileRollout: input.channelFileRollout,

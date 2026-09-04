@@ -1,3 +1,7 @@
+import { createCompletionNotificationService } from './completion-notification-service.js';
+import { createPushNotificationService } from './push-notification-service.js';
+import type { WebPushSender } from '../infra/web-push.js';
+import type { CompletionNotificationDto, CompletionNotificationWake } from '../../../../packages/contracts/src/completion-notification.js';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AgentInvocationRecordDto } from '../../../../packages/contracts/src/index.js';
 import type {
@@ -451,6 +455,13 @@ function dummyContentStore(): ArtifactContentStore {
 }
 
 export interface ServerNextUseCases {
+  listCompletionNotifications(input: { userId: string; teamId: string }): Promise<{ ok: true; items: CompletionNotificationDto[]; unreadCount: number } | { ok: false; error: string }>;
+  markCompletionNotificationRead(input: { userId: string; teamId: string; id: string }): Promise<{ ok: boolean; error?: string }>;
+  processCompletionNotifications(): Promise<CompletionNotificationWake[]>;
+  getBrowserPushConfig(): Promise<{ ok: true; publicKey: string | null }>;
+  subscribeBrowserPush(input: { userId: string; subscription: unknown }): Promise<{ ok: boolean; error?: string }>;
+  unsubscribeBrowserPush(input: { userId: string; endpoint: unknown }): Promise<{ ok: boolean; error?: string }>;
+  processBrowserPush(): Promise<void>;
   registerUser(input: RegisterUserInput): Promise<Ack<RegisterUserResult>>;
   loginUser(input: LoginUserInput): Promise<Ack<LoginUserResult>>;
   whoami(input: WhoamiInput): Promise<Ack<WhoamiResult>>;
@@ -1973,6 +1984,7 @@ export interface MessageTracerDelivery {
 }
 
 export interface CreateServerNextUseCasesInput {
+  webPush?: WebPushSender;
   repositories: ServerNextRepositories;
   clock: ServerNextClock;
   ids: ServerNextIds;
@@ -2337,6 +2349,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
    * #999 System activity：优先使用 repositories 注入的 SQLite/memory 持久仓储；
    * 未注入时回退 per-team 进程内 memory（兼容旧测试构造）。
    */
+  const completionNotifications = createCompletionNotificationService(repositories, () => clock.now());
+  const browserPush = createPushNotificationService(repositories, () => clock.now(), input.webPush);
   const systemActivityByTeam = new Map<string, ReturnType<typeof createSystemActivityDispatcher>>();
   function systemActivityDispatcherFor(teamId: string) {
     let dispatcher = systemActivityByTeam.get(teamId);
@@ -3281,6 +3295,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       await channelWorkIntake.processPending(input?.limit).catch(() => undefined);
       return channelCoordinator.runCoordinationCycle(input);
     },
+    listCompletionNotifications: completionNotifications.list,
+    markCompletionNotificationRead: completionNotifications.markRead,
+    processCompletionNotifications: completionNotifications.process,
+    getBrowserPushConfig: browserPush.config,
+    subscribeBrowserPush: browserPush.subscribe,
+    unsubscribeBrowserPush: browserPush.unsubscribe,
+    processBrowserPush: browserPush.process,
     processCoordinationJob(jobId: string): Promise<CoordinationJobOutcome> {
       return channelCoordinator.processJob(jobId);
     },
@@ -12095,7 +12116,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             // 同一回报还可能携带 Project Document InputSet 结果；只有纯文件包
             // 重放才能在这里结束，否则必须继续进入下方 InputSet 恢复事务。
             if (!resultInput.projectDocumentInputSetResult) {
-              return makeSuccess({ dispatch: toDispatchDto(dispatch) });
+              let recoveredTask: TaskDto | null = null;
+              if (!replayAttempt && dispatch.status === 'succeeded') {
+                const recoveredOrigin = await repositories.messages.getById(dispatch.messageId);
+                recoveredTask = await markLinkedTaskInReview(repositories, recoveredOrigin, clock.now());
+                if (replayDeliveryMessage) {
+                  const currentReply = await repositories.messages.getById(replayDeliveryMessage.id);
+                  await repositories.messages.updateMeta({
+                    messageId: replayDeliveryMessage.id,
+                    meta: { ...currentReply?.meta, completionNotificationReady: true },
+                  });
+                }
+              }
+              return makeSuccess({
+                dispatch: toDispatchDto(dispatch),
+                ...(recoveredTask ? { task: recoveredTask } : {}),
+              });
             }
           }
         }
@@ -12689,11 +12725,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(chatArtifacts.length > 0 ? { artifacts: chatArtifacts } : {}),
         ...(workspaceRun ? { workspaceRun } : {}),
       } : null;
-      const completedTask = managedAttempt
-        ? null
-        : resultSucceeded
-          ? await markLinkedTaskInReview(repositories, originMessage, now)
-          : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
+      let completedTask: TaskDto | null = !managedAttempt && !resultSucceeded
+        ? await markLinkedTaskTodoIfInProgress(repositories, originMessage, now)
+        : null;
       if (managedAttempt) {
         if (collaborationProposals.length) {
           try {
@@ -12744,6 +12778,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       if (outputPackageReconciliationPending) {
         return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
+      }
+
+      if (resultSucceeded && !managedAttempt) {
+        completedTask = await markLinkedTaskInReview(repositories, originMessage, now);
+      }
+      if (resultSucceeded && !managedAttempt && authoritativeMessage) {
+        await repositories.messages.updateMeta({
+          messageId: authoritativeMessage.id,
+          meta: { ...authoritativeMessage.meta, completionNotificationReady: true },
+        });
       }
 
       return makeSuccess({

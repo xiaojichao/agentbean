@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
-import { authEvents, clearStoredAuth, getWebSocket, joinEvents, teamEvents, userMemoryEvents } from '@/lib/socket';
+import { authEvents, clearStoredAuth, getWebSocket, notificationEvents, joinEvents, teamEvents, userMemoryEvents } from '@/lib/socket';
+import { clearBrowserPush } from '@/lib/browser-push';
 import { useAgentBeanStore } from '@/lib/store';
 import type { JoinLinkInfo } from '@/lib/schema';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
@@ -128,7 +129,11 @@ function AccountPanel() {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      const endpoint = await clearBrowserPush();
+      if (endpoint) await notificationEvents().pushUnsubscribe({ endpoint });
+    } catch { /* Local sign-out must remain available when the server is offline. */ }
     clearStoredAuth();
     useAgentBeanStore.getState().setAuthToken(null);
     useAgentBeanStore.getState().setCurrentUser(null);

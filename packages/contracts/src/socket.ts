@@ -317,6 +317,14 @@ export const WEB_EVENTS = {
    * notice 只是可丢失唤醒；权威事实走 query/pull-change-feed。
    * review/remediation 仍走各自具名 lifecycle/remediation command。
    */
+  notifications: {
+    list: 'notifications:list',
+    markRead: 'notifications:mark-read',
+    changed: 'notifications:changed',
+    pushConfig: 'notifications:push-config',
+    pushSubscribe: 'notifications:push-subscribe',
+    pushUnsubscribe: 'notifications:push-unsubscribe',
+  },
   systemActivity: {
     command: 'system-activity:command',
     query: 'system-activity:query',

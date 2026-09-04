@@ -580,6 +580,7 @@ export interface ChannelArchiveRepository {
 }
 
 export interface ServerNextRepositories {
+  completionNotifications: import('./completion-notification-repository.js').CompletionNotificationRepository;
   management: ManagementRepositories;
   managementUnitOfWork: ManagementUnitOfWork;
   managementDispatchUnitOfWork: ManagementDispatchUnitOfWork;

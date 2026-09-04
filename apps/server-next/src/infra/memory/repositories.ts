@@ -1,3 +1,4 @@
+import { createMemoryCompletionNotifications } from './completion-notification-repository.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type {
   AgentRecord,
@@ -186,6 +187,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const promotionState = createPromotionGateMemoryState();
   const promotion = createInMemoryPromotionGateRepositories(promotionState);
   const lifecycle = createMemoryTaskLifecycleRepositories();
+  const completionNotifications = createMemoryCompletionNotifications();
   const systemActivityState = createSystemActivityMemoryState();
   const systemActivity = createInMemorySystemActivityRepositories(systemActivityState);
   const systemActivityUnitOfWork = createMemorySystemActivityUnitOfWork({
@@ -348,6 +350,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         return management.unitOfWork.run(async (managementRepositories) => {
           const dispatchSnapshot = new Map(dispatches);
           const taskSnapshot = new Map(tasks);
+          const completionNotificationSnapshot = completionNotifications.snapshot();
           const coordinationSnapshot = cloneTaskCoordinationMemoryState(taskCoordinationState);
           try {
             return await operation({ management: managementRepositories, dispatches: repositories.dispatches,
@@ -357,6 +360,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             for (const [id, dispatch] of dispatchSnapshot) dispatches.set(id, dispatch);
             tasks.clear();
             for (const [id, task] of taskSnapshot) tasks.set(id, task);
+            completionNotifications.restore(completionNotificationSnapshot);
             restoreTaskCoordinationMemoryState(taskCoordinationState, coordinationSnapshot);
             throw error;
           }
@@ -379,6 +383,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const jobSnapshot = new Map(channelCoordinationJobs);
         const decisionSnapshot = new Map(channelCoordinationDecisions);
         const taskSnapshot = new Map(tasks);
+        const completionNotificationSnapshot = completionNotifications.snapshot();
         const referenceSetSnapshot = new Map(projectReferenceSets);
         const referenceSelectionSnapshot = new Map(projectReferenceSelections);
         const referenceItemSnapshot = new Map(projectReferenceItems);
@@ -411,6 +416,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           for (const [id, decision] of decisionSnapshot) channelCoordinationDecisions.set(id, decision);
           tasks.clear();
           for (const [id, task] of taskSnapshot) tasks.set(id, task);
+          completionNotifications.restore(completionNotificationSnapshot);
           restoreMap(projectReferenceSets, referenceSetSnapshot);
           restoreMap(projectReferenceSelections, referenceSelectionSnapshot);
           restoreMap(projectReferenceItems, referenceItemSnapshot);
@@ -423,6 +429,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
       management.unitOfWork.run(async (managementRepositories) => {
         const taskSnapshot = new Map(tasks);
+        const completionNotificationSnapshot = completionNotifications.snapshot();
         const taskCoordinationDispatchSnapshot = new Map(dispatches);
         const coordinationSnapshot = cloneTaskCoordinationMemoryState(taskCoordinationState);
         const promotionSnapshot = clonePromotionGateMemoryState(promotionState);
@@ -462,6 +469,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         } catch (error) {
           tasks.clear();
           for (const [id, task] of taskSnapshot) tasks.set(id, task);
+          completionNotifications.restore(completionNotificationSnapshot);
           dispatches.clear();
           for (const [id, dispatch] of taskCoordinationDispatchSnapshot) dispatches.set(id, dispatch);
           restoreTaskCoordinationMemoryState(taskCoordinationState, coordinationSnapshot);
@@ -1323,6 +1331,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
         const updated = { ...message, meta: input.meta };
         messages.set(input.messageId, updated);
+        if (updated.meta?.completionNotificationReady === true && message.meta?.completionNotificationReady !== true
+          && typeof updated.meta.dispatchId === 'string') {
+          await completionNotifications.repository.enqueue({
+            id: 'dispatch:' + updated.meta.dispatchId, teamId: updated.teamId, taskId: null,
+            dispatchId: updated.meta.dispatchId, revision: 1, createdAt: updated.createdAt, retryAt: 0,
+          });
+        }
         return updated;
       },
       async edit(input) {
@@ -1963,6 +1978,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           tasks.delete(`${task.id}#${task.revision}`);
         }
         tasks.set(`${updated.id}#${updated.revision}`, updated);
+        if (updated.status === 'in_review' && task.status !== 'in_review') {
+          await completionNotifications.repository.enqueue({
+            id: 'task:' + updated.id + ':' + updated.revision + ':' + updated.updatedAt,
+            teamId: updated.teamId, taskId: updated.id, dispatchId: null,
+            revision: updated.revision, createdAt: updated.updatedAt, retryAt: 0,
+          });
+        }
         return updated;
       },
       async updateAtRevision(input) {
@@ -3106,6 +3128,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
     },
     experiencePack: createMemoryExperiencePackRepositories(),
+    completionNotifications: completionNotifications.repository,
     systemActivity,
     systemActivityUnitOfWork,
     teamPiAuthorityMigrations: {

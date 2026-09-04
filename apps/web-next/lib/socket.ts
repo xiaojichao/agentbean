@@ -44,6 +44,7 @@ import {
   artifactUploadUrl as buildArtifactUploadUrl,
 } from './artifact-upload';
 import { clearChannelDocumentDrafts } from './channel-document-drafts';
+import { clearBrowserPush } from './browser-push';
 
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL;
 const TOKEN_STORAGE_KEY = 'agentbean.token';
@@ -84,6 +85,7 @@ export function setStoredDeviceToken(deviceToken: string): void {
 
 export function clearStoredAuth(): void {
   if (typeof window === 'undefined') return;
+  void clearBrowserPush().catch(() => undefined);
   clearChannelDocumentDrafts(window.localStorage);
   window.localStorage.removeItem(TOKEN_STORAGE_KEY);
   window.localStorage.removeItem(DEVICE_TOKEN_STORAGE_KEY);
@@ -1010,6 +1012,32 @@ export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
 }
 
 /** #998 System activity query/command 客户端入口。 */
+export function notificationEvents(socket: Socket = getWebSocket()) {
+  return {
+    pushConfig() {
+      return emitWithTimeout(socket, WEB_EVENTS.notifications.pushConfig, {}) as Promise<{ ok: boolean; publicKey?: string | null }>;
+    },
+    pushSubscribe(input: { subscription: PushSubscriptionJSON }) {
+      return emitWithTimeout(socket, WEB_EVENTS.notifications.pushSubscribe, input) as Promise<{ ok: boolean; error?: string }>;
+    },
+    pushUnsubscribe(input: { endpoint: string }) {
+      return emitWithTimeout(socket, WEB_EVENTS.notifications.pushUnsubscribe, input) as Promise<{ ok: boolean; error?: string }>;
+    },
+    list(input: { teamId: string }) {
+      return emitWithTimeout(socket, WEB_EVENTS.notifications.list, input) as Promise<{
+        ok: boolean; items?: import('@agentbean/contracts').CompletionNotificationDto[]; unreadCount?: number; error?: string;
+      }>;
+    },
+    markRead(input: { teamId: string; id: string }) {
+      return emitWithTimeout(socket, WEB_EVENTS.notifications.markRead, input) as Promise<{ ok: boolean; error?: string }>;
+    },
+    onChanged(handler: (wake: import('@agentbean/contracts').CompletionNotificationWake) => void) {
+      socket.on(WEB_EVENTS.notifications.changed, handler);
+      return () => { socket.off(WEB_EVENTS.notifications.changed, handler); };
+    },
+  };
+}
+
 export function systemActivityEvents(socket: Socket = getWebSocket()) {
   return {
     query(input: { queryName: string; payload: unknown; userId: string; teamId: string }) {

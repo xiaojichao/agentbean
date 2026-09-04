@@ -9,6 +9,7 @@ import { useAgentBeanStore } from '@/lib/store';
 import { writeStoredTeamPath } from '@/lib/team-path';
 import { PI_CONFIGURATION_READINESS_CHANGED_EVENT } from '@/lib/pi-configuration-readiness';
 import type { TeamSummary } from '@/lib/schema';
+import { CompletionNotifications } from './completion-notifications';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -173,31 +174,21 @@ export function Sidebar() {
 
       {/* Bottom utilities */}
       <div className="relative flex flex-col items-center gap-1 px-2 py-3">
-        <RailButton
-          icon={<Bell size={19} />}
-          label="提醒"
-          active={showNotifications}
-          badge={isAdmin && piReadiness?.status === 'attention_required'}
-          onClick={(event) => {
+        <CompletionNotifications
+          teamId={currentTeamId}
+          teamPath={np}
+          userId={currentUser?.id}
+          connected={conn === 'open'}
+          open={showNotifications}
+          piAttention={isAdmin && piReadiness?.status === 'attention_required'}
+          onClose={() => setShowNotifications(false)}
+          onToggle={(event) => {
             event.stopPropagation();
             setShowNotifications((value) => !value);
             setShowTeams(false);
             setShowHelp(false);
           }}
         />
-        {showNotifications && (
-          <div className="absolute bottom-24 left-full z-50 ml-2 w-72 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-lg" onClick={(event) => event.stopPropagation()} data-smoke="notifications-menu">
-            <div className="border-b border-neutral-200 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">提醒</div>
-            {isAdmin && piReadiness?.status === 'attention_required' ? (
-              <Link href={`/${np}/dashboard/pi`} className="flex items-center gap-2 px-3 py-3 text-sm font-medium text-amber-900 hover:bg-amber-50" data-smoke="pi-configuration-readiness-alert">
-                <Bell size={15} />
-                PI 需要处理
-              </Link>
-            ) : (
-              <div className="px-3 py-5 text-center text-xs text-neutral-400">暂无提醒</div>
-            )}
-          </div>
-        )}
         <RailButton
           icon={<CircleHelp size={19} />}
           label="帮助和资源"

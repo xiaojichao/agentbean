@@ -241,9 +241,8 @@ export default function TasksPage() {
 
   useEffect(() => {
     const targetChannelId = threadChannelId;
-    if (!targetChannelId || conn !== 'open') return;
+    if (!targetChannelId || !currentTeamId || conn !== 'open') return;
     const socket = getWebSocket();
-    void channelEvents(socket).join(currentTeamId, targetChannelId);
     const onHistory = (payload: { channelId: string; messages: ChatMessage[] }) => {
       if (payload.channelId === targetChannelId) applyChannelHistory(targetChannelId, payload.messages);
     };
@@ -252,11 +251,12 @@ export default function TasksPage() {
     };
     socket.on('channel:history', onHistory);
     socket.on('channel:message', onMessage);
+    void channelEvents(socket).join(currentTeamId, targetChannelId);
     return () => {
       socket.off('channel:history', onHistory);
       socket.off('channel:message', onMessage);
     };
-  }, [threadChannelId, conn, applyChannelHistory, appendMessage]);
+  }, [threadChannelId, currentTeamId, conn, applyChannelHistory, appendMessage]);
 
   const participants = useMemo(() => {
     const map = new Map<string, Participant>();
@@ -331,13 +331,13 @@ export default function TasksPage() {
     ? (messagesByChannel[threadChannelId] ?? []).filter((msg) => !shouldHideSystemMessage(msg))
     : [];
   const selectedTask = useMemo(() => {
-    if (!threadTarget) return null;
+    if (!threadTarget) return tasks.find((task) => task.id === searchParams.get('task')) ?? null;
     const direct = tasks.find((task) => task.channelId === threadTarget.channelId && task.id === threadTarget.itemId);
     if (direct) return direct;
     const root = threadMessages.find((msg) => msg.id === threadTarget.itemId);
     const taskId = root ? metaTaskId(root) : null;
     return taskId ? tasks.find((task) => task.id === taskId) ?? null : null;
-  }, [tasks, threadMessages, threadTarget]);
+  }, [tasks, threadMessages, threadTarget, searchParams]);
 
   // #1064：「交给 Agent 处理」预填最近交付包（listOutputPackages 按 created_at DESC，首项=最新）。
   const [taskPackages, setTaskPackages] = useState<OutputPackageSummaryDto[]>([]);
@@ -409,6 +409,7 @@ export default function TasksPage() {
   const closeThread = () => {
     const params = new URLSearchParams(searchParams.toString());
     params.delete('thread');
+    params.delete('task');
     setThreadInput('');
     setThreadAttachments([]);
     router.replace(`/${np}/tasks${params.toString() ? `?${params.toString()}` : ''}`, { scroll: false });

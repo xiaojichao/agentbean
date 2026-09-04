@@ -826,6 +826,11 @@ export function registerWebSocketHandlers(
   // #929 System activity command/query（audience-scoped projection / attention / change feed）。
   bind(socket, WEB_EVENTS.systemActivity.command, app, 'dispatchSystemActivityCommand', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.systemActivity.query, app, 'dispatchSystemActivityQuery', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.notifications.list, app, 'listCompletionNotifications', undefined, { authenticatedUser: options.authenticatedUser, requireAuthenticatedUser: true });
+  bind(socket, WEB_EVENTS.notifications.markRead, app, 'markCompletionNotificationRead', undefined, { authenticatedUser: options.authenticatedUser, requireAuthenticatedUser: true });
+  bind(socket, WEB_EVENTS.notifications.pushConfig, app, 'getBrowserPushConfig', undefined, { authenticatedUser: options.authenticatedUser, requireAuthenticatedUser: true });
+  bind(socket, WEB_EVENTS.notifications.pushSubscribe, app, 'subscribeBrowserPush', undefined, { authenticatedUser: options.authenticatedUser, requireAuthenticatedUser: true });
+  bind(socket, WEB_EVENTS.notifications.pushUnsubscribe, app, 'unsubscribeBrowserPush', undefined, { authenticatedUser: options.authenticatedUser, requireAuthenticatedUser: true });
   bind(socket, WEB_EVENTS.piAuthorityCutover.command, app, 'dispatchPiAuthorityCutoverCommand', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.piAuthorityCutover.query, app, 'dispatchPiAuthorityCutoverQuery', undefined, { authenticatedUser: options.authenticatedUser });
   // #1014 Task remediation 具名 command（retry-attempt 等）。

@@ -1023,7 +1023,7 @@ for (const variant of variants) {
       const dispatchId = 'dispatch-historical-package';
       await repositories.messages.append({
         id: 'msg-historical-package', teamId, channelId, threadId: 'msg-historical-package',
-        senderKind: 'user', senderId: userId, body: '生成周报', createdAt: 5,
+        senderKind: 'human', senderId: userId, body: '生成周报', createdAt: 5,
       });
       await repositories.dispatches.create({
         id: dispatchId, teamId, channelId, messageId: 'msg-historical-package', agentId,
@@ -1052,7 +1052,8 @@ for (const variant of variants) {
       expect(original.ok).toBe(true);
       if (!original.ok) return;
       expect(original.message?.meta?.outputPackageCard).toBeUndefined();
-      const { dispatchResultFingerprint: _legacyFingerprint, ...legacyMeta } = original.message?.meta ?? {};
+      // 模拟旧结果在最终确认前中断；恢复后才生成完成提醒。
+      const { dispatchResultFingerprint: _legacyFingerprint, completionNotificationReady: _ready, ...legacyMeta } = original.message?.meta ?? {};
       await repositories.messages.updateMeta({ messageId: original.message!.id, meta: legacyMeta });
 
       await commitDelivery(seedValue, 'publish-historical-package', [
@@ -1070,6 +1071,11 @@ for (const variant of variants) {
       const dispatchMessages = await repositories.messages.listByDispatch(dispatchId);
       const claimMessage = dispatchMessages.find((message) => message.id === 'msg-historical-package-claim');
       const deliveryMessage = dispatchMessages.find((message) => message.id === original.message?.id);
+      expect(deliveryMessage?.meta?.completionNotificationReady).toBe(true);
+      await app.processCompletionNotifications();
+      expect(await app.listCompletionNotifications({ teamId, userId })).toMatchObject({
+        ok: true, unreadCount: 1, items: [{ kind: 'request_completed', messageId: original.message!.id }],
+      });
       expect(claimMessage?.meta?.outputPackageCard).toBeUndefined();
       expect(deliveryMessage?.id).toBe(original.message?.id);
       expect(deliveryMessage?.meta?.outputPackageCard).toMatchObject({
