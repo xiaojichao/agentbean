@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const CODEX_REVIEWER = 'chatgpt-codex-connector';
+const CODEX_SUMMARY_MARKER = '<!-- codex-pull-request-review-summary -->';
 const PASSING_CHECK_CONCLUSIONS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 
 /** 替代 review 评论格式：review-provider + Reviewed commit + 结论（Codex 额度不足时使用）。 */
@@ -84,11 +85,17 @@ query($owner: String!, $name: String!, $number: Int!) {
         }
       }
       comments(last: 100) {
+        pageInfo { hasPreviousPage }
         nodes {
           createdAt
-          author { login }
+          updatedAt
+          author { login __typename }
           body
         }
+      }
+      reactions(first: 100) {
+        pageInfo { hasNextPage }
+        nodes { content createdAt user { login } }
       }
     }
   }
@@ -122,8 +129,46 @@ function alternativeReviewFromComment(comment) {
   return { commit, at: comment.createdAt, provider };
 }
 
+// New Codex reviews update one summary comment instead of submitting a Review.
+// A completed table alone is not approval: require a fresh bot thumbs-up too.
+function latestCodexSummary(pr) {
+  const comment = (pr.comments?.nodes ?? [])
+    .filter((item) => item.author?.login === CODEX_REVIEWER
+      && item.author?.__typename === 'Bot'
+      && item.body?.trimStart().startsWith(CODEX_SUMMARY_MARKER))
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
+  if (!comment) return null;
+  const unconfirmed = { confirmed: false };
+  if (pr.comments?.pageInfo?.hasPreviousPage !== false
+    || pr.reactions?.pageInfo?.hasNextPage !== false) return unconfirmed;
+
+  const table = comment.body.split('<details>')[0];
+  const tableLines = table.split('\n').filter((line) => line.startsWith('|'));
+  if (tableLines[0] !== '| Review | Status | Commit | Review trigger |'
+    || !/^\|(?:\s*:?-+:?\s*\|){4}$/.test(tableLines[1] ?? '')) return unconfirmed;
+  const rows = tableLines.slice(2);
+  if (rows.filter((line) => line.includes('**Code Review**')).length !== 1) return unconfirmed;
+  const completed = rows.map((line) => line.match(
+    /^\|[^|]*\*\*[^*]*Review\*\*[^|]*\|\s*✅\s*\*\*Completed\*\*\s*<relative-time datetime="([^"]+)">[^<]*<\/relative-time>\s*\|\s*`([0-9a-f]{7,40})`\s*\|[^|]*\|\s*$/,
+  ));
+  if (completed.some((row) => !row || !Number.isFinite(Date.parse(row[1])))) return unconfirmed;
+  const commit = completed[0][2];
+  if (completed.some((row) => row[2] !== commit)) return unconfirmed;
+  const completedAt = Math.max(...completed.map((row) => Date.parse(row[1])));
+  if (!Number.isFinite(Date.parse(comment.updatedAt))
+    || Date.parse(comment.updatedAt) < Math.floor(completedAt / 1000) * 1000) return unconfirmed;
+  const botReactions = (pr.reactions?.nodes ?? []).filter((reaction) =>
+    [CODEX_REVIEWER, `${CODEX_REVIEWER}[bot]`].includes(reaction.user?.login));
+  if (botReactions.some((reaction) => reaction.content === 'EYES')
+    || !botReactions.some((reaction) => reaction.content === 'THUMBS_UP'
+      && Date.parse(reaction.createdAt) >= Math.floor(completedAt / 1000) * 1000)) return unconfirmed;
+  return { confirmed: true, commit, at: new Date(completedAt).toISOString(), provider: 'codex-cloud-summary' };
+}
+
 export function collectReviewCandidates(pr) {
+  const summary = latestCodexSummary(pr);
   const candidates = [
+    ...(summary?.confirmed ? [summary] : []),
     ...(pr.reviews?.nodes ?? [])
       .filter((review) => review.author?.login === CODEX_REVIEWER)
       .map((review) => ({ commit: review.commit?.oid, at: review.submittedAt, provider: 'codex-cloud' })),
@@ -140,7 +185,7 @@ export function collectReviewCandidates(pr) {
   const codexReviewLimit = (pr.comments?.nodes ?? []).some(
     (comment) => comment.author?.login === CODEX_REVIEWER && CODEX_LIMIT_RE.test(comment.body ?? ''),
   );
-  return { candidates, codexReviewLimit };
+  return { candidates, codexReviewLimit, summary };
 }
 
 export function matchesHead(candidate, headOid) {
@@ -202,7 +247,7 @@ export function evaluatePullRequest(pr, now = new Date(), {
     request.requestedReviewer?.login ?? request.requestedReviewer?.slug ?? 'unknown',
   );
 
-  const { candidates: codexReviewCandidates, codexReviewLimit } = collectReviewCandidates(pr);
+  const { candidates: codexReviewCandidates, codexReviewLimit, summary } = collectReviewCandidates(pr);
   const currentCodexReview = codexReviewCandidates
     .filter((item) => matchesHead(item.commit, headOid))
     .sort((left, right) => new Date(right.at) - new Date(left.at))[0] ?? null;
@@ -221,6 +266,12 @@ export function evaluatePullRequest(pr, now = new Date(), {
   const codexSatisfied = Boolean(currentCodexReview || codexWaived);
 
   const blockers = [];
+  if (stage === 'merge' && summary && !summary.confirmed) {
+    blockers.push({
+      code: 'CODEX_SUMMARY_UNCONFIRMED',
+      detail: '最新 Codex 审核汇总尚未完成，或缺少同轮机器人确认及完整查询结果',
+    });
+  }
   const truncatedConnections = [
     commit?.statusCheckRollup?.contexts?.pageInfo?.hasNextPage ? 'checks' : null,
     pr.reviewThreads?.pageInfo?.hasNextPage ? 'review threads' : null,

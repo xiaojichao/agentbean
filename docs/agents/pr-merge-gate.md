@@ -31,6 +31,12 @@ npm run check:pr-merge-readiness -- <PR号> --json
 
 该命令不会自行合并 PR。修复 **代码** Review finding 并 push 新提交后，必须重新触发 Review；仅文档路径的后续提交可沿用上次 Codex Review。
 
+### 新版 Codex 审核汇总
+
+除了正式 Review 和旧版 `Reviewed commit` 评论，门禁也识别 Codex 机器人发布的 `codex-pull-request-review-summary` 汇总。此路径要求最新汇总中的审核行全部完成并指向同一提交，同时存在不早于审核完成时间的机器人 👍，且没有表示审核仍在运行的 👀。SHA 仍需覆盖最新 head（仅文档增量沿用下述豁免），CI、未解决线程和仓库 Review 要求仍独立校验。
+
+只看到 👍、非机器人评论、运行中或格式不完整的汇总、过期点赞，以及评论或 reaction 查询被截断，都不能证明本轮审核完成。门禁使用汇总中的完成时间记录审核耗时，而非汇总最初创建的时间。
+
 ### Codex Review 文档豁免
 
 合并门禁对 `chatgpt-codex-connector` 的 head 覆盖要求支持路径豁免，避免「只改 CHANGELOG / ADR 也再等 10–30 分钟」：

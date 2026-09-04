@@ -128,6 +128,70 @@ test('accepts a clean Codex comment that names the current short SHA', () => {
   assert.equal(result.review.codexCurrent, true);
 });
 
+function summaryFixture() {
+  return fixture({
+    reviews: { nodes: [] },
+    comments: {
+      pageInfo: { hasPreviousPage: false },
+      nodes: [{
+        author: { login: 'chatgpt-codex-connector', __typename: 'Bot' },
+        createdAt: '2026-07-15T00:06:00Z',
+        updatedAt: '2026-07-15T00:10:00Z',
+        body: '<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n'
+          + '| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n'
+          + '| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-07-15T00:10:00.123Z">2026-07-15T00:10:00.123Z</relative-time> | `aaaaaaa` | Draft marked ready |\n',
+      }],
+    },
+    reactions: {
+      pageInfo: { hasNextPage: false },
+      nodes: [{ user: { login: 'chatgpt-codex-connector[bot]' }, content: 'THUMBS_UP', createdAt: '2026-07-15T00:10:00Z' }],
+    },
+  });
+}
+
+test('accepts the current Codex summary plus a fresh bot reaction, using completion time', () => {
+  const result = evaluatePullRequest(summaryFixture());
+  assert.equal(result.ready, true);
+  assert.equal(result.review.codexCurrent, true);
+  assert.equal(result.review.codexReviewedAt, '2026-07-15T00:10:00.123Z');
+});
+
+for (const [name, mutate] of [
+  ['human summary', (pr) => { pr.comments.nodes[0].author = { login: 'xiaojichao', __typename: 'User' }; }],
+  ['spoofed bot identity', (pr) => { pr.comments.nodes[0].author.__typename = 'User'; }],
+  ['missing marker', (pr) => { pr.comments.nodes[0].body = pr.comments.nodes[0].body.replace('<!-- codex-pull-request-review-summary -->', ''); }],
+  ['running review', (pr) => { pr.comments.nodes[0].body = pr.comments.nodes[0].body.replace('✅ **Completed**', '🔄 **Running** since'); }],
+  ['failed review', (pr) => { pr.comments.nodes[0].body = pr.comments.nodes[0].body.replace('✅ **Completed**', '❌ **Failed**'); }],
+  ['older commit', (pr) => { pr.comments.nodes[0].body = pr.comments.nodes[0].body.replace('`aaaaaaa`', '`bbbbbbb`'); }],
+  ['missing timestamp', (pr) => { pr.comments.nodes[0].body = pr.comments.nodes[0].body.replace(/<relative-time[^>]*>[^<]*<\/relative-time>/, ''); }],
+  ['missing reaction', (pr) => { pr.reactions.nodes = []; }],
+  ['human thumbs up', (pr) => { pr.reactions.nodes[0].user.login = 'xiaojichao'; }],
+  ['stale thumbs up', (pr) => { pr.reactions.nodes[0].createdAt = '2026-07-15T00:09:59Z'; }],
+  ['bot still reviewing', (pr) => { pr.reactions.nodes.push({ user: { login: 'chatgpt-codex-connector[bot]' }, content: 'EYES' }); }],
+  ['truncated comments', (pr) => { pr.comments.pageInfo.hasPreviousPage = true; }],
+  ['truncated reactions', (pr) => { pr.reactions.pageInfo.hasNextPage = true; }],
+  ['missing pagination evidence', (pr) => { delete pr.reactions.pageInfo; }],
+  ['unknown review row', (pr) => { pr.comments.nodes[0].body += '| Security Review | Running | `aaaaaaa` | Manual |\n'; }],
+  ['unresolved finding', (pr) => { pr.reviewThreads.nodes = [{ id: 'finding', isResolved: false }]; }],
+  ['requested changes', (pr) => { pr.reviewDecision = 'CHANGES_REQUESTED'; }],
+]) {
+  test(`does not accept a summary with ${name}`, () => {
+    const pr = summaryFixture();
+    mutate(pr);
+    assert.equal(evaluatePullRequest(pr).ready, false);
+  });
+}
+
+test('a newer pending summary cannot fall back to an older completion or formal review', () => {
+  const pr = summaryFixture();
+  pr.reviews = fixture().reviews;
+  const newer = structuredClone(pr.comments.nodes[0]);
+  newer.updatedAt = '2026-07-15T00:11:00Z';
+  newer.body = newer.body.replace('✅ **Completed**', '🔄 **Running** since');
+  pr.comments.nodes.push(newer);
+  assert.ok(evaluatePullRequest(pr).blockers.some((item) => item.code === 'CODEX_SUMMARY_UNCONFIRMED'));
+});
+
 test('blocks when Codex Review only covers an older commit', () => {
   const result = evaluatePullRequest(fixture({
     reviews: {
