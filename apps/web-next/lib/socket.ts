@@ -1023,9 +1023,10 @@ export function notificationEvents(socket: Socket = getWebSocket()) {
     pushUnsubscribe(input: { endpoint: string }) {
       return emitWithTimeout(socket, WEB_EVENTS.notifications.pushUnsubscribe, input) as Promise<{ ok: boolean; error?: string }>;
     },
-    list(input: { teamId: string }) {
+    list(input: { teamId: string; cursor?: import('@agentbean/contracts').CompletionNotificationCursor }) {
       return emitWithTimeout(socket, WEB_EVENTS.notifications.list, input) as Promise<{
         ok: boolean; items?: import('@agentbean/contracts').CompletionNotificationDto[]; unreadCount?: number; error?: string;
+        nextCursor?: import('@agentbean/contracts').CompletionNotificationCursor | null;
       }>;
     },
     markRead(input: { teamId: string; id: string }) {

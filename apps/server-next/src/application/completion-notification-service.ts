@@ -1,4 +1,4 @@
-import type { CompletionNotificationDto, CompletionNotificationWake } from '../../../../packages/contracts/src/completion-notification.js';
+import { COMPLETION_NOTIFICATION_PAGE_SIZE, type CompletionNotificationCursor, type CompletionNotificationDto, type CompletionNotificationWake } from '../../../../packages/contracts/src/completion-notification.js';
 import type { ServerNextRepositories } from './repositories.js';
 import type { CompletionSource } from './completion-notification-repository.js';
 import { ensureUserCanViewChannel } from './channel-access.js';
@@ -71,7 +71,14 @@ export function createCompletionNotificationService(repositories: ServerNextRepo
     return await canRead(item) ? [item] : [];
   }
 
+  async function get(input: { teamId: string; userId: string; id: string }) {
+    if (typeof input.id !== 'string' || !input.id || input.id.length > 1024) return null;
+    const item = await store.get(input.teamId, input.userId, input.id);
+    return item && await canRead(item) ? item : null;
+  }
+
   return {
+    get,
     process(): Promise<CompletionNotificationWake[]> {
       if (processing) return processing;
       processing = repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
@@ -94,18 +101,38 @@ export function createCompletionNotificationService(repositories: ServerNextRepo
       }).finally(() => { processing = null; });
       return processing;
     },
-    async list(input: { teamId: string; userId: string }) {
+    async list(input: { teamId: string; userId: string; cursor?: CompletionNotificationCursor }) {
       if (!await repositories.teams.isMember(input.teamId, input.userId)) return { ok: false as const, error: 'FORBIDDEN' };
-      const rows = await store.list(input.teamId, input.userId);
+      const cursor = input.cursor;
+      if (cursor !== undefined && (!cursor || typeof cursor !== 'object' || !Number.isSafeInteger(cursor.createdAt)
+        || cursor.createdAt < 0 || typeof cursor.id !== 'string' || !cursor.id || cursor.id.length > 1024)) {
+        return { ok: false as const, error: 'INVALID_CURSOR' };
+      }
+      await store.pruneRead(input.teamId, input.userId, now());
+      const rows = await store.list(input.teamId, input.userId, cursor);
+      const hasMore = rows.length > COMPLETION_NOTIFICATION_PAGE_SIZE;
+      const page = rows.slice(0, COMPLETION_NOTIFICATION_PAGE_SIZE);
+      const last = page.at(-1);
+      // 按权限范围聚合未读数，同一频道/任务只校验一次，不加载历史正文。
+      const access = new Map<string, Promise<boolean>>();
+      const visible = (row: { channelId?: string; taskId?: string }) => {
+        const key = JSON.stringify([row.channelId ?? null, row.taskId ?? null]);
+        if (!access.has(key)) access.set(key, canRead({ ...row, teamId: input.teamId, recipientId: input.userId }));
+        return access.get(key)!;
+      };
       const items: CompletionNotificationDto[] = [];
-      for (const row of rows) if (await canRead(row)) items.push(row);
-      return { ok: true as const, items, unreadCount: items.filter((item) => item.readAt === null).length };
+      for (const row of page) if (await visible(row)) items.push(row);
+      let unreadCount = 0;
+      for (const group of await store.unreadScopes(input.teamId, input.userId)) if (await visible(group)) unreadCount += group.count;
+      return { ok: true as const, items, unreadCount,
+        nextCursor: hasMore && last ? { createdAt: last.createdAt, id: last.id } : null };
     },
     async markRead(input: { teamId: string; userId: string; id: string }) {
       if (typeof input.id !== 'string' || !input.id) return { ok: false as const, error: 'INVALID_NOTIFICATION' };
-      const item = (await store.list(input.teamId, input.userId)).find((row) => row.id === input.id);
-      if (!item || !await canRead(item)) return { ok: false as const, error: 'NOT_FOUND' };
+      const item = await get(input);
+      if (!item) return { ok: false as const, error: 'NOT_FOUND' };
       await store.markRead(input.teamId, input.userId, input.id, now());
+      await store.pruneRead(input.teamId, input.userId, now());
       return { ok: true as const };
     },
   };

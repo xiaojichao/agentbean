@@ -341,6 +341,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   if (sqliteTableExists(db, 'tasks') && sqliteTableExists(db, 'messages')) {
     applyMigration(db, 'team/0088_completion_notifications.sql');
     applyMigration(db, 'team/0089_browser_push.sql');
+    applyMigration(db, 'team/0090_notification_retention.sql');
   }
 }
 

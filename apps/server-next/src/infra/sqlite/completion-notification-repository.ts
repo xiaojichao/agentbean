@@ -1,4 +1,4 @@
-import type { CompletionNotificationDto } from '../../../../../packages/contracts/src/completion-notification.js';
+import { COMPLETION_NOTIFICATION_PAGE_SIZE, type CompletionNotificationDto } from '../../../../../packages/contracts/src/completion-notification.js';
 import type { CompletionNotificationRepository, CompletionSource } from '../../application/completion-notification-repository.js';
 import type { SqliteDatabase } from './repositories.js';
 import type { BrowserPushSubscription, PushDelivery } from '../../application/push-notification-repository.js';
@@ -19,6 +19,9 @@ export function createSqliteCompletionNotifications(db: SqliteDatabase): Complet
     },
     async countPushSubscriptions(userId) {
       return (db.prepare('SELECT COUNT(*) AS count FROM browser_push_subscriptions WHERE user_id=?').get(userId) as { count: number }).count;
+    },
+    async prunePushSubscriptions(userId, now) {
+      db.prepare('DELETE FROM browser_push_subscriptions WHERE user_id=? AND expires_at<=?').run(userId, now);
     },
     async claimPush(now, limit) {
       const rows = db.prepare(`SELECT n.payload_json AS notification_json, s.payload_json AS subscription_json,
@@ -68,10 +71,29 @@ export function createSqliteCompletionNotifications(db: SqliteDatabase): Complet
         throw error;
       }
     },
-    async list(teamId, recipientId) {
-      const rows = db.prepare('SELECT payload_json,read_at FROM completion_notifications WHERE team_id=? AND recipient_id=? ORDER BY created_at DESC,id')
-        .all(teamId, recipientId) as { payload_json: string; read_at: number | null }[];
+    async list(teamId, recipientId, cursor) {
+      const rows = db.prepare(`SELECT payload_json,read_at FROM completion_notifications WHERE team_id=? AND recipient_id=?
+        ${cursor ? 'AND (created_at<? OR (created_at=? AND id>?))' : ''}
+        ORDER BY created_at DESC,id LIMIT ?`)
+        .all(teamId, recipientId, ...(cursor ? [cursor.createdAt, cursor.createdAt, cursor.id] : []), COMPLETION_NOTIFICATION_PAGE_SIZE + 1) as { payload_json: string; read_at: number | null }[];
       return rows.map((row) => ({ ...JSON.parse(row.payload_json) as CompletionNotificationDto, readAt: row.read_at }));
+    },
+    async get(teamId, recipientId, id) {
+      const row = db.prepare('SELECT payload_json,read_at FROM completion_notifications WHERE id=? AND team_id=? AND recipient_id=?')
+        .get(id, teamId, recipientId) as { payload_json: string; read_at: number | null } | undefined;
+      return row ? { ...JSON.parse(row.payload_json) as CompletionNotificationDto, readAt: row.read_at } : null;
+    },
+    async unreadScopes(teamId, recipientId) {
+      return db.prepare(`SELECT json_extract(payload_json,'$.channelId') AS channelId,
+        json_extract(payload_json,'$.taskId') AS taskId, COUNT(*) AS count FROM completion_notifications
+        WHERE team_id=? AND recipient_id=? AND read_at IS NULL GROUP BY channelId,taskId`)
+        .all(teamId, recipientId) as Array<{ channelId?: string; taskId?: string; count: number }>;
+    },
+    async pruneRead(teamId, recipientId, now) {
+      db.prepare(`DELETE FROM completion_notifications WHERE team_id=? AND recipient_id=? AND read_at IS NOT NULL
+        AND (read_at<? OR id IN (SELECT id FROM completion_notifications WHERE team_id=? AND recipient_id=? AND read_at IS NOT NULL
+          ORDER BY read_at DESC,id LIMIT -1 OFFSET 100))`)
+        .run(teamId, recipientId, now - 30 * 86400_000, teamId, recipientId);
     },
     async markRead(teamId, recipientId, id, now) {
       const result = db.prepare('UPDATE completion_notifications SET read_at=COALESCE(read_at,?) WHERE id=? AND team_id=? AND recipient_id=?')

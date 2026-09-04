@@ -1,7 +1,7 @@
 import { createCompletionNotificationService } from './completion-notification-service.js';
 import { createPushNotificationService } from './push-notification-service.js';
 import type { WebPushSender } from '../infra/web-push.js';
-import type { CompletionNotificationDto, CompletionNotificationWake } from '../../../../packages/contracts/src/completion-notification.js';
+import type { CompletionNotificationDto, CompletionNotificationWake, CompletionNotificationCursor } from '../../../../packages/contracts/src/completion-notification.js';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AgentInvocationRecordDto } from '../../../../packages/contracts/src/index.js';
 import type {
@@ -455,7 +455,7 @@ function dummyContentStore(): ArtifactContentStore {
 }
 
 export interface ServerNextUseCases {
-  listCompletionNotifications(input: { userId: string; teamId: string }): Promise<{ ok: true; items: CompletionNotificationDto[]; unreadCount: number } | { ok: false; error: string }>;
+  listCompletionNotifications(input: { userId: string; teamId: string; cursor?: CompletionNotificationCursor }): Promise<{ ok: true; items: CompletionNotificationDto[]; unreadCount: number; nextCursor: CompletionNotificationCursor | null } | { ok: false; error: string }>;
   markCompletionNotificationRead(input: { userId: string; teamId: string; id: string }): Promise<{ ok: boolean; error?: string }>;
   processCompletionNotifications(): Promise<CompletionNotificationWake[]>;
   getBrowserPushConfig(): Promise<{ ok: true; publicKey: string | null }>;

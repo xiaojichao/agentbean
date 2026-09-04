@@ -18,6 +18,7 @@ export interface PushNotificationRepository {
   savePushSubscription(subscription: BrowserPushSubscription): Promise<boolean>;
   deletePushSubscription(id: string, userId: string): Promise<void>;
   countPushSubscriptions(userId: string): Promise<number>;
+  prunePushSubscriptions(userId: string, now: number): Promise<void>;
   /** Reserve a bounded batch for 60s before network I/O; callers own the DB transaction. */
   claimPush(now: number, limit: number): Promise<PushDelivery[]>;
   finishPush(notificationId: string, subscriptionId: string, retryAt: number | null): Promise<void>;

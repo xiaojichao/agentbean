@@ -107,6 +107,43 @@ describe.each(['memory', 'sqlite'] as const)('Web Push %s', (variant) => {
     for (let i = 1; i < 5; i++) expect(await store.claimPush(102 + 60_000 * i, 10)).toHaveLength(1);
     expect(await store.claimPush(400_000, 10)).toHaveLength(0);
   });
+  test('20 个端点过期后可重新订阅；清理投递记录且事务失败能回滚', async () => {
+    const { repos } = await create(); await seed(repos);
+    let now = 100;
+    const service = createPushNotificationService(repos, () => now, { publicKey: 'public', send: vi.fn() });
+    const subs = Array.from({ length: 20 }, () => ({ ...subscription(), expirationTime: 200 }));
+    for (const sub of subs) expect((await service.subscribe({ userId: 'user', subscription: sub })).ok).toBe(true);
+    expect(await service.subscribe({ userId: 'user', subscription: subscription() })).toMatchObject({ error: 'SUBSCRIPTION_LIMIT' });
+    await add(repos, 'pending', 101);
+    const store = repos.completionNotifications;
+    expect(await store.claimPush(102, 20)).toHaveLength(20);
+    await expect(repos.taskCoordinationUnitOfWork.run(async () => {
+      await store.prunePushSubscriptions('user', 200);
+      throw new Error('rollback');
+    })).rejects.toThrow('rollback');
+    expect(await store.countPushSubscriptions('user')).toBe(20);
+    expect(await store.claimPush(103, 20)).toHaveLength(0);
+    now = 200;
+    expect(await service.subscribe({ userId: 'user', subscription: subscription() })).toEqual({ ok: true });
+    expect(await store.countPushSubscriptions('user')).toBe(1);
+    // 用同一端点重新建立测试订阅，旧的预留记录必须已删除。
+    await store.savePushSubscription({ id: pushSubscriptionId(subs[0].endpoint), userId: 'user', endpoint: subs[0].endpoint,
+      keys: subs[0].keys, createdAt: 100, expiresAt: 500 });
+    expect(await store.claimPush(201, 20)).toMatchObject([{ notification: { id: 'pending' }, attempts: 1 }]);
+  });
+  test('大量历史下投递按 ID 查找，目标不在首页也能发送', async () => {
+    const { repos } = await create(); await seed(repos);
+    let now = 100;
+    const send = vi.fn().mockResolvedValue(undefined);
+    const service = createPushNotificationService(repos, () => now, { publicKey: 'public', send });
+    await service.subscribe({ userId: 'user', subscription: subscription() });
+    for (let i = 0; i < 120; i++) await add(repos, 'notice-' + i, 101 + i);
+    const list = vi.spyOn(repos.completionNotifications, 'list').mockRejectedValue(new Error('禁止全量列表'));
+    now = 300; await service.process();
+    expect(send).toHaveBeenCalledTimes(10);
+    expect(send.mock.calls[0][1]).toMatchObject({ id: 'notice-0' });
+    expect(list).not.toHaveBeenCalled();
+  });
 });
 test('推送地址拒绝 SSRF 和恶意 key；配置不泄露密钥且拒绝不完整配置', () => {
   const sub = subscription();
