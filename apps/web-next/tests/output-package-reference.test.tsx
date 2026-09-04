@@ -177,6 +177,10 @@ describe('OutputPackageCard package reference (#1063)', () => {
   });
 
   test('rejected 成员保留状态与引用入口，但不显示“基于此修改”', async () => {
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: { collections: [{
+      id: 'col-1', name: 'ep1.md', currentVersionId: 'ver-1',
+      versions: [{ id: 'ver-1', versionNumber: 1 }],
+    }] } });
     mocks.getOutputPackage.mockResolvedValue({
       ok: true,
       availableActions: [{

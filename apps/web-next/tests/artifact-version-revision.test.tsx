@@ -13,6 +13,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/socket', () => ({
   projectEvents: () => ({
     getOutputPackage: mocks.getOutputPackage,
+    artifactCollections: async () => ({ ok: true, library: { collections: [{
+      id: 'col-1', name: 'report.md', currentVersionId: 'ver-1',
+      versions: [{ id: 'ver-1', versionNumber: 1 }],
+    }] } }),
   }),
 }));
 

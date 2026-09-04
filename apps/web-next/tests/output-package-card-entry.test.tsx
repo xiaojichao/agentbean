@@ -17,7 +17,13 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/socket', () => ({
-  projectEvents: () => ({ getOutputPackage: mocks.getOutputPackage }),
+  projectEvents: () => ({
+    getOutputPackage: mocks.getOutputPackage,
+    artifactCollections: async () => ({ ok: true, library: { collections: [{
+      id: 'col-1', name: 'ep1.md', currentVersionId: 'ver-1',
+      versions: [{ id: 'ver-1', versionNumber: 1 }],
+    }] } }),
+  }),
 }));
 
 import { OutputPackageCard } from '../components/OutputPackageCard';
@@ -104,7 +110,7 @@ describe('OutputPackageCard 入口(#1065 AC2)', () => {
       ok: true,
       package: { taskRevision: 1, taskAttempt: 1, deliveryId: 'del-new' },
       availableActions: [
-        { versionId: 'ver-1', reviewState: 'approved', actions: [] },
+        { collectionId: 'col-1', versionId: 'ver-1', reviewState: 'approved', actions: [] },
       ],
     };
     mocks.getOutputPackage
@@ -124,7 +130,7 @@ describe('OutputPackageCard 入口(#1065 AC2)', () => {
     resolveOld({
       ok: true,
       package: { taskRevision: 1, taskAttempt: 1, deliveryId: 'del-old' },
-      availableActions: [{ versionId: 'ver-1', reviewState: 'pending', actions: [] }],
+      availableActions: [{ collectionId: 'col-1', versionId: 'ver-1', reviewState: 'pending', actions: [] }],
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(document.querySelector('[data-smoke="package-review-state"]')?.textContent).toContain('通过');
