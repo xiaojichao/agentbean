@@ -118,6 +118,66 @@ test('reports observed_complete only when every delivery observation succeeds', 
   assert.equal(result.productionSmoke.health.status, 'success');
 });
 
+function summaryPr() {
+  return pr({
+    reviews: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+    comments: {
+      pageInfo: { hasPreviousPage: false },
+      nodes: [{
+        author: { login: 'chatgpt-codex-connector', __typename: 'Bot' },
+        createdAt: '2026-08-24T00:35:00Z',
+        updatedAt: '2026-08-24T00:40:01Z',
+        body: '<!-- codex-pull-request-review-summary -->\n\n'
+          + '| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n'
+          + '| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-08-24T00:40:00Z">2026-08-24T00:40:00Z</relative-time> | `aaaaaaa` | Draft marked ready |\n',
+      }],
+    },
+    reactions: {
+      pageInfo: { hasNextPage: false },
+      nodes: [{ user: { login: 'chatgpt-codex-connector[bot]' }, content: 'THUMBS_UP', createdAt: '2026-08-24T00:40:01Z' }],
+    },
+  });
+}
+
+test('summary-only reviews can complete closeout and preserve their provenance', () => {
+  const result = buildCloseoutObservation({
+    repository: 'xiaojichao/agentbean', pr: summaryPr(),
+    mainRuns: [run()], jobs: jobs(), liveHealth: healthy,
+  });
+  assert.equal(result.observedPhase, 'observed_complete');
+  assert.equal(result.pullRequest.codexReview.provider, 'codex-cloud-summary');
+  assert.equal(result.pullRequest.codexReview.reviewedAt, '2026-08-24T00:40:00.000Z');
+});
+
+test('formal review coverage does not depend on a complete reaction list', () => {
+  const item = pr({ reactions: { pageInfo: { hasNextPage: true }, nodes: [] } });
+  const result = buildCloseoutObservation({
+    repository: 'xiaojichao/agentbean', pr: item,
+    mainRuns: [run()], jobs: jobs(), liveHealth: healthy,
+  });
+  assert.equal(result.observedPhase, 'observed_complete');
+  assert.equal(result.pullRequest.codexReview.provider, 'codex-cloud');
+});
+
+for (const [name, mutate, expected] of [
+  ['truncated reactions', (item) => { item.reactions.pageInfo.hasNextPage = true; }, 'truncated'],
+  ['missing confirmation', (item) => { item.reactions.nodes = []; }, 'missing'],
+  ['running rerun', (item) => {
+    item.reviews = pr().reviews;
+    item.reactions.nodes.push({ user: { login: 'chatgpt-codex-connector[bot]' }, content: 'EYES' });
+  }, 'pending'],
+]) {
+  test(`summary observation fails closed on ${name}`, () => {
+    const item = summaryPr();
+    mutate(item);
+    const result = buildCloseoutObservation({
+      repository: 'xiaojichao/agentbean', pr: item,
+      mainRuns: [run()], jobs: jobs(), liveHealth: healthy,
+    });
+    assert.equal(result.observedPhase, `codex_review_${expected}`);
+  });
+}
+
 test('keeps an open draft separate from production evidence', () => {
   const result = buildCloseoutObservation({
     repository: 'xiaojichao/agentbean',
@@ -252,6 +312,9 @@ test('collector uses only read-only gh api calls and can skip live health', asyn
   assert.equal(result.liveHealth.status, 'not_checked');
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].slice(0, 2), ['api', 'graphql']);
+  const query = calls[0].find((arg) => arg.startsWith('query='));
+  assert.match(query, /comments\(last: 100\)[\s\S]*updatedAt\s+author \{ login __typename \}/);
+  assert.match(query, /reactions\(first: 100\)\s*\{\s*pageInfo \{ hasNextPage \}\s*nodes \{ content createdAt user \{ login \}/);
 });
 
 test('live health allows the canonical contract and blocks unauthorized or private targets before fetch', async () => {
