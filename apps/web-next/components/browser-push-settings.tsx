@@ -98,5 +98,8 @@ export function BrowserPushSettings({ state }: { state: ReturnType<typeof useBro
       </button>}
     </div>
     <p role="status" className="mt-1 text-xs text-neutral-500">{message}</p>
+    {enabled && <p className="mt-2 text-xs text-neutral-500">
+      收不到通知？请在系统通知设置中允许当前浏览器显示通知，并开启横幅或桌面提醒。
+    </p>}
   </div>;
 }
