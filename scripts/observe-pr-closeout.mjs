@@ -227,7 +227,7 @@ function reviewObservation(pr) {
   const latest = [...candidates].sort((left, right) => new Date(right.at) - new Date(left.at))[0] ?? null;
   const truncated = Boolean(
     pr.reviews?.pageInfo?.hasPreviousPage || pr.comments?.pageInfo?.hasPreviousPage
-      || pr.reactions?.pageInfo?.hasNextPage,
+      || (!current && pr.reactions?.pageInfo?.hasNextPage),
   );
   return {
     status: truncated ? 'truncated' : summary?.running ? 'pending' : current ? 'covered' : latest ? 'stale' : 'missing',

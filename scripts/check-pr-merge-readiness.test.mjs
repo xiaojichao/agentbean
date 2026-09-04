@@ -214,6 +214,14 @@ test('documentation-only PRs keep their waiver when an optional summary is still
   assert.equal(result.review.codexWaived, 'docs_only_pr');
 });
 
+test('a formal review cannot hide a running summary outside the comments page', () => {
+  const pr = fixture({ comments: { pageInfo: { hasPreviousPage: true }, nodes: [] } });
+  const result = evaluatePullRequest(pr);
+  assert.ok(result.blockers.some((item) => item.code === 'RESULTS_TRUNCATED'));
+  assert.equal(evaluatePullRequest(pr, new Date(), { stage: 'review' }).blockers.some(
+    (item) => item.code === 'RESULTS_TRUNCATED'), false);
+});
+
 test('a failed summary does not disable the review-quota alternative channel', () => {
   const pr = summaryFixture();
   pr.comments.nodes[0].body = pr.comments.nodes[0].body.replace('✅ **Completed**', '❌ **Failed**');

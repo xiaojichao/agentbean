@@ -149,6 +149,16 @@ test('summary-only reviews can complete closeout and preserve their provenance',
   assert.equal(result.pullRequest.codexReview.reviewedAt, '2026-08-24T00:40:00.000Z');
 });
 
+test('formal review coverage does not depend on a complete reaction list', () => {
+  const item = pr({ reactions: { pageInfo: { hasNextPage: true }, nodes: [] } });
+  const result = buildCloseoutObservation({
+    repository: 'xiaojichao/agentbean', pr: item,
+    mainRuns: [run()], jobs: jobs(), liveHealth: healthy,
+  });
+  assert.equal(result.observedPhase, 'observed_complete');
+  assert.equal(result.pullRequest.codexReview.provider, 'codex-cloud');
+});
+
 for (const [name, mutate, expected] of [
   ['truncated reactions', (item) => { item.reactions.pageInfo.hasNextPage = true; }, 'truncated'],
   ['missing confirmation', (item) => { item.reactions.nodes = []; }, 'missing'],

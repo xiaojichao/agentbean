@@ -280,6 +280,7 @@ export function evaluatePullRequest(pr, now = new Date(), {
     commit?.statusCheckRollup?.contexts?.pageInfo?.hasNextPage ? 'checks' : null,
     pr.reviewThreads?.pageInfo?.hasNextPage ? 'review threads' : null,
     pr.reviewRequests?.pageInfo?.hasNextPage ? 'review requests' : null,
+    stage === 'merge' && !codexWaived && pr.comments?.pageInfo?.hasPreviousPage ? 'review comments' : null,
   ].filter(Boolean);
   if (pr.state !== 'OPEN') blockers.push({ code: 'PR_NOT_OPEN', detail: `PR 状态为 ${pr.state}` });
   if (stage === 'review' && !pr.isDraft) {
