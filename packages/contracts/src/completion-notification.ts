@@ -18,6 +18,13 @@ export interface CompletionNotificationWake {
   readonly recipientId: string;
 }
 
+/** Stable descending-time / ascending-id cursor; never an authorization token. */
+export interface CompletionNotificationCursor {
+  readonly createdAt: number;
+  readonly id: string;
+}
+export const COMPLETION_NOTIFICATION_PAGE_SIZE = 50;
+
 export function completionNotificationPath(teamPath: string, item: CompletionNotificationDto): string {
   const base = '/' + encodeURIComponent(teamPath);
   if (item.taskId && item.channelId) return base + '/tasks?' + new URLSearchParams({ thread: item.channelId + ':' + item.taskId });

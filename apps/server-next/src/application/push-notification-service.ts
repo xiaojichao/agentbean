@@ -16,6 +16,7 @@ export function createPushNotificationService(repositories: ServerNextRepositori
       const subscription = parseBrowserSubscription(input.subscription);
       if (!subscription || (subscription.expirationTime != null && subscription.expirationTime <= now())) return { ok: false, error: 'INVALID_PUSH_SUBSCRIPTION' };
       return repositories.taskCoordinationUnitOfWork.run(async () => {
+        await store.prunePushSubscriptions(input.userId, now());
         const id = pushSubscriptionId(subscription.endpoint);
         const existing = await store.getPushSubscription(id);
         if (existing && existing.userId !== input.userId) return { ok: false, error: 'SUBSCRIPTION_OWNED' };
@@ -41,8 +42,8 @@ export function createPushNotificationService(repositories: ServerNextRepositori
         await Promise.all(deliveries.map(async ({ subscription, notification, attempts }) => {
           try {
             const current = await store.getPushSubscription(subscription.id);
-            const visible = await notifications.list({ userId: subscription.userId, teamId: notification.teamId });
-            const item = visible.ok ? visible.items.find((item) => item.id === notification.id && item.readAt === null) : null;
+            const visible = await notifications.get({ userId: subscription.userId, teamId: notification.teamId, id: notification.id });
+            const item = visible?.readAt === null ? visible : null;
             const team = item && await repositories.teams.getById(item.teamId);
             if (!current || current.userId !== subscription.userId || current.expiresAt <= now() || !item || !team
               || !await repositories.users.getById(subscription.userId)) {

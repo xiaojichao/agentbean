@@ -92,4 +92,38 @@ describe('侧栏交付提醒', () => {
     expect(href).toBe('/test/channel/channel?thread=channel%3Aorigin&message=channel%3Areply');
     expect(completionNotificationHref('test', item({ channelId: undefined }))).toBe('/test/tasks?task=task');
   });
+  test('角标使用全量未读数，旧页可浏览且刷新不跳回首页', async () => {
+    const cursor = { createdAt: 10, id: 'cursor' };
+    mocks.list.mockImplementation(async (input) => input.cursor
+      ? { ok: true, items: [item({ id: 'older', title: '较早的交付' })], unreadCount: 120, nextCursor: null }
+      : { ok: true, items: [item()], unreadCount: 120, nextCursor: cursor });
+    render(<CompletionNotifications {...props} />);
+    await screen.findByText('报告已交付，待验收');
+    expect(screen.getByLabelText('提醒，120条未读')).toBeTruthy();
+    fireEvent.click(screen.getByText('更早提醒'));
+    await screen.findByText('较早的交付');
+    expect(screen.queryByText('报告已交付，待验收')).toBeNull();
+    expect(screen.getByLabelText('提醒，120条未读')).toBeTruthy();
+    await act(async () => { mocks.listener?.({ teamId: 'team', recipientId: 'user' }); });
+    expect(screen.getByText('较早的交付')).toBeTruthy();
+    mocks.list.mockImplementation(async (input) => input.cursor
+      ? { ok: true, items: [item({ id: 'older', title: '较早的交付' })], unreadCount: 121, nextCursor: null }
+      : { ok: true, items: [item({ id: 'newest', title: '新交付', createdAt: Date.now() + 1000 })], unreadCount: 121, nextCursor: cursor });
+    await act(async () => { mocks.listener?.({ teamId: 'team', recipientId: 'user' }); });
+    await screen.findByText('新交付');
+    const toast = document.querySelector('[data-smoke="completion-notification-toast"]')!;
+    fireEvent.click(toast.querySelector('button')!);
+    await waitFor(() => expect(screen.getByLabelText('提醒，120条未读')).toBeTruthy());
+    fireEvent.click(screen.getByText('返回最新提醒'));
+    await screen.findByText('新交付');
+  });
+  test('推送目标不在首页仍提交精确已读，不改变任务定位参数', async () => {
+    window.history.replaceState(null, '', '/test/tasks?task=old-task&notice=older&noticeTeam=team');
+    mocks.list.mockResolvedValue({ ok: true, items: [item()], unreadCount: 120 });
+    render(<CompletionNotifications {...props} />);
+    await waitFor(() => expect(mocks.markRead).toHaveBeenCalledWith({ teamId: 'team', id: 'older' }));
+    await screen.findByLabelText('提醒，120条未读');
+    expect(window.location.search).toBe('?task=old-task');
+    window.history.replaceState(null, '', '/');
+  });
 });

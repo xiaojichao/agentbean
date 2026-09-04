@@ -1,4 +1,4 @@
-import type { CompletionNotificationDto } from '../../../../packages/contracts/src/completion-notification.js';
+import type { CompletionNotificationDto, CompletionNotificationCursor } from '../../../../packages/contracts/src/completion-notification.js';
 import type { PushNotificationRepository } from './push-notification-repository.js';
 
 export interface CompletionSource {
@@ -17,6 +17,9 @@ export interface CompletionNotificationRepository extends PushNotificationReposi
   defer(id: string, retryAt: number): Promise<void>;
   /** Atomically finish the source and persist recipient projections. */
   complete(id: string, items: readonly CompletionNotificationDto[]): Promise<void>;
-  list(teamId: string, recipientId: string): Promise<CompletionNotificationDto[]>;
+  list(teamId: string, recipientId: string, cursor?: CompletionNotificationCursor): Promise<CompletionNotificationDto[]>;
+  get(teamId: string, recipientId: string, id: string): Promise<CompletionNotificationDto | null>;
+  unreadScopes(teamId: string, recipientId: string): Promise<Array<{ channelId?: string; taskId?: string; count: number }>>;
+  pruneRead(teamId: string, recipientId: string, now: number): Promise<void>;
   markRead(teamId: string, recipientId: string, id: string, now: number): Promise<boolean>;
 }

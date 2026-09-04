@@ -7,6 +7,7 @@ import { createInMemoryRepositories } from '../src/infra/memory/repositories.js'
 import { applyGlobalMigrations, applyTeamMigrations, createSqliteRepositories } from '../src/infra/sqlite/repositories.js';
 import { createCompletionNotificationService } from '../src/application/completion-notification-service.js';
 import type { ServerNextRepositories } from '../src/application/repositories.js';
+import type { CompletionNotificationCursor } from '../../../packages/contracts/src/completion-notification.js';
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { vi.restoreAllMocks(); cleanups.splice(0).reverse().forEach((close) => close()); });
@@ -115,5 +116,71 @@ describe('任务交付提醒', () => {
     const restarted = createCompletionNotificationService(createSqliteRepositories({ globalDb, teamDb }), () => 200);
     expect(await restarted.process()).toEqual([]);
     expect((await restarted.list({ teamId: 'team', userId: 'user' })).unreadCount).toBe(0);
+  });
+});
+
+describe.each(['memory', 'sqlite'] as const)('提醒历史与分页 %s', (variant) => {
+  async function create() {
+    if (variant === 'memory') return createInMemoryRepositories();
+    const dir = mkdtempSync(join(tmpdir(), 'completion-pages-'));
+    const globalDb = new Database(join(dir, 'global.db')); const teamDb = new Database(join(dir, 'team.db'));
+    applyGlobalMigrations(globalDb); applyTeamMigrations(teamDb);
+    cleanups.push(() => { teamDb.close(); globalDb.close(); rmSync(dir, { recursive: true, force: true }); });
+    return createSqliteRepositories({ globalDb, teamDb });
+  }
+  test('千条未读按稳定游标读取，全量角标不截断，同范围只校验一次；页外精确已读', async () => {
+    const repos = await create(); await seed(repos);
+    const store = repos.completionNotifications;
+    const rows = Array.from({ length: 1000 }, (_, i) => ({ id: 'n-' + String(i).padStart(4, '0'),
+      teamId: 'team', recipientId: 'user', kind: 'request_completed' as const, title: '结果', channelId: 'channel',
+      createdAt: 100, readAt: null }));
+    await store.complete('bulk', rows);
+    const service = createCompletionNotificationService(repos, () => 1000);
+    const channelReads = vi.spyOn(repos.channels, 'getById');
+    const first = await service.list({ teamId: 'team', userId: 'user' });
+    expect(first.items).toHaveLength(50); expect(first.unreadCount).toBe(1000);
+    expect(channelReads).toHaveBeenCalledTimes(1);
+    expect((await store.list('team', 'user')).length).toBe(51);
+    const seen = first.items!.map((item) => item.id);
+    let cursor: CompletionNotificationCursor | null | undefined = first.nextCursor;
+    // 新提醒插入首页，不使后续游标出现重复或漏项。
+    await store.complete('later', [{ ...rows[0], id: 'later', createdAt: 101 }]);
+    while (cursor) {
+      const page = await service.list({ teamId: 'team', userId: 'user', cursor });
+      seen.push(...page.items!.map((item) => item.id)); cursor = page.nextCursor;
+    }
+    expect(seen).toEqual(rows.map((row) => row.id));
+    const list = vi.spyOn(store, 'list').mockRejectedValue(new Error('禁止全量查找'));
+    expect(await service.markRead({ teamId: 'team', userId: 'user', id: 'n-0999' })).toEqual({ ok: true });
+    expect(list).not.toHaveBeenCalled(); list.mockRestore();
+    expect((await service.list({ teamId: 'team', userId: 'user' })).unreadCount).toBe(1000);
+    await repos.channels.update({ channelId: 'channel', changes: { humanMemberIds: ['other'] } });
+    expect(await service.get({ teamId: 'team', userId: 'user', id: 'n-0998' })).toBeNull();
+    const denied = await service.list({ teamId: 'team', userId: 'user' });
+    expect(denied.items).toEqual([]); expect(denied.unreadCount).toBe(0);
+    expect(await service.markRead({ teamId: 'team', userId: 'other', id: 'n-0998' })).toMatchObject({ ok: false });
+    expect(await service.list({ teamId: 'team', userId: 'user', cursor: { id: '', createdAt: NaN } })).toMatchObject({ error: 'INVALID_CURSOR' });
+  });
+  test('已读保留最近30天最多100条，未读永久保留，清理不重放来源或越过用户范围', async () => {
+    const repos = await create(); await seed(repos);
+    const store = repos.completionNotifications;
+    const now = 40 * 86400_000;
+    const rows = Array.from({ length: 130 }, (_, i) => ({ id: 'read-' + i, teamId: 'team', recipientId: 'user',
+      kind: 'request_completed' as const, title: '结果', createdAt: i, readAt: now - i }));
+    await store.enqueue({ id: 'history', teamId: 'team', taskId: null, dispatchId: null, revision: 1, createdAt: 1, retryAt: 0 });
+    await store.complete('history', [...rows,
+      { ...rows[0], id: 'expired', readAt: 1 }, { ...rows[0], id: 'unread', readAt: null },
+      { ...rows[0], id: 'other', recipientId: 'other', readAt: 1 }]);
+    await store.pruneRead('team', 'user', now);
+    expect(await store.get('team', 'user', 'read-99')).not.toBeNull();
+    expect(await store.get('team', 'user', 'read-100')).toBeNull();
+    expect(await store.get('team', 'user', 'expired')).toBeNull();
+    expect(await store.get('team', 'user', 'unread')).not.toBeNull();
+    expect(await store.get('team', 'other', 'other')).not.toBeNull();
+    await store.enqueue({ id: 'history', teamId: 'team', taskId: null, dispatchId: null, revision: 1, createdAt: 1, retryAt: 0 });
+    expect(await store.pending(now, 100)).toEqual([]);
+    expect(await store.get('team', 'user', 'expired')).toBeNull();
+    await store.pruneRead('team', 'user', now + 31 * 86400_000);
+    expect((await store.list('team', 'user')).map((row) => row.id)).toEqual(['unread']);
   });
 });

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { Bell, X } from 'lucide-react';
-import { completionNotificationPath, type CompletionNotificationDto } from '@agentbean/contracts';
+import { completionNotificationPath, type CompletionNotificationDto, type CompletionNotificationCursor } from '@agentbean/contracts';
 import { notificationEvents } from '@/lib/socket';
 import { BrowserPushSettings, useBrowserPush } from './browser-push-settings';
 
@@ -22,13 +22,16 @@ export function CompletionNotifications({ teamId, teamPath, userId, connected, o
 }) {
   const router = useRouter();
   const pushSettings = useBrowserPush({ userId, connected });
-  const [state, setState] = useState<{ scope: string; items: CompletionNotificationDto[] }>({ scope: '', items: [] });
+  const [state, setState] = useState<{ scope: string; items: CompletionNotificationDto[]; unreadCount: number;
+    nextCursor: CompletionNotificationCursor | null }>({ scope: '', items: [], unreadCount: 0, nextCursor: null });
+  const [page, setPage] = useState<{ scope: string; cursor: CompletionNotificationCursor | null }>({ scope: '', cursor: null });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<CompletionNotificationDto | null>(null);
   const scope = teamId + ':' + userId;
   const items = state.scope === scope ? state.items : [];
-  const unread = items.filter((item) => item.readAt === null).length;
+  const unread = state.scope === scope ? state.unreadCount : 0;
+  const cursor = page.scope === scope ? page.cursor : null;
 
   useEffect(() => {
     setToast(null);
@@ -61,26 +64,31 @@ export function CompletionNotifications({ teamId, teamPath, userId, connected, o
       try {
         do {
           rerun = false;
-          const result = await events.list({ teamId });
-          if (!active) return;
-          if (!result.ok || !result.items) { setError('提醒加载失败，请稍后重试'); return; }
-          const nextItems = result.items.filter((item) => item.teamId === teamId && item.recipientId === userId);
           // OS notification clicks use the same read command as the sidebar.
           const location = new URL(window.location.href);
           const noticeId = location.searchParams.get('notice');
-          if (location.searchParams.get('noticeTeam') === teamId && nextItems.some((item) => item.id === noticeId)) {
-            const read = await events.markRead({ teamId, id: noticeId! });
+          let markedId: string | null = null;
+          if (location.searchParams.get('noticeTeam') === teamId && noticeId) {
+            const read = await events.markRead({ teamId, id: noticeId });
             if (!active) return;
             if (read.ok) {
-              const clicked = nextItems.findIndex((item) => item.id === noticeId);
-              nextItems[clicked] = { ...nextItems[clicked], readAt: Date.now() };
+              markedId = noticeId;
               location.searchParams.delete('notice'); location.searchParams.delete('noticeTeam');
               window.history.replaceState(null, '', location.pathname + location.search + location.hash);
             }
           }
-          setState({ scope, items: nextItems });
+          // 浏览旧页时仍同步首页的新提醒；每次请求和页面都保持有界。
+          const head = await events.list({ teamId });
+          const result = cursor ? await events.list({ teamId, cursor }) : head;
+          if (!active) return;
+          if (!head.ok || !result.ok || !result.items) { setError('提醒加载失败，请稍后重试'); return; }
+          const nextItems = result.items.filter((item) => item.teamId === teamId && item.recipientId === userId)
+            .map((item) => item.id === markedId ? { ...item, readAt: Date.now() } : item);
+          setState({ scope, items: nextItems, unreadCount: head.unreadCount ?? nextItems.filter((item) => item.readAt === null).length,
+            nextCursor: result.nextCursor ?? null });
           setError('');
-          nextItems.slice().reverse().forEach(showOnce);
+          (head.items ?? []).filter((item) => item.teamId === teamId && item.recipientId === userId && item.id !== markedId)
+            .slice().reverse().forEach(showOnce);
         } while (rerun && active);
       } catch {
         if (active) setError('提醒加载失败，请稍后重试');
@@ -109,7 +117,7 @@ export function CompletionNotifications({ teamId, teamPath, userId, connected, o
       window.removeEventListener('focus', resume);
       window.removeEventListener('storage', changedInAnotherTab);
     };
-  }, [teamId, userId, connected, scope]);
+  }, [teamId, userId, connected, scope, cursor]);
 
   useEffect(() => {
     if (!toast) return;
@@ -126,6 +134,7 @@ export function CompletionNotifications({ teamId, teamPath, userId, connected, o
       if (result.ok) {
         setState((current) => current.scope === scope ? {
           ...current, items: current.items.map((row) => row.id === item.id ? { ...row, readAt: Date.now() } : row),
+          unreadCount: Math.max(0, current.unreadCount - ((current.items.find((row) => row.id === item.id) ?? item).readAt === null ? 1 : 0)),
         } : current);
         try { localStorage.setItem('agentbean.notification-read:' + scope, String(Date.now())); } catch {}
       }
@@ -159,6 +168,11 @@ export function CompletionNotifications({ teamId, teamPath, userId, connected, o
         </button>)}
         {error ? <p role="status" className="px-3 py-4 text-xs text-amber-700">{error}</p>
           : items.length === 0 && !piAttention && <p className="px-3 py-5 text-center text-xs text-neutral-400">{loading ? '正在加载提醒…' : !connected ? '连接恢复后同步提醒' : '暂无提醒'}</p>}
+      </div>
+      <div className="flex justify-between border-t border-neutral-100 px-3 py-2 text-xs text-neutral-600">
+        {cursor ? <button type="button" disabled={loading} onClick={() => setPage({ scope, cursor: null })}>返回最新提醒</button> : <span>已读保留 30 天，最多 100 条</span>}
+        {state.scope === scope && state.nextCursor && <button type="button" disabled={loading}
+          onClick={() => setPage({ scope, cursor: state.nextCursor })}>更早提醒</button>}
       </div>
       <BrowserPushSettings state={pushSettings} />
     </div>}

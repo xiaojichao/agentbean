@@ -60,7 +60,8 @@ export function Sidebar() {
   // 点击侧栏外部时关闭浮层，保持三个入口互斥。
   useEffect(() => {
     if (!showTeams && !showNotifications && !showHelp) return;
-    const handler = () => {
+    const handler = (event: MouseEvent) => {
+      if (event.target instanceof Element && event.target.closest('[data-smoke="notifications-menu"]')) return;
       setShowTeams(false);
       setShowNotifications(false);
       setShowHelp(false);

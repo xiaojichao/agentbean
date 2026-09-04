@@ -1,4 +1,4 @@
-import type { CompletionNotificationDto } from '../../../../../packages/contracts/src/completion-notification.js';
+import { COMPLETION_NOTIFICATION_PAGE_SIZE, type CompletionNotificationDto } from '../../../../../packages/contracts/src/completion-notification.js';
 import type { CompletionSource, CompletionNotificationRepository } from '../../application/completion-notification-repository.js';
 import type { BrowserPushSubscription, PushDelivery } from '../../application/push-notification-repository.js';
 
@@ -8,6 +8,9 @@ export function createMemoryCompletionNotifications() {
   const items = new Map<string, CompletionNotificationDto>();
   const subscriptions = new Map<string, BrowserPushSubscription>();
   const deliveries = new Map<string, { attempts: number; retryAt: number | null }>();
+  const deleteDeliveries = (id: string, part: number) => {
+    for (const key of deliveries.keys()) if (JSON.parse(key)[part] === id) deliveries.delete(key);
+  };
   const repository: CompletionNotificationRepository = {
     async getPushSubscription(id) { return subscriptions.get(id) ?? null; },
     async savePushSubscription(subscription) {
@@ -17,9 +20,16 @@ export function createMemoryCompletionNotifications() {
       return true;
     },
     async deletePushSubscription(id, userId) {
-      if (subscriptions.get(id)?.userId === userId) subscriptions.delete(id);
+      if (subscriptions.get(id)?.userId === userId) {
+        subscriptions.delete(id); deleteDeliveries(id, 1);
+      }
     },
     async countPushSubscriptions(userId) { return [...subscriptions.values()].filter((s) => s.userId === userId).length; },
+    async prunePushSubscriptions(userId, now) {
+      for (const sub of subscriptions.values()) if (sub.userId === userId && sub.expiresAt <= now) {
+        subscriptions.delete(sub.id); deleteDeliveries(sub.id, 1);
+      }
+    },
     async claimPush(now, limit) {
       const result: PushDelivery[] = [];
       for (const notification of [...items.values()].sort((a, b) => a.createdAt - b.createdAt)) {
@@ -59,9 +69,34 @@ export function createMemoryCompletionNotifications() {
       completed.add(id);
       sources.delete(id);
     },
-    async list(teamId, recipientId) {
+    async list(teamId, recipientId, cursor) {
       return [...items.values()].filter((item) => item.teamId === teamId && item.recipientId === recipientId)
-        .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
+        .filter((item) => !cursor || item.createdAt < cursor.createdAt || (item.createdAt === cursor.createdAt && item.id > cursor.id))
+        .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .slice(0, COMPLETION_NOTIFICATION_PAGE_SIZE + 1);
+    },
+    async get(teamId, recipientId, id) {
+      const item = items.get(id);
+      return item?.teamId === teamId && item.recipientId === recipientId ? item : null;
+    },
+    async unreadScopes(teamId, recipientId) {
+      const groups = new Map<string, { channelId?: string; taskId?: string; count: number }>();
+      for (const item of items.values()) {
+        if (item.teamId !== teamId || item.recipientId !== recipientId || item.readAt !== null) continue;
+        const key = JSON.stringify([item.channelId ?? null, item.taskId ?? null]);
+        const group = groups.get(key) ?? { channelId: item.channelId, taskId: item.taskId, count: 0 };
+        group.count++; groups.set(key, group);
+      }
+      return [...groups.values()];
+    },
+    async pruneRead(teamId, recipientId, now) {
+      const read = [...items.values()].filter((item) => item.teamId === teamId && item.recipientId === recipientId && item.readAt !== null)
+        .sort((a, b) => b.readAt! - a.readAt! || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      read.forEach((item, index) => {
+        if (index >= 100 || item.readAt! < now - 30 * 86400_000) {
+          items.delete(item.id); deleteDeliveries(item.id, 0);
+        }
+      });
     },
     async markRead(teamId, recipientId, id, now) {
       const item = items.get(id);
@@ -72,11 +107,14 @@ export function createMemoryCompletionNotifications() {
   };
   return {
     repository,
-    snapshot: () => ({ sources: new Map(sources), completed: new Set(completed), items: new Map(items) }),
-    restore(snapshot: { sources: Map<string, CompletionSource>; completed: Set<string>; items: Map<string, CompletionNotificationDto> }) {
+    snapshot: () => ({ sources: new Map(sources), completed: new Set(completed), items: new Map(items), subscriptions: new Map(subscriptions), deliveries: new Map(deliveries) }),
+    restore(snapshot: { sources: Map<string, CompletionSource>; completed: Set<string>; items: Map<string, CompletionNotificationDto>;
+      subscriptions: Map<string, BrowserPushSubscription>; deliveries: Map<string, { attempts: number; retryAt: number | null }> }) {
       sources.clear(); snapshot.sources.forEach((value, key) => sources.set(key, value));
       completed.clear(); snapshot.completed.forEach((value) => completed.add(value));
       items.clear(); snapshot.items.forEach((value, key) => items.set(key, value));
+      subscriptions.clear(); snapshot.subscriptions.forEach((value, key) => subscriptions.set(key, value));
+      deliveries.clear(); snapshot.deliveries.forEach((value, key) => deliveries.set(key, value));
     },
   };
 }
