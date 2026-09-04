@@ -403,7 +403,7 @@ export async function startServerNextDevServer(
   pumpCompletionNotifications();
   const completionNotificationInterval = setInterval(pumpCompletionNotifications, 500);
   completionNotificationInterval.unref();
-  // Network retries never hold up the online notification projection.
+  // 推送请求独立重试，不阻塞在线提醒投影。
   let pushRunning: Promise<void> | null = null;
   const pumpPush = () => {
     if (pushRunning) return;
