@@ -64,9 +64,14 @@ query($owner: String!, $name: String!, $number: Int!) {
         pageInfo { hasPreviousPage }
         nodes {
           createdAt
-          author { login }
+          updatedAt
+          author { login __typename }
           body
         }
+      }
+      reactions(first: 100) {
+        pageInfo { hasNextPage }
+        nodes { content createdAt user { login } }
       }
       reviewThreads(first: 100) {
         pageInfo { hasNextPage }
@@ -214,17 +219,18 @@ function checkObservation(pr) {
 }
 
 function reviewObservation(pr) {
-  const { candidates } = collectReviewCandidates(pr);
+  const { candidates, summary } = collectReviewCandidates(pr);
   const headSha = pr.headRefOid ?? null;
   const current = candidates
     .filter((candidate) => matchesHead(candidate.commit, headSha))
     .sort((left, right) => new Date(right.at) - new Date(left.at))[0] ?? null;
   const latest = [...candidates].sort((left, right) => new Date(right.at) - new Date(left.at))[0] ?? null;
   const truncated = Boolean(
-    pr.reviews?.pageInfo?.hasPreviousPage || pr.comments?.pageInfo?.hasPreviousPage,
+    pr.reviews?.pageInfo?.hasPreviousPage || pr.comments?.pageInfo?.hasPreviousPage
+      || pr.reactions?.pageInfo?.hasNextPage,
   );
   return {
-    status: truncated ? 'truncated' : current ? 'covered' : latest ? 'stale' : 'missing',
+    status: truncated ? 'truncated' : summary?.running ? 'pending' : current ? 'covered' : latest ? 'stale' : 'missing',
     headSha,
     reviewedCommit: current?.commit ?? latest?.commit ?? null,
     reviewedAt: current?.at ?? latest?.at ?? null,

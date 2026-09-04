@@ -206,6 +206,14 @@ test('bot eyes block a previous formal review before the summary is updated', ()
   assert.ok(evaluatePullRequest(pr).blockers.some((item) => item.code === 'CODEX_SUMMARY_UNCONFIRMED'));
 });
 
+test('documentation-only PRs keep their waiver when an optional summary is still running', () => {
+  const pr = summaryFixture();
+  pr.comments.nodes[0].body = pr.comments.nodes[0].body.replace('✅ **Completed**', '🔄 **Running** since');
+  const result = evaluatePullRequest(pr, new Date(), { changedFiles: ['docs/agents/example.md'] });
+  assert.equal(result.ready, true);
+  assert.equal(result.review.codexWaived, 'docs_only_pr');
+});
+
 test('a failed summary does not disable the review-quota alternative channel', () => {
   const pr = summaryFixture();
   pr.comments.nodes[0].body = pr.comments.nodes[0].body.replace('✅ **Completed**', '❌ **Failed**');

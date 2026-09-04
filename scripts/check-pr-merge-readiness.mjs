@@ -270,7 +270,7 @@ export function evaluatePullRequest(pr, now = new Date(), {
   const codexSatisfied = Boolean(currentCodexReview || codexWaived);
 
   const blockers = [];
-  if (stage === 'merge' && summary && !summary.confirmed && (summary.running || !currentCodexReview)) {
+  if (stage === 'merge' && !codexWaived && summary && !summary.confirmed && (summary.running || !currentCodexReview)) {
     blockers.push({
       code: 'CODEX_SUMMARY_UNCONFIRMED',
       detail: '最新 Codex 审核汇总尚未完成，或缺少同轮机器人确认及完整查询结果',
