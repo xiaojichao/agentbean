@@ -21,7 +21,7 @@ import type {
  * 展示 package 身份、来源与冻结成员(短标识 + 文件名);成员是交付时冻结快照,
  * 不与 Server 事实漂移。卡片不承载任何业务状态、不推进 Task。
  *
- * #1061：卡片经 getOutputPackage 读取 Server 计算的 availableActions 投影。
+ * #1061：卡片经 getOutputPackage current 投影读取当前版的审核/最终版状态。
  * 成员行只展示 Server 给出的 reviewState/isFinalVersion 状态标签，不展示审核、最终化
  * 或“基于此修改”动作；修订入口暂时只保留在 Files 等其他 surface。
  * 无 channelId(上下文不可得)时保持纯静态展示,不查询。
@@ -125,25 +125,31 @@ export function OutputPackageCard({
   const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
   const [blockers, setBlockers] = useState<PackageProjectionBlocker[]>([]);
   // 原型对齐:成员行 file-sub 需要 collection 名/current server 版本号/来源与修改时间。
-  // 这些数据在 ProjectArtifactLibrary(collections)里,卡片按 channelId 自拉一次。
+  // 与审核动作一起刷新，版本说明与状态必须指向同一个 currentVersionId。
   const [collectionsById, setCollectionsById] = useState<Map<string, {
     name: string;
+    currentVersionId?: string;
     currentVersionNumber?: number;
     currentCreatedAt?: number;
     manualRevision: boolean;
   }> | null>(null);
 
   useEffect(() => {
+    setCollectionsById(null);
+    setMemberActions(null);
     if (!channelId) return;
     let cancelled = false;
     const api = projectEvents();
-    // 纯展示场景/测试 mock 可能没有该方法——降级为不显示 file-sub,不抛错。
-    if (typeof api.artifactCollections !== 'function') return;
-    Promise.resolve(api.artifactCollections(channelId))
-      .then((result) => {
-        if (cancelled || !result.ok || !result.library) return;
+    // 缺少当前版本事实时不显示审核标签，不能回退到冻结交付版的状态。
+    Promise.all([
+      api.artifactCollections?.(channelId),
+      api.getOutputPackage({ channelId, packageId: packageMeta.packageId, projection: { policy: 'current' } }),
+    ])
+      .then(([result, packageResult]) => {
+        if (cancelled || !result?.ok || !result.library) return;
         const map = new Map<string, {
           name: string;
+          currentVersionId?: string;
           currentVersionNumber?: number;
           currentCreatedAt?: number;
           manualRevision: boolean;
@@ -152,34 +158,16 @@ export function OutputPackageCard({
           const current = collection.versions.find((v) => v.id === collection.currentVersionId);
           map.set(collection.id, {
             name: collection.name,
-            ...(current ? { currentVersionNumber: current.versionNumber, currentCreatedAt: current.createdAt } : {}),
+            ...(current ? { currentVersionId: current.id, currentVersionNumber: current.versionNumber, currentCreatedAt: current.createdAt } : {}),
             // revisionBasis 存在 = 经「基于此修改」/手动编辑产生;否则为 Agent 交付/提升。
             manualRevision: Boolean(current?.revisionBasis),
           });
         }
         setCollectionsById(map);
+        setMemberActions(packageResult.ok ? packageResult.availableActions ?? [] : []);
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [channelId]);
-
-  useEffect(() => {
-    if (!channelId) return;
-    let cancelled = false;
-    projectEvents()
-      .getOutputPackage({ channelId, packageId: packageMeta.packageId })
-      .then((result) => {
-        if (cancelled) return;
-        if (result.ok) {
-          setMemberActions(result.availableActions ?? []);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setMemberActions([]);
-      });
-    return () => {
-      cancelled = true;
-    };
   }, [channelId, dataRevision, packageMeta.packageId]);
 
   // #1063:整包投影选择(构建逻辑在 lib/output-package-reference,与文件库工具栏共用)。
@@ -307,8 +295,9 @@ export function OutputPackageCard({
       ) : null}
       <ul className="mt-2 space-y-1">
         {packageMeta.members.map((member) => {
+          const currentVersionId = collectionsById?.get(member.collectionId)?.currentVersionId;
           const actions = memberActions?.find(
-            (entry) => entry.versionId === member.artifactVersionId,
+            (entry) => entry.collectionId === member.collectionId && entry.versionId === currentVersionId,
           );
           const selected = selectedMemberIds.has(member.artifactVersionId);
           return (

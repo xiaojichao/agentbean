@@ -578,6 +578,54 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     ).toBe('通过'));
   });
 
+  test('保存并通过新版本后，卡片版本说明和审核态同步到 current，冻结交付版保持待审核', async () => {
+    const initialPackage = await mocks.getOutputPackage();
+    const initialReview = mocks.submitPackageArtifactReview.getMockImplementation()!;
+    const delivered = version('version-1', 'collection-1', '第1集剧本.md', 4);
+    const revised = {
+      ...version('server-version-5', 'collection-1', '第1集剧本.md', 5, 'approved'),
+      revisionBasis: { sourceVersionId: delivered.id },
+    };
+    let saved = false;
+    mocks.artifactCollections.mockImplementation(async () => ({
+      ok: true,
+      library: saved ? library(revised, [delivered, revised]) : library(delivered),
+    }));
+    mocks.getOutputPackage.mockImplementation(async (input) => ({
+      ...initialPackage,
+      availableActions: [
+        ...initialPackage.availableActions,
+        ...(saved && input?.projection?.policy === 'current' ? [{
+          ...initialPackage.availableActions[0],
+          versionId: revised.id,
+          reviewState: 'approved',
+          collectionRevision: 5,
+        }] : []),
+      ],
+    }));
+    mocks.submitPackageArtifactReview.mockImplementationOnce(async (input) => {
+      const result = await initialReview(input);
+      saved = true;
+      return result;
+    });
+
+    render(<ReviewStatusSyncHarness />);
+    const editor = await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    await waitFor(() => expect(document.querySelector('[data-smoke="package-review-state"]')?.textContent).toBe('待审核'));
+    fireEvent.change(editor, { target: { value: '# 审核后的修改稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '通过' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认通过' }));
+    await screen.findByText(/已保存并通过：审核记录绑定 Server v5/);
+    fireEvent.click(screen.getByTitle('关闭'));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => {
+      expect(document.querySelector('[data-smoke="package-member-sub"]')?.textContent).toContain('current server v5');
+      expect(document.querySelector('[data-smoke="package-review-state"]')?.textContent).toBe('通过');
+    });
+    expect(initialPackage.availableActions[0].reviewState).toBe('pending');
+  });
+
   test('要求修改原子退回 delivery，并把原智能体、稳定版本与新 attempt 上抛给讨论串预填', async () => {
     const onReturnToThread = vi.fn();
     const prepareReturnThread = vi.fn().mockResolvedValue(true);
