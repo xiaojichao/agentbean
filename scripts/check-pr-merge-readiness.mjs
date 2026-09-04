@@ -139,7 +139,13 @@ function latestCodexSummary(pr) {
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
   if (!comment) return null;
   const table = comment.body.split('<details>')[0];
-  const unconfirmed = { confirmed: false, running: /\*\*(?:Running|Queued|Pending)\*\*/.test(table) };
+  const botReactions = (pr.reactions?.nodes ?? []).filter((reaction) =>
+    [CODEX_REVIEWER, `${CODEX_REVIEWER}[bot]`].includes(reaction.user?.login));
+  const unconfirmed = {
+    confirmed: false,
+    running: /\*\*(?:Running|Queued|Pending)\*\*/.test(table)
+      || botReactions.some((reaction) => reaction.content === 'EYES'),
+  };
   if (pr.comments?.pageInfo?.hasPreviousPage !== false
     || pr.reactions?.pageInfo?.hasNextPage !== false) return unconfirmed;
 
@@ -157,9 +163,7 @@ function latestCodexSummary(pr) {
   const completedAt = Math.max(...completed.map((row) => Date.parse(row[1])));
   if (!Number.isFinite(Date.parse(comment.updatedAt))
     || Date.parse(comment.updatedAt) < Math.floor(completedAt / 1000) * 1000) return unconfirmed;
-  const botReactions = (pr.reactions?.nodes ?? []).filter((reaction) =>
-    [CODEX_REVIEWER, `${CODEX_REVIEWER}[bot]`].includes(reaction.user?.login));
-  if (botReactions.some((reaction) => reaction.content === 'EYES')
+  if (unconfirmed.running
     || !botReactions.some((reaction) => reaction.content === 'THUMBS_UP'
       && Date.parse(reaction.createdAt) >= Math.floor(completedAt / 1000) * 1000)) return unconfirmed;
   return { confirmed: true, commit, at: new Date(completedAt).toISOString(), provider: 'codex-cloud-summary' };

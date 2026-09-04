@@ -199,6 +199,13 @@ test('a completed summary without thumbs up preserves a formal review after find
   assert.equal(evaluatePullRequest(pr).ready, true);
 });
 
+test('bot eyes block a previous formal review before the summary is updated', () => {
+  const pr = summaryFixture();
+  pr.reviews = fixture().reviews;
+  pr.reactions.nodes.push({ user: { login: 'chatgpt-codex-connector[bot]' }, content: 'EYES' });
+  assert.ok(evaluatePullRequest(pr).blockers.some((item) => item.code === 'CODEX_SUMMARY_UNCONFIRMED'));
+});
+
 test('a failed summary does not disable the review-quota alternative channel', () => {
   const pr = summaryFixture();
   pr.comments.nodes[0].body = pr.comments.nodes[0].body.replace('✅ **Completed**', '❌ **Failed**');
