@@ -192,6 +192,27 @@ test('a newer pending summary cannot fall back to an older completion or formal 
   assert.ok(evaluatePullRequest(pr).blockers.some((item) => item.code === 'CODEX_SUMMARY_UNCONFIRMED'));
 });
 
+test('a completed summary without thumbs up preserves a formal review after findings are resolved', () => {
+  const pr = summaryFixture();
+  pr.reactions.nodes = [];
+  pr.reviews = fixture().reviews;
+  assert.equal(evaluatePullRequest(pr).ready, true);
+});
+
+test('a failed summary does not disable the review-quota alternative channel', () => {
+  const pr = summaryFixture();
+  pr.comments.nodes[0].body = pr.comments.nodes[0].body.replace('✅ **Completed**', '❌ **Failed**');
+  pr.comments.nodes.push({
+    author: { login: 'chatgpt-codex-connector' },
+    body: 'You have reached your Codex usage limits for code reviews.',
+  }, {
+    createdAt: '2026-07-15T00:11:00Z',
+    author: { login: 'xiaojichao' },
+    body: 'review-provider: local-codex\nReviewed commit: `aaaaaaaaaa`\n结论：APPROVED',
+  });
+  assert.equal(evaluatePullRequest(pr).ready, true);
+});
+
 test('blocks when Codex Review only covers an older commit', () => {
   const result = evaluatePullRequest(fixture({
     reviews: {
