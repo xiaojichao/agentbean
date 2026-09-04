@@ -16,7 +16,7 @@ Node 24；发送库锁定 web-push 3.6.7。Server 未配置下列变量时保持
 node scripts/generate-web-push-keys.mjs /安全目录/agentbean-push.env mailto:实际运维邮箱
 ```
 
-脚本以 0600 写入新文件，不覆盖既有文件、不打印密钥。将这三项配置到生产 Server 的环境变量后正常部署。当前实现没有修改任何生产 Secret、提交或部署。
+脚本以 0600 写入新文件，不覆盖既有文件、不打印密钥。将这三项配置到生产 Server 的环境变量后正常部署；脚本本身不修改远端配置或触发部署。
 
 Web 必须使用 HTTPS（本地 localhost/loopback 可开发），并能从自身 origin 返回 /agentbean-push-sw.js；该文件位于 web-next/public，随常规 Next 构建与部署发布。响应禁缓存，scope 为 /；Worker 没有 fetch 缓存，不改变应用请求。VAPID 换钥后，用户再次打开页面会清理旧订阅，并可重新开启推送。
 
@@ -32,7 +32,7 @@ Web 必须使用 HTTPS（本地 localhost/loopback 可开发），并能从自�
 
 回退优先恢复上一成功部署，不删除提醒、订阅或迁移表。`0088`、`0089` 为新增表/触发器，旧版应用无需反向迁移；保留持久数据及同一 VAPID 密钥以便恢复。若需停用系统推送而保留新版侧栏提醒，应一次性清空三个运行时配置后再部署，不可只删一个导致启动校验失败。回退后重新验证 health 与侧栏，并单独记录系统推送未启用。
 
-2026-09-04 发布前只读核对：GitHub 与 Railway 均无这三个推送配置项；生产 health 为 `ok: true`。候选密钥仅在本机私密目录保存，尚未写入远端；本分支尚未提交、创建 PR 或部署。再次执行时需刷新这些状态。
+2026-09-04 发布前只读核对：GitHub 与 Railway 均无这三个推送配置项；生产 health 为 `ok: true`。后续获得用户授权，已建立 Issue #1302 与 PR #1303，并使用 `--skip-deploys` 写入三个 Railway 配置、回查一致。部署与验收状态以 PR 和 main CI/CD 的最新记录为准；再次执行时需刷新状态。
 
 ## 投递契约
 

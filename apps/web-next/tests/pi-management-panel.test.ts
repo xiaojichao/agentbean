@@ -128,6 +128,10 @@ const sidebarSource = readFileSync(
   resolve(import.meta.dirname, '../components/sidebar.tsx'),
   'utf8',
 );
+const notificationsSource = readFileSync(
+  resolve(import.meta.dirname, '../components/completion-notifications.tsx'),
+  'utf8',
+);
 const socketSource = readFileSync(
   resolve(import.meta.dirname, '../lib/socket.ts'),
   'utf8',
@@ -156,9 +160,10 @@ describe('PI Management console scope', () => {
     expect(sidebarSource).toContain("currentUser?.role !== 'admin'");
     expect(sidebarSource).toContain('piProviderEvents().getActiveModel()');
     expect(sidebarSource).toContain("piReadiness?.status === 'attention_required'");
-    expect(sidebarSource).toContain('data-smoke="pi-configuration-readiness-alert"');
-    expect(sidebarSource).toContain('dashboard/pi');
-    expect(sidebarSource).toContain('PI 需要处理');
+    expect(sidebarSource).toContain("piAttention={isAdmin && piReadiness?.status === 'attention_required'}");
+    expect(notificationsSource).toContain('data-smoke="pi-configuration-readiness-alert"');
+    expect(notificationsSource).toContain('dashboard/pi');
+    expect(notificationsSource).toContain('PI 需要处理');
     expect(sidebarSource).not.toContain('diagnosticCode');
   });
 

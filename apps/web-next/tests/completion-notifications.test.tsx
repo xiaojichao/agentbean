@@ -46,7 +46,7 @@ describe('侧栏交付提醒', () => {
   });
   test('恢复未读列表，同时保留 PI 提醒；打开菜单不自动已读', async () => {
     mocks.list.mockResolvedValue({ ok: true, items: [item()] });
-    render(<CompletionNotifications {...props} />);
+    const view = render(<CompletionNotifications {...props} />);
     await screen.findByText('报告已交付，待验收');
     expect(screen.getByLabelText('提醒，1条未读')).toBeTruthy();
     expect(screen.getByText('PI 需要处理')).toBeTruthy();
@@ -56,6 +56,9 @@ describe('侧栏交付提醒', () => {
     await waitFor(() => expect(mocks.markRead).toHaveBeenCalledWith({ teamId: 'team', id: 'notice-1' }));
     await waitFor(() => expect(screen.getByLabelText('提醒')).toBeTruthy());
     expect(mocks.push).toHaveBeenCalledWith('/test/tasks?thread=channel%3Atask');
+    view.rerender(<CompletionNotifications {...props} piAttention={false} />);
+    expect(screen.queryByText('PI 需要处理')).toBeNull();
+    expect(screen.getByText('报告已交付，待验收')).toBeTruthy();
   });
 
   test('实时唤醒重拉权威列表，重复唤醒只显示一个提示', async () => {
