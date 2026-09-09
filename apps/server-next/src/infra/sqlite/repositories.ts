@@ -2012,13 +2012,21 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
                   THEN CASE WHEN json_type(meta_json, '$.parentMessageId') = 'text'
                     THEN json_extract(meta_json, '$.parentMessageId')
                     ELSE json_extract(meta_json, '$.inReplyTo') END
+                  WHEN sender_kind = 'agent'
+                    AND COALESCE(json_extract(meta_json, '$.replyScope'), '') != 'thread'
+                    AND (
+                      EXISTS (SELECT 1 FROM messages origin WHERE origin.id = history.thread_id
+                        AND origin.channel_id = history.channel_id AND origin.thread_id = origin.id)
+                      OR (json_extract(meta_json, '$.replyScope') = 'channel'
+                        AND NOT EXISTS (SELECT 1 FROM messages origin WHERE origin.id = history.thread_id))
+                    ) THEN NULL
                   WHEN thread_id IS NOT NULL AND thread_id != '' AND thread_id != id THEN thread_id
                   ELSE NULLIF(CASE WHEN json_type(meta_json, '$.parentMessageId') = 'text'
                     THEN json_extract(meta_json, '$.parentMessageId')
                     WHEN json_type(meta_json, '$.inReplyTo') = 'text'
                     THEN json_extract(meta_json, '$.inReplyTo') END, '')
                 END AS _parent_id
-              FROM messages
+              FROM messages history
               WHERE channel_id = ?
               AND NOT (
                 sender_kind = 'system'
@@ -2049,6 +2057,11 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             const message = mapMessage(row);
             if (!message) {
               throw new Error('SQLite visible message row could not be mapped');
+            }
+            // Preserve the inferred channel scope even when the origin is outside this history window.
+            if (message.senderKind === 'agent' && message.threadId && message.threadId !== message.id
+              && typeof row === 'object' && row !== null && '_parent_id' in row && row._parent_id === null) {
+              return { ...message, meta: { ...message.meta, replyScope: 'channel' } };
             }
             return message;
           });

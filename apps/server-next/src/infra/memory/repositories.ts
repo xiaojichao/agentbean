@@ -1395,6 +1395,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             ? message.meta.parentMessageId
             : typeof message.meta?.inReplyTo === 'string' ? message.meta.inReplyTo : undefined;
           if (message.senderKind === 'agent' && explicit) return explicit;
+          if (message.senderKind === 'agent' && message.meta?.replyScope !== 'thread') {
+            const origin = message.threadId ? messages.get(message.threadId) : undefined;
+            if ((origin?.channelId === channelId && origin.threadId === origin.id)
+              || (!origin && message.meta?.replyScope === 'channel')) return undefined;
+          }
           return message.threadId && message.threadId !== message.id ? message.threadId : explicit || undefined;
         };
         // Limit conversation roots, then include their replies without spending root slots.
@@ -1415,7 +1420,12 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         for (const id of selected) {
           for (const child of children.get(id) ?? []) selected.add(child);
         }
-        return visible.filter((message) => selected.has(message.id));
+        return visible.filter((message) => selected.has(message.id)).map((message) => {
+          // Legacy channel replies need an explicit scope when their origin falls outside the window.
+          if (message.senderKind === 'agent' && message.threadId && message.threadId !== message.id
+            && !parentId(message)) return { ...message, meta: { ...message.meta, replyScope: 'channel' } };
+          return message;
+        });
       },
       async listByThread(input) {
         return Array.from(messages.values())

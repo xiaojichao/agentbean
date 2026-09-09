@@ -627,13 +627,44 @@ describe('server-next SQLite repositories', () => {
 
       const history = await repositories.messages.listVisibleByChannel('channel-1', 50);
       expect(history.filter((message) => message.id.startsWith('root-')).map((message) => message.id))
-        .toEqual(Array.from({ length: 50 }, (_, i) => `root-${i + 5}`));
-      expect(history).toHaveLength(133);
-      expect(history.slice(-3).map((message) => message.id)).toEqual(['nested-agent', 'legacy-reply', 'channel-agent']);
+        .toEqual(Array.from({ length: 49 }, (_, i) => `root-${i + 6}`));
+      expect(history).toHaveLength(131);
+      expect(history.slice(-3).map((message) => message.id)).toEqual(['reply-79', 'nested-agent', 'channel-agent']);
       expect(history.some((message) => message.id === 'reply-0')).toBe(true);
       expect(history.some((message) => message.id === 'reply-79')).toBe(true);
       expect(history.some((message) => message.id === 'excluded-old-reply')).toBe(false);
       expect(history.some((message) => message.id === 'other-channel')).toBe(false);
+    } finally {
+      close();
+    }
+  });
+
+  test.each(['sqlite', 'memory'] as const)('%s counts late channel Agent results as main messages', async (storage) => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = storage === 'sqlite'
+        ? createSqliteRepositories({ globalDb, teamDb })
+        : createInMemoryRepositories();
+      const append = (id: string, threadId: string, createdAt: number, extra = {}) => repositories.messages.append({
+        id, threadId, createdAt, teamId: 'team-1', channelId: 'channel-1',
+        senderKind: 'human', senderId: 'user-1', body: id, ...extra,
+      });
+      await append('old-root', 'old-root', 1);
+      for (let i = 0; i < 50; i += 1) await append(`new-${i}`, `new-${i}`, 10 + i);
+      await append('late-channel', 'old-root', 100, { senderKind: 'agent', meta: { replyScope: 'channel' } });
+      await append('late-legacy', 'old-root', 101, { senderKind: 'agent' });
+      await append('explicit-thread', 'old-root', 102, { senderKind: 'agent', meta: { replyScope: 'thread' } });
+      await append('explicit-parent', 'old-root', 103, { senderKind: 'agent', meta: { parentMessageId: 'old-root' } });
+      const history = await repositories.messages.listVisibleByChannel('channel-1', 50);
+      expect(history).toHaveLength(50);
+      expect(history[0]?.id).toBe('new-2');
+      expect(history.slice(-2)).toMatchObject([
+        { id: 'late-channel', meta: { replyScope: 'channel' } },
+        { id: 'late-legacy', meta: { replyScope: 'channel' } },
+      ]);
+      expect(history.some((message) => message.id === 'old-root')).toBe(false);
+      expect(history.some((message) => message.id.startsWith('explicit-'))).toBe(false);
+      expect((await repositories.messages.getById('late-legacy'))?.meta).toBeUndefined();
     } finally {
       close();
     }
