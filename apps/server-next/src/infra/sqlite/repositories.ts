@@ -2001,8 +2001,32 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         const hiddenKindPlaceholders = HIDDEN_SYSTEM_MESSAGE_KINDS.map(() => '?').join(', ');
         return teamDb
           .prepare(`
-            SELECT * FROM (
-              SELECT *, rowid AS _message_rowid FROM messages
+            WITH RECURSIVE visible AS (
+              SELECT *, rowid AS _message_rowid,
+                CASE
+                  WHEN sender_kind = 'agent' AND COALESCE(
+                    CASE WHEN json_type(meta_json, '$.parentMessageId') = 'text'
+                      THEN json_extract(meta_json, '$.parentMessageId')
+                      WHEN json_type(meta_json, '$.inReplyTo') = 'text'
+                      THEN json_extract(meta_json, '$.inReplyTo') END, '') != ''
+                  THEN CASE WHEN json_type(meta_json, '$.parentMessageId') = 'text'
+                    THEN json_extract(meta_json, '$.parentMessageId')
+                    ELSE json_extract(meta_json, '$.inReplyTo') END
+                  WHEN sender_kind = 'agent'
+                    AND COALESCE(json_extract(meta_json, '$.replyScope'), '') != 'thread'
+                    AND (
+                      EXISTS (SELECT 1 FROM messages origin WHERE origin.id = history.thread_id
+                        AND origin.channel_id = history.channel_id AND origin.thread_id = origin.id)
+                      OR (json_extract(meta_json, '$.replyScope') = 'channel'
+                        AND NOT EXISTS (SELECT 1 FROM messages origin WHERE origin.id = history.thread_id))
+                    ) THEN NULL
+                  WHEN thread_id IS NOT NULL AND thread_id != '' AND thread_id != id THEN thread_id
+                  ELSE NULLIF(CASE WHEN json_type(meta_json, '$.parentMessageId') = 'text'
+                    THEN json_extract(meta_json, '$.parentMessageId')
+                    WHEN json_type(meta_json, '$.inReplyTo') = 'text'
+                    THEN json_extract(meta_json, '$.inReplyTo') END, '')
+                END AS _parent_id
+              FROM messages history
               WHERE channel_id = ?
               AND NOT (
                 sender_kind = 'system'
@@ -2016,9 +2040,16 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
                   OR json_type(meta_json, '$.coordination') IS NOT NULL
                 )
               )
-              ORDER BY created_at DESC, _message_rowid DESC
-              LIMIT ?
+            ), roots AS (
+              SELECT id FROM visible root WHERE _parent_id IS NULL
+                OR NOT EXISTS (SELECT 1 FROM visible parent WHERE parent.id = root._parent_id)
+              ORDER BY created_at DESC, _message_rowid DESC LIMIT ?
+            ), selected(id) AS (
+              SELECT id FROM roots
+              UNION
+              SELECT child.id FROM visible child JOIN selected parent ON child._parent_id = parent.id
             )
+            SELECT visible.* FROM visible JOIN selected ON selected.id = visible.id
             ORDER BY created_at ASC, _message_rowid ASC
           `)
           .all(channelId, ...HIDDEN_SYSTEM_MESSAGE_KINDS, limit)
@@ -2026,6 +2057,11 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             const message = mapMessage(row);
             if (!message) {
               throw new Error('SQLite visible message row could not be mapped');
+            }
+            // Preserve the inferred channel scope even when the origin is outside this history window.
+            if (message.senderKind === 'agent' && message.threadId && message.threadId !== message.id
+              && typeof row === 'object' && row !== null && '_parent_id' in row && row._parent_id === null) {
+              return { ...message, meta: { ...message.meta, replyScope: 'channel' } };
             }
             return message;
           });
