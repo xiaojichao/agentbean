@@ -31,7 +31,7 @@ export interface SystemMessageBubbleProps {
   onReviseVersion?: (request: ReviseVersionRequest & { channelId: string }) => void;
   onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
   /** 原型对齐:文件包「预览/编辑」浮窗入口;未提供时卡片不渲染该按钮。 */
-  onOpenPackagePreview?: (packageMeta: import('@/lib/output-package').OutputPackageMeta, versionId?: string) => void;
+  onOpenPackagePreview?: (packageMeta: import('@/lib/output-package').OutputPackageMeta, versionId?: string, readOnly?: boolean, exactVersion?: boolean) => void;
 }
 
 export function SystemMessageBubble({
@@ -104,7 +104,7 @@ export function SystemMessageBubble({
           }
           onOpenTask={onOpenTaskDetailById}
           onContinueWithAgent={onContinueWithAgent}
-          onOpenPreview={onOpenPackagePreview ? (versionId) => onOpenPackagePreview(pkg, versionId) : undefined}
+          onOpenPreview={onOpenPackagePreview ? (versionId, exactVersion) => onOpenPackagePreview(pkg, versionId, undefined, exactVersion) : undefined}
         />
       </div>
     );

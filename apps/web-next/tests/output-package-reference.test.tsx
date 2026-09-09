@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -73,138 +73,96 @@ const notReadyProjection = {
   consistencyToken: { schemaVersion: 1, entries: [] },
 };
 
-/**
- * #1063 AC5/AC10：卡片引用入口。
- * - 整包 current:预览 ready → package_projection 选择(带 expectedMemberRevisions fence);
- * - 整包 final:预览 not_ready → 阻断清单,不产生选择;
- * - 成员单选/多选 → package_members;
- * - rejected/changes_requested 成员仍可引用，但文件包卡片暂时不显示“基于此修改”。
- */
-describe('OutputPackageCard package reference (#1063)', () => {
-  function collectSelections(): ProjectReferenceSelectionRequestDto[] {
-    const collected: ProjectReferenceSelectionRequestDto[] = [];
-    render(<OutputPackageCard
-      packageMeta={packageMeta}
-      channelId="channel-1"
-      onAddReference={(selection) => collected.push(selection)}
-    />);
-    return collected;
+describe('文件包统一引用', () => {
+  function setup() {
+    const onAddReference = vi.fn();
+    render(<OutputPackageCard packageMeta={packageMeta} channelId="channel-1" onAddReference={onAddReference} />);
+    return onAddReference;
   }
-
-  test('整包 current:ready → package_projection 选择含 revision fence', async () => {
-    mocks.getOutputPackage.mockResolvedValue({
-      ok: true, projection: readyProjection, asOf: 100, audienceScope: 'team-1:channel-1:u-1',
-    });
-    const collected: ProjectReferenceSelectionRequestDto[] = [];
-    render(<OutputPackageCard
-      packageMeta={packageMeta}
-      channelId="channel-1"
-      onAddReference={(selection) => collected.push(selection)}
-    />);
-    fireEvent.click(document.querySelector('[data-smoke="output-package-projection-ref"]')!);
-    await waitFor(() => {
-      expect(mocks.getOutputPackage).toHaveBeenCalledWith({
-        channelId: 'channel-1', packageId: 'pkg-1', projection: { policy: 'current' },
-      });
-      expect(collected).toHaveLength(1);
-    });
-    expect(collected[0]).toEqual({
-      kind: 'package_projection',
-      packageId: 'pkg-1',
-      policy: 'current',
-      expectedMemberRevisions: [
-        { collectionId: 'col-1', revision: 3 },
-        { collectionId: 'col-2', revision: 1 },
-      ],
-    });
+  async function loaded() {
+    await waitFor(() => expect((screen.getByRole('button', { name: /引用(全部|所选)/ }) as HTMLButtonElement).disabled).toBe(false));
+  }
+  test('默认全选与当前版，整包保留 revision fence；没有重复引用入口', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: true, projection: readyProjection });
+    const add = setup();
+    await loaded();
+    expect((screen.getByRole('checkbox', { name: '全选文件' }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByText('选择成员')).toBeNull();
+    expect(screen.queryByRole('button', { name: '引用', exact: true })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '引用全部 2 个文件' }));
+    expect(add).toHaveBeenCalledWith({ kind: 'package_projection', packageId: 'pkg-1', policy: 'current', expectedMemberRevisions: [{ collectionId: 'col-1', revision: 3 }, { collectionId: 'col-2', revision: 1 }] });
+    expect(screen.getByRole('status').textContent).toBe('已加入输入框');
+    expect(screen.getByText('PKG-pkg-1')).toBeTruthy();
   });
-
-  test('整包 final:not_ready → 阻断清单,不产生选择', async () => {
-    mocks.getOutputPackage.mockResolvedValue({
-      ok: true, projection: notReadyProjection, asOf: 100, audienceScope: 'team-1:channel-1:u-1',
-    });
-    const collected: ProjectReferenceSelectionRequestDto[] = [];
-    render(<OutputPackageCard
-      packageMeta={packageMeta}
-      channelId="channel-1"
-      onAddReference={(selection) => collected.push(selection)}
-    />);
-    // 点击 final 按钮(第三个,顺序 current/final/delivered)。
-    fireEvent.click(document.querySelectorAll('[data-smoke="output-package-projection-ref"]')[1]!);
-    await waitFor(() => {
-      expect(document.querySelector('[data-smoke="output-package-projection-blockers"]')).not.toBeNull();
-    });
-    expect(screen.getByText(/尚未设置最终版/)).not.toBeNull();
-    expect(collected).toHaveLength(0);
+  test('部分引用冻结显示的最新版本，不误用原始交付版本', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: true, projection: { ...readyProjection, members: readyProjection.members.map((member) => ({ ...member, versionId: member.versionId + '-current', versionNumber: 3 })) } });
+    const add = setup();
+    await loaded();
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 F2 ep2.md' }));
+    expect((screen.getByRole('checkbox', { name: '全选文件' }) as HTMLInputElement).indeterminate).toBe(true);
+    expect(screen.getAllByText(/当前版 v3/)).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: '引用所选 1 个文件' }));
+    expect(add).toHaveBeenCalledWith({ kind: 'package_members', packageId: 'pkg-1', members: [{ collectionId: 'col-1', versionId: 'ver-1-current' }] });
   });
-
-  test('成员单选与多选 → package_members 显式选择', () => {
-    const collected: ProjectReferenceSelectionRequestDto[] = [];
-    render(<OutputPackageCard
-      packageMeta={packageMeta}
-      channelId="channel-1"
-      onAddReference={(selection) => collected.push(selection)}
-    />);
-    // 单选 F1。
-    fireEvent.click(document.querySelectorAll('[data-smoke="output-package-member-ref"]')[0]!);
-    expect(collected).toHaveLength(1);
-    expect(collected[0]).toEqual({
-      kind: 'package_members', packageId: 'pkg-1',
-      members: [{ collectionId: 'col-1', versionId: 'ver-1' }],
-    });
+  test('最终版缺失时保留勾选并阻断；取消缺失项后可引用剩余最终版', async () => {
+    mocks.getOutputPackage.mockImplementation(async ({ projection }) => ({ ok: true, projection: projection.policy === 'final' ? { ...notReadyProjection, members: [{ ...readyProjection.members[1], versionId: 'final-2', versionNumber: 2, isFinalVersion: true }] } : readyProjection }));
+    const add = setup();
+    await loaded();
+    fireEvent.change(screen.getByRole('combobox', { name: '引用版本' }), { target: { value: 'final' } });
+    await screen.findByText('尚未设置最终版');
+    expect((screen.getByRole('checkbox', { name: '选择 F1 ep1.md' }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('button', { name: '引用全部 2 个文件' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(add).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 F1 ep1.md' }));
+    fireEvent.click(screen.getByRole('button', { name: '引用所选 1 个文件' }));
+    expect(add).toHaveBeenCalledWith({ kind: 'package_members', packageId: 'pkg-1', members: [{ collectionId: 'col-2', versionId: 'final-2' }] });
   });
-
-  test('多选:进入选择态勾选两个成员 → 引用所选', () => {
-    const collected: ProjectReferenceSelectionRequestDto[] = [];
-    render(<OutputPackageCard
-      packageMeta={packageMeta}
-      channelId="channel-1"
-      onAddReference={(selection) => collected.push(selection)}
-    />);
-    fireEvent.click(document.querySelector('[data-smoke="output-package-member-select-toggle"]')!);
-    fireEvent.click(document.querySelectorAll('[data-smoke="output-package-member-select"]')[0]!);
-    fireEvent.click(document.querySelectorAll('[data-smoke="output-package-member-select"]')[1]!);
-    expect(screen.getByText('已选 2 个文件')).not.toBeNull();
-    fireEvent.click(document.querySelector('[data-smoke="output-package-member-select-confirm"]')!);
-    expect(collected).toHaveLength(1);
-    expect(collected[0]).toEqual({
-      kind: 'package_members', packageId: 'pkg-1',
-      members: [
-        { collectionId: 'col-1', versionId: 'ver-1' },
-        { collectionId: 'col-2', versionId: 'ver-2' },
-      ],
-    });
+  test('空选择禁用，重新全选恢复；交付版不包含 revision fence', async () => {
+    mocks.getOutputPackage.mockImplementation(async ({ projection }) => ({ ok: true, projection: { ...readyProjection, policy: projection.policy } }));
+    const add = setup();
+    await loaded();
+    fireEvent.click(screen.getByRole('checkbox', { name: '全选文件' }));
+    expect(screen.getByRole('status').textContent).toBe('请选择文件');
+    expect((screen.getByRole('button', { name: '引用所选 0 个文件' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox', { name: '全选文件' }));
+    fireEvent.change(screen.getByRole('combobox', { name: '引用版本' }), { target: { value: 'delivered' } });
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: '引用全部 2 个文件' }));
+    expect(add).toHaveBeenCalledWith({ kind: 'package_projection', packageId: 'pkg-1', policy: 'delivered' });
   });
-
-  test('rejected 成员保留状态与引用入口，但不显示“基于此修改”', async () => {
-    mocks.artifactCollections.mockResolvedValue({ ok: true, library: { collections: [{
-      id: 'col-1', name: 'ep1.md', currentVersionId: 'ver-1',
-      versions: [{ id: 'ver-1', versionNumber: 1 }],
-    }] } });
-    mocks.getOutputPackage.mockResolvedValue({
-      ok: true,
-      availableActions: [{
-        collectionId: 'col-1', versionId: 'ver-1', reviewState: 'rejected',
-        isFinalVersion: false, collectionRevision: 3, actions: [],
-      }],
-      asOf: 100, audienceScope: 'team-1:channel-1:u-1',
-    });
-    const collected: ProjectReferenceSelectionRequestDto[] = [];
-    render(<OutputPackageCard
-      packageMeta={packageMeta}
-      channelId="channel-1"
-      onAddReference={(selection) => collected.push(selection)}
-    />);
-    await waitFor(() => {
-      expect(screen.getByText('拒绝')).not.toBeNull();
-    });
-    expect(document.querySelector('[data-smoke="output-package-member-based-on"]')).toBeNull();
-    expect(screen.queryByText('基于此修改')).toBeNull();
-    expect(document.querySelector('[data-smoke="output-package-member-ref"]')).not.toBeNull();
-    expect(collected).toHaveLength(0);
+  test('被要求修改的当前版不可通过部分选择绕过，预览绑定显示的版本', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: true, projection: { ...readyProjection, status: 'not_ready', members: readyProjection.members.map((member) => ({ ...member, versionId: member.versionId + '-current', versionNumber: 3 })), blockers: [{ code: 'current_not_formal', collectionId: 'col-1' }] } });
+    const add = vi.fn();
+    const preview = vi.fn();
+    render(<OutputPackageCard packageMeta={packageMeta} channelId="channel-1" onAddReference={add} onOpenPreview={preview} />);
+    await screen.findByText('当前版已被拒绝或要求修改，请在预览中处理');
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 F2 ep2.md' }));
+    expect((screen.getByRole('button', { name: '引用所选 1 个文件' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getAllByRole('button', { name: '预览' })[0]);
+    expect(preview).toHaveBeenCalledWith('ver-1-current', true);
+    expect(add).not.toHaveBeenCalled();
+  });
+  test('加载失败可重试，不能产生引用', async () => {
+    mocks.getOutputPackage.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ ok: true, projection: readyProjection });
+    const add = setup();
+    await screen.findByRole('alert');
+    expect((screen.getByRole('button', { name: '引用全部 2 个文件' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(add).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    await loaded();
+  });
+  test('切换版本后忽略迟到的旧响应', async () => {
+    let resolveOld!: (value: unknown) => void;
+    mocks.getOutputPackage.mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; })).mockResolvedValue({ ok: true, projection: { ...readyProjection, policy: 'delivered' } });
+    const add = setup();
+    fireEvent.change(screen.getByRole('combobox', { name: '引用版本' }), { target: { value: 'delivered' } });
+    await loaded();
+    await act(async () => { resolveOld({ ok: true, projection: notReadyProjection }); });
+    fireEvent.click(screen.getByRole('button', { name: '引用全部 2 个文件' }));
+    expect(add).toHaveBeenCalledWith({ kind: 'package_projection', packageId: 'pkg-1', policy: 'delivered' });
+    expect(screen.queryByText('尚未设置最终版')).toBeNull();
   });
 });
-
 
 /** 原型对齐:成员行 file-sub(collection 名 · current server 版本 · 来源/修改时间)。 */
 describe('OutputPackageCard 成员行 file-sub', () => {
