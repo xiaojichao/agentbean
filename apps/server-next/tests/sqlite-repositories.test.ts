@@ -1,3 +1,4 @@
+import { createInMemoryRepositories } from '../src/infra/memory/repositories';
 import { createRequire } from 'node:module';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -597,6 +598,64 @@ describe('server-next SQLite repositories', () => {
       await expect(repositories.messages.search({
         channelIds: ['channel-1'], query: 'needle', limit: 1,
       })).resolves.toMatchObject([{ id: 'visible-2' }]);
+    } finally {
+      close();
+    }
+  });
+
+  test.each(['sqlite', 'memory'] as const)('%s channel history reserves 50 slots for roots and retains their replies', async (storage) => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = storage === 'sqlite'
+        ? createSqliteRepositories({ globalDb, teamDb })
+        : createInMemoryRepositories();
+      const append = (id: string, threadId: string, createdAt: number, extra = {}) => repositories.messages.append({
+        id, threadId, createdAt, teamId: 'team-1', channelId: 'channel-1',
+        senderKind: 'human', senderId: 'user-1', body: id, ...extra,
+      });
+      // Same timestamps deliberately exercise stable insertion ordering at the limit boundary.
+      for (let i = 0; i < 55; i += 1) await append(`root-${i}`, `root-${i}`, 100);
+      for (let i = 0; i < 80; i += 1) await append(`reply-${i}`, 'root-54', 200 + i);
+      await append('nested-agent', 'root-54', 300, {
+        senderKind: 'agent', meta: { parentMessageId: 'reply-0', replyScope: 'thread' },
+      });
+      await append('legacy-reply', 'legacy-reply', 301, { meta: { inReplyTo: 'root-5' } });
+      await append('channel-agent', 'root-54', 302, { senderKind: 'agent', meta: { replyScope: 'channel' } });
+      await append('excluded-old-reply', 'root-0', 303);
+      await append('hidden-system', 'hidden-system', 304, { senderKind: 'system', meta: { kind: 'management-status' } });
+      await append('other-channel', 'other-channel', 305, { channelId: 'channel-2' });
+
+      const history = await repositories.messages.listVisibleByChannel('channel-1', 50);
+      expect(history.filter((message) => message.id.startsWith('root-')).map((message) => message.id))
+        .toEqual(Array.from({ length: 50 }, (_, i) => `root-${i + 5}`));
+      expect(history).toHaveLength(133);
+      expect(history.slice(-3).map((message) => message.id)).toEqual(['nested-agent', 'legacy-reply', 'channel-agent']);
+      expect(history.some((message) => message.id === 'reply-0')).toBe(true);
+      expect(history.some((message) => message.id === 'reply-79')).toBe(true);
+      expect(history.some((message) => message.id === 'excluded-old-reply')).toBe(false);
+      expect(history.some((message) => message.id === 'other-channel')).toBe(false);
+    } finally {
+      close();
+    }
+  });
+
+  test.each(['sqlite', 'memory'] as const)('%s retains replies promoted from hidden roots', async (storage) => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = storage === 'sqlite'
+        ? createSqliteRepositories({ globalDb, teamDb })
+        : createInMemoryRepositories();
+      await repositories.messages.append({
+        id: 'hidden-root', threadId: 'hidden-root', teamId: 'team-1', channelId: 'channel-1',
+        senderKind: 'system', senderId: 'system', body: 'hidden', createdAt: 1,
+        meta: { kind: 'artifact-version-revision' },
+      });
+      await repositories.messages.append({
+        id: 'reply', threadId: 'hidden-root', teamId: 'team-1', channelId: 'channel-1',
+        senderKind: 'human', senderId: 'user-1', body: 'still visible', createdAt: 2,
+      });
+      expect((await repositories.messages.listVisibleByChannel('channel-1', 1)).map((message) => message.id))
+        .toEqual(['reply']);
     } finally {
       close();
     }

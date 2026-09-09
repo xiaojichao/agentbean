@@ -1384,13 +1384,38 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .slice(-limit);
       },
       async listVisibleByChannel(channelId, limit) {
-        return Array.from(messages.values())
+        const visible = Array.from(messages.values())
           .filter((message) =>
             message.channelId === channelId
             && !isHiddenSystemMessage({ senderKind: message.senderKind, meta: message.meta })
           )
-          .sort((left, right) => left.createdAt - right.createdAt)
-          .slice(-limit);
+          .sort((left, right) => left.createdAt - right.createdAt);
+        const parentId = (message: MessageRecord): string | undefined => {
+          const explicit = typeof message.meta?.parentMessageId === 'string'
+            ? message.meta.parentMessageId
+            : typeof message.meta?.inReplyTo === 'string' ? message.meta.inReplyTo : undefined;
+          if (message.senderKind === 'agent' && explicit) return explicit;
+          return message.threadId && message.threadId !== message.id ? message.threadId : explicit || undefined;
+        };
+        // Limit conversation roots, then include their replies without spending root slots.
+        const visibleIds = new Set(visible.map((message) => message.id));
+        const selected = new Set(visible.filter((message) => {
+          const parent = parentId(message);
+          return !parent || !visibleIds.has(parent);
+        }).slice(-limit).map((message) => message.id));
+        const children = new Map<string, string[]>();
+        for (const message of visible) {
+          const parent = parentId(message);
+          if (parent) {
+            const siblings = children.get(parent);
+            if (siblings) siblings.push(message.id);
+            else children.set(parent, [message.id]);
+          }
+        }
+        for (const id of selected) {
+          for (const child of children.get(id) ?? []) selected.add(child);
+        }
+        return visible.filter((message) => selected.has(message.id));
       },
       async listByThread(input) {
         return Array.from(messages.values())
