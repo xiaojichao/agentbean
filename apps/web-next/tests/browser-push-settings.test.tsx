@@ -51,12 +51,15 @@ test('只有点击才请求权限；开启保存绑定；关闭清理本地与�
   render(<Surface />);
   const enable = await screen.findByLabelText('开启系统推送');
   expect(mocks.permission).not.toHaveBeenCalled();
+  expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
   fireEvent.click(enable);
   await screen.findByLabelText('关闭系统推送');
+  expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true');
   expect(mocks.permission).toHaveBeenCalledTimes(1);
   expect(mocks.binding).toHaveBeenCalledWith({ userId: 'user', publicKey: 'key' });
   fireEvent.click(screen.getByLabelText('关闭系统推送'));
   await screen.findByText('系统推送已关闭，侧栏提醒仍保留');
+  expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
   expect(mocks.clear).toHaveBeenCalledOnce();
   expect(mocks.unsubscribe).toHaveBeenCalledWith({ endpoint: 'https://fcm.googleapis.com/test' });
 });

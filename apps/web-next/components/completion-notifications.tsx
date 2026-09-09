@@ -29,7 +29,7 @@ export function CompletionNotifications({ teamId, teamPath, userId, connected, o
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<CompletionNotificationDto | null>(null);
   const scope = teamId + ':' + userId;
-  const items = state.scope === scope ? state.items : [];
+  const items = state.scope === scope ? state.items.filter((item) => item.readAt === null) : [];
   const unread = state.scope === scope ? state.unreadCount : 0;
   const cursor = page.scope === scope ? page.cursor : null;
 
@@ -167,10 +167,10 @@ export function CompletionNotifications({ teamId, teamPath, userId, connected, o
             <span className="mt-1 block text-xs text-neutral-500">{item.taskId ? '查看交付' : '查看结果'} · {new Date(item.createdAt).toLocaleString('zh-CN')}</span></span>
         </button>)}
         {error ? <p role="status" className="px-3 py-4 text-xs text-amber-700">{error}</p>
-          : items.length === 0 && !piAttention && <p className="px-3 py-5 text-center text-xs text-neutral-400">{loading ? '正在加载提醒…' : !connected ? '连接恢复后同步提醒' : '暂无提醒'}</p>}
+          : items.length === 0 && !piAttention && <p className="px-3 py-5 text-center text-xs text-neutral-400">{loading ? '正在加载提醒…' : !connected ? '连接恢复后同步提醒' : '本页暂无未读提醒'}</p>}
       </div>
       <div className="flex justify-between border-t border-neutral-100 px-3 py-2 text-xs text-neutral-600">
-        {cursor ? <button type="button" disabled={loading} onClick={() => setPage({ scope, cursor: null })}>返回最新提醒</button> : <span>已读保留 30 天，最多 100 条</span>}
+        {cursor ? <button type="button" disabled={loading} onClick={() => setPage({ scope, cursor: null })}>返回最新提醒</button> : <span>仅显示未读提醒</span>}
         {state.scope === scope && state.nextCursor && <button type="button" disabled={loading}
           onClick={() => setPage({ scope, cursor: state.nextCursor })}>更早提醒</button>}
       </div>
