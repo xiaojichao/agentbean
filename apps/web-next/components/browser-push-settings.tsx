@@ -93,13 +93,11 @@ export function BrowserPushSettings({ state }: { state: ReturnType<typeof useBro
     <div className="flex items-center justify-between gap-2 text-xs">
       <span className="font-medium text-neutral-700">系统推送</span>
       {available && <button type="button" onClick={() => { void toggle(); }} disabled={busy || !connected}
-        className="text-pink-700 disabled:opacity-50" aria-label={enabled ? '关闭系统推送' : '开启系统推送'}>
-        {busy ? '处理中…' : enabled ? '关闭' : '开启'}
+        role="switch" aria-checked={enabled} aria-busy={busy}
+        className={'relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ' + (enabled ? 'bg-pink-600' : 'bg-neutral-300')} aria-label="系统推送">
+        <span aria-hidden="true" className={'absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ' + (enabled ? 'translate-x-4' : 'translate-x-0')} />
       </button>}
     </div>
     <p role="status" className="mt-1 text-xs text-neutral-500">{message}</p>
-    {enabled && <p className="mt-2 text-xs text-neutral-500">
-      收不到通知？请在系统通知设置中允许当前浏览器显示通知，并开启横幅或桌面提醒。
-    </p>}
   </div>;
 }

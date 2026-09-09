@@ -58,7 +58,18 @@ describe('侧栏交付提醒', () => {
     expect(mocks.push).toHaveBeenCalledWith('/test/tasks?thread=channel%3Atask');
     view.rerender(<CompletionNotifications {...props} piAttention={false} />);
     expect(screen.queryByText('PI 需要处理')).toBeNull();
-    expect(screen.getByText('报告已交付，待验收')).toBeTruthy();
+    expect(screen.queryByText('报告已交付，待验收')).toBeNull();
+  });
+
+  test('已读记录不出现在列表，跨端读状态刷新后移除提醒', async () => {
+    mocks.list.mockResolvedValue({ ok: true, items: [item(), item({ id: 'read', title: '已读交付', readAt: 2 })], unreadCount: 1 });
+    render(<CompletionNotifications {...props} piAttention={false} />);
+    await screen.findByText('报告已交付，待验收');
+    expect(screen.queryByText('已读交付')).toBeNull();
+    mocks.list.mockResolvedValue({ ok: true, items: [item({ readAt: 3 })], unreadCount: 0 });
+    await act(async () => { mocks.listener?.({ teamId: 'team', recipientId: 'user' }); });
+    expect(screen.queryByText('报告已交付，待验收')).toBeNull();
+    expect(screen.getByLabelText('提醒')).toBeTruthy();
   });
 
   test('实时唤醒重拉权威列表，重复唤醒只显示一个提示', async () => {
