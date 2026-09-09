@@ -66,6 +66,8 @@ export interface OutputPackagePreviewModalProps {
   channelId: string;
   /** 成员行「预览」进入时聚焦的成员(交付冻结版本 id)。 */
   initialVersionId?: string;
+  /** 引用选择器要求预览精确版本；非当前版本只读，不回退到当前版。 */
+  exactInitialVersion?: boolean;
   /** 归档频道等只读来源仍可预览，但不暴露编辑、审核或最终化动作。 */
   readOnly?: boolean;
   renderPreview: (content: string) => ReactNode;
@@ -82,6 +84,7 @@ export function OutputPackagePreviewModal({
   packageMeta,
   channelId,
   initialVersionId,
+  exactInitialVersion = false,
   readOnly = false,
   renderPreview,
   onClose,
@@ -98,6 +101,7 @@ export function OutputPackagePreviewModal({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
+  const [requestedVersionId, setRequestedVersionId] = useState<string | null>(null);
   const [content, setContent] = useState<string | null>(null);
   const [contentError, setContentError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
@@ -123,10 +127,11 @@ export function OutputPackagePreviewModal({
   }, [editorState.dirty, onClose]);
 
   const selectMember = useCallback((collectionId: string) => {
-    if (collectionId === activeCollectionId) return;
+    if (collectionId === activeCollectionId && !requestedVersionId) return;
     if (editorState.dirty && !window.confirm('有未保存的修改，确定放弃并切换文件吗？')) return;
     setEditorState(EMPTY_EDITOR_STATE);
     setActiveCollectionId(collectionId);
+    setRequestedVersionId(null);
     setSavedNotice(null);
     setHistoryOpen(false);
     setHistoryPreview(null);
@@ -137,7 +142,7 @@ export function OutputPackagePreviewModal({
     setReturnDecision('changes_requested');
     setReturnAgentChoice('original');
     setFinalizeAfterApprove(false);
-  }, [activeCollectionId, editorState.dirty]);
+  }, [activeCollectionId, editorState.dirty, requestedVersionId]);
 
   const loadWorkspace = useCallback(async () => {
     const [libraryResult, packageResult] = await Promise.all([
@@ -210,24 +215,34 @@ export function OutputPackagePreviewModal({
   useEffect(() => {
     if (!collections || activeCollectionId) return;
     const initialMember = initialVersionId
-      ? packageMeta.members.find((m) => m.artifactVersionId === initialVersionId)
+      ? packageMeta.members.find((member) => member.artifactVersionId === initialVersionId
+        || collections.find((collection) => collection.id === member.collectionId)?.versions.some((version) => version.id === initialVersionId))
       : undefined;
+    if (exactInitialVersion && initialVersionId && !initialMember) {
+      setLoadError('所选文件版本已不可用，请关闭后重新选择');
+      return;
+    }
     const fallback = initialMember ?? packageMeta.members[0];
-    if (fallback) setActiveCollectionId(fallback.collectionId);
-  }, [collections, activeCollectionId, initialVersionId, packageMeta.members]);
+    if (fallback) {
+      setActiveCollectionId(fallback.collectionId);
+      if (exactInitialVersion && initialVersionId) setRequestedVersionId(initialVersionId);
+    }
+  }, [collections, activeCollectionId, initialVersionId, exactInitialVersion, packageMeta.members]);
 
   const active: ActiveTarget | null = (() => {
     if (!collections || !activeCollectionId) return null;
     const collection = collections.find((c) => c.id === activeCollectionId) ?? null;
     if (!collection) return null;
-    const current = collection.versions.find((v) => v.id === collection.currentVersionId) ?? null;
+    const current = collection.versions.find((v) => v.id === (requestedVersionId ?? collection.currentVersionId)) ?? null;
     if (!current) return null;
     return { collection, current };
   })();
+  const historicalPreview = Boolean(active && active.current.id !== active.collection.currentVersionId);
+  const viewReadOnly = readOnly || historicalPreview;
   const activeIsMarkdown = active
     ? isMarkdownFilename((active.current.artifact as unknown as Artifact).filename)
     : false;
-  const activeActions = active && availableActions && !readOnly
+  const activeActions = active && availableActions && !viewReadOnly
     ? availableActions.find((entry) => (
       entry.collectionId === active.collection.id && entry.versionId === active.current.id
     )) ?? null
@@ -276,6 +291,7 @@ export function OutputPackagePreviewModal({
 
   const saveCurrent = useCallback(async (nextContent: string, filename: string): Promise<MarkdownDocumentSaveResult> => {
     if (!active) return { ok: false, conflict: true, message: '未选择成员' };
+    if (viewReadOnly) return { ok: false, conflict: true, message: '此版本只读，请选择当前版后编辑' };
     const saveIntent = saveIntentRef.current;
     // 本次动作使用上面的局部快照；立即复位只为避免异常后污染下一次普通保存。
     saveIntentRef.current = 'version';
@@ -333,6 +349,7 @@ export function OutputPackagePreviewModal({
         : saveIntent === 'approve-final'
           ? `已保存并通过：Server v${result.revision.versionNumber} 已成为 current 与 final。`
           : `已保存并通过：审核记录绑定 Server v${result.revision.versionNumber}，final 未移动。`);
+      setRequestedVersionId(null);
       await loadWorkspace();
       setEditorEpoch((n) => n + 1);
       setReviewPanel(null);
@@ -356,7 +373,7 @@ export function OutputPackagePreviewModal({
     }
     return { ok: false, conflict: true, message: result.message ?? result.error ?? '保存失败' };
   }, [active, activeActions?.latestReviewId, channelId, loadWorkspace, onSaved, packageMeta.packageId,
-    reviewComment, reviewPackageBasis]);
+    reviewComment, reviewPackageBasis, viewReadOnly]);
 
   const submitCurrentReview = useCallback(async (decision: 'approved') => {
     if (!active || !activeActions || reviewBusy) return;
@@ -528,6 +545,7 @@ export function OutputPackagePreviewModal({
 
 
   const loadLatest = useCallback(async () => {
+    setRequestedVersionId(null);
     const { collections: latestCollections } = await loadWorkspace();
     const latestCollection = latestCollections?.find((collection) => collection.id === activeCollectionId);
     const latestVersion = latestCollection?.versions.find((version) => version.id === latestCollection.currentVersionId);
@@ -666,8 +684,8 @@ export function OutputPackagePreviewModal({
                 key={`${active.current.id}:${editorEpoch}`}
                 filename={(active.current.artifact as unknown as Artifact).filename}
                 initialContent={content}
-                readOnly={readOnly}
-                {...(readOnly ? { readOnlyReason: '归档频道只读' } : {})}
+                readOnly={viewReadOnly}
+                {...(viewReadOnly ? { readOnlyReason: historicalPreview ? '所选历史版本只读' : '归档频道只读' } : {})}
                 onSave={saveCurrent}
                 onLoadLatest={loadLatest}
                 renderPreview={renderPreview}
@@ -941,6 +959,8 @@ export function OutputPackagePreviewModal({
               <span className="truncate text-red-700" role="alert">{actionError}</span>
             ) : savedNotice ? (
               <span className="truncate text-emerald-700" data-smoke="package-preview-saved">{savedNotice}</span>
+            ) : historicalPreview ? (
+              <span className="truncate text-neutral-500">所选历史版本只读，可在左侧选择文件查看当前版</span>
             ) : readOnly ? (
               <span className="truncate text-neutral-500">归档频道只读，仅可预览历史版本</span>
             ) : availableActions && (!activeActions || activeActions.actions.length === 0) ? (
@@ -952,7 +972,7 @@ export function OutputPackagePreviewModal({
               className="flex min-w-0 max-w-full items-center gap-1.5 overflow-x-auto [&>*]:shrink-0"
               data-smoke="package-preview-actions"
             >
-              {activeIsMarkdown && (
+              {activeIsMarkdown && !viewReadOnly && (
                 <button
                   type="button"
                   onClick={() => editorContainerRef.current?.querySelector<HTMLButtonElement>('[data-markdown-document-simulate-conflict]')?.click()}
@@ -976,7 +996,7 @@ export function OutputPackagePreviewModal({
               >
                 查看版本历史
               </button>
-              {activeIsMarkdown && (
+              {activeIsMarkdown && !viewReadOnly && (
                 <>
                   <button
                     type="button"

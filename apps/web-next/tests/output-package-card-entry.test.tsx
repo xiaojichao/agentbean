@@ -117,10 +117,10 @@ describe('OutputPackageCard 入口(#1065 AC2)', () => {
       .mockReturnValueOnce(oldResponse) // 旧频道(ch-1)查询:慢
       .mockResolvedValueOnce(newResponse); // 新频道(ch-2)查询:快
     const { rerender } = render(
-      <OutputPackageCard packageMeta={packageMeta} channelId="ch-1" onAddReference={vi.fn()} />,
+      <OutputPackageCard packageMeta={packageMeta} channelId="ch-1" />,
     );
     rerender(
-      <OutputPackageCard packageMeta={packageMeta} channelId="ch-2" onAddReference={vi.fn()} />,
+      <OutputPackageCard packageMeta={packageMeta} channelId="ch-2" />,
     );
     // 新响应先到并应用。
     await vi.waitFor(() => {

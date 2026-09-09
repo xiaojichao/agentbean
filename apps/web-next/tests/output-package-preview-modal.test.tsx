@@ -122,6 +122,7 @@ function library(
 
 function renderModal(options: {
   initialVersionId?: string;
+  exactInitialVersion?: boolean;
   readOnly?: boolean;
   onClose?: () => void;
   onSaved?: () => void;
@@ -132,6 +133,7 @@ function renderModal(options: {
     <OutputPackagePreviewModal
       packageMeta={packageMeta}
       channelId="channel-1"
+      exactInitialVersion={options.exactInitialVersion}
       {...(options.initialVersionId ? { initialVersionId: options.initialVersionId } : {})}
       {...(options.readOnly ? { readOnly: true } : {})}
       renderPreview={(content) => <div data-testid="rendered-markdown">{content}</div>}
@@ -326,6 +328,32 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.queryByText('实时预览')).toBeNull();
     expect(screen.queryByText(/保存后直接更新该文档的最新 Server 修订/)).toBeNull();
     expect(screen.queryByText(/保存会生成 v/)).toBeNull();
+  });
+
+  test('引用选择器可定位第二个文件的后续版本，不回落到首个文件', async () => {
+    const data = library();
+    data.collections[1]!.currentVersionId = 'version-2-current';
+    data.collections[1]!.versions.push(version('version-2-current', 'collection-2', '角色表.md', 4));
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: data });
+    renderModal({ initialVersionId: 'version-2-current', exactInitialVersion: true });
+    expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 角色表.md')).toBeTruthy();
+    expect(await screen.findByText('基于 Server v4')).toBeTruthy();
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('artifact-version-2-current')));
+  });
+
+  test('引用历史最终版时预览精确版本且只读，点击文件可返回当前版', async () => {
+    const data = library();
+    data.collections[1]!.currentVersionId = 'version-2-current';
+    data.collections[1]!.versions.push(version('version-2-current', 'collection-2', '角色表.md', 4));
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: data });
+    renderModal({ initialVersionId: 'version-2', exactInitialVersion: true });
+    expect(await screen.findByText('基于 Server v3')).toBeTruthy();
+    expect(await screen.findByText('所选历史版本只读，可在左侧选择文件查看当前版')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '保存新版本' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '通过', exact: true })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /F2 角色表/ }));
+    expect(await screen.findByText('基于 Server v4')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: '保存新版本' })).toBeTruthy();
   });
 
   test('成员行打开时聚焦指定版本，并可在左栏切换文件', async () => {
@@ -818,7 +846,7 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.queryByRole('button', { name: '退回修改…' })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: /参与批量审核/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /批量审核/ })).toBeNull();
-    expect((screen.getByRole('button', { name: '保存新版本' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '保存新版本' })).toBeNull();
   });
 
   test('组合保存遇到 stale fence 时保留脏稿并提示查看最新版', async () => {

@@ -1,15 +1,10 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Package, FileText, ShieldCheck, CheckSquare, Square, X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Package, FileText, ShieldCheck } from 'lucide-react';
 import type { OutputPackageMeta } from '@/lib/output-package';
 import { projectEvents } from '@/lib/socket';
-import {
-  buildPackageMembersSelection,
-  buildPackageProjectionSelection,
-  loadPackageProjection,
-  type PackageProjectionBlocker,
-} from '@/lib/output-package-reference';
+import { OutputPackageReferencePicker } from './OutputPackageReferencePicker';
 import type {
   PackageMemberAvailableActionsDto,
   ProjectReferenceSelectionRequestDto,
@@ -26,10 +21,8 @@ import type {
  * 或“基于此修改”动作；修订入口暂时只保留在 Files 等其他 surface。
  * 无 channelId(上下文不可得)时保持纯静态展示,不查询。
  *
- * #1063：整包引用(delivered/current/final 三入口)先经 getOutputPackage projection 预览——
- * ready 才产生 package_projection 选择(携带 expectedMemberRevisions fence);not_ready
- * 展示阻断清单(final 缺失/被拒 current),不产生选择。成员行支持单选(“引用”)、多选
- * ("选择"→ checkbox + 计数)。
+ * 引用入口统一由 OutputPackageReferencePicker 承载：默认全选、版本策略选择与一次确认。
+ * Server 投影决定展示版本与引用资格，整包保留 revision fence，部分选择冻结具体版本。
  */
 
 const PACKAGE_REVIEW_STATE_LABELS: Record<PackageMemberAvailableActionsDto['reviewState'], string> = {
@@ -58,8 +51,6 @@ function packageReviewStateLabel(reviewState: PackageMemberAvailableActionsDto['
   return reviewState === 'approved' ? '通过并设为最终版' : `${label} · 最终版`;
 }
 
-// #1065 AC11：整包投影策略沿用三处 surface 的共享标签。
-import { POLICY_LABELS } from '@/lib/delivery-labels';
 
 /** 成员行 file-sub 的时间:当天 HH:MM,跨天 M/D HH:MM(原型「手动修改于 19:41」)。 */
 function formatPackageMemberClock(ts?: number): string {
@@ -116,14 +107,9 @@ export function OutputPackageCard({
    * (成员行「预览」),省略时聚焦首个成员(包级按钮)。未提供时不渲染入口
    * (纯展示场景,如 channel-message)。
    */
-  onOpenPreview?: (versionId?: string) => void;
+  onOpenPreview?: (versionId?: string, exactVersion?: boolean) => void;
 }) {
   const [memberActions, setMemberActions] = useState<PackageMemberAvailableActionsDto[] | null>(null);
-  // #1063 引用交互状态。
-  const [referencing, setReferencing] = useState(false);
-  const [selectingMembers, setSelectingMembers] = useState(false);
-  const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
-  const [blockers, setBlockers] = useState<PackageProjectionBlocker[]>([]);
   // 原型对齐:成员行 file-sub 需要 collection 名/current server 版本号/来源与修改时间。
   // 与审核动作一起刷新，版本说明与状态必须指向同一个 currentVersionId。
   const [collectionsById, setCollectionsById] = useState<Map<string, {
@@ -137,7 +123,7 @@ export function OutputPackageCard({
   useEffect(() => {
     setCollectionsById(null);
     setMemberActions(null);
-    if (!channelId) return;
+    if (!channelId || onAddReference) return;
     let cancelled = false;
     const api = projectEvents();
     // 缺少当前版本事实时不显示审核标签，不能回退到冻结交付版的状态。
@@ -168,49 +154,8 @@ export function OutputPackageCard({
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [channelId, dataRevision, packageMeta.packageId]);
+  }, [channelId, dataRevision, packageMeta.packageId, onAddReference]);
 
-  // #1063:整包投影选择(构建逻辑在 lib/output-package-reference,与文件库工具栏共用)。
-  // 预览 ready → 产生选择;not_ready → 展示阻断清单。
-  const addProjectionReference = useCallback(async (policy: 'delivered' | 'current' | 'final') => {
-    if (!channelId || !onAddReference) return;
-    setReferencing(true);
-    setBlockers([]);
-    try {
-      const projection = await loadPackageProjection(channelId, packageMeta.packageId, policy);
-      if (!projection) return;
-      const built = buildPackageProjectionSelection(packageMeta.packageId, policy, projection);
-      if (built.selection) onAddReference(built.selection);
-      else setBlockers(built.blockers);
-    } finally {
-      setReferencing(false);
-    }
-  }, [channelId, packageMeta.packageId, onAddReference]);
-
-  // #1063:成员单选/多选 → package_members 显式选择。
-  const addMembersReference = useCallback((members: { collectionId: string; versionId: string }[]) => {
-    if (!onAddReference || members.length === 0) return;
-    const selection = buildPackageMembersSelection(packageMeta.packageId, members);
-    if (!selection) return;
-    onAddReference(selection);
-    setSelectingMembers(false);
-    setSelectedMemberIds(new Set());
-  }, [packageMeta.packageId, onAddReference]);
-
-  const memberMetaById = useMemo(() => new Map(
-    packageMeta.members.map((member) => [member.artifactVersionId, member]),
-  ), [packageMeta.members]);
-
-  const toggleMemberSelection = useCallback((versionId: string) => {
-    setSelectedMemberIds((current) => {
-      const next = new Set(current);
-      if (next.has(versionId)) next.delete(versionId);
-      else next.add(versionId);
-      return next;
-    });
-  }, []);
-
-  const selectedVersionIds = Array.from(selectedMemberIds);
   return (
     <div
       className="mt-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3"
@@ -236,88 +181,26 @@ export function OutputPackageCard({
           {packageMeta.memberCount} 个文件
         </span>
       </div>
-      {/* #1063 整包引用入口 + 原型对齐的「预览/编辑」 */}
-      {onAddReference || onOpenPreview ? (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5" data-smoke="output-package-projection-refs">
-          {onOpenPreview ? (
-            <button
-              type="button"
-              onClick={() => onOpenPreview()}
-              className="shrink-0 rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100"
-              data-smoke="output-package-open-preview"
-            >
-              预览/编辑
-            </button>
-          ) : null}
-          {onAddReference ? (['current', 'final', 'delivered'] as const).map((policy) => (
-            <button
-              key={policy}
-              type="button"
-              disabled={referencing}
-              onClick={() => addProjectionReference(policy)}
-              className="shrink-0 rounded-md border border-sky-300 bg-white px-2 py-0.5 text-xs text-sky-700 hover:bg-sky-50 disabled:opacity-50"
-              data-smoke="output-package-projection-ref"
-              data-policy={policy}
-            >
-              引用{POLICY_LABELS[policy]}
-            </button>
-          )) : null}
-          {onAddReference ? (
-          <button
-            type="button"
-            disabled={referencing}
-            onClick={() => {
-              setSelectingMembers((current) => !current);
-              setBlockers([]);
-            }}
-            className="shrink-0 rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
-            data-smoke="output-package-member-select-toggle"
-          >
-            {selectingMembers ? '取消选择' : '选择成员'}
-          </button>
-          ) : null}
-        </div>
-      ) : null}
-      {/* #1063 整包投影阻断清单 */}
-      {blockers.length > 0 ? (
-        <ul className="mt-2 space-y-1 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800" data-smoke="output-package-projection-blockers">
-          {blockers.map((blocker, index) => (
-            <li key={`${blocker.shortLabel}-${index}`}>
-              {blocker.shortLabel} {blocker.filename}:{blocker.code === 'missing_final' ? '尚未设置最终版'
-                : blocker.code === 'current_not_formal' ? '当前版被拒绝/需修改,不能作为整包默认输入'
-                  : blocker.code === 'collection_unavailable' ? '成员集合不可用'
-                    : blocker.code === 'version_not_in_package' ? '版本不属于该文件包'
-                      : '整包引用不可用'}
-            </li>
-          ))}
-          <li className="text-amber-700">请为缺失项设置最终版,或改为显式选择具体版本。</li>
-        </ul>
-      ) : null}
+      <p className="mt-1 break-all text-xs text-neutral-500" data-smoke="output-package-id">
+        PKG-{packageMeta.packageId}
+      </p>
+      {onAddReference ? (
+        <OutputPackageReferencePicker key={`${channelId}:${packageMeta.packageId}`}
+          packageMeta={packageMeta} channelId={channelId} dataRevision={dataRevision}
+          onAddReference={onAddReference} onOpenPreview={onOpenPreview} />
+      ) : (
+      <>
       <ul className="mt-2 space-y-1">
         {packageMeta.members.map((member) => {
           const currentVersionId = collectionsById?.get(member.collectionId)?.currentVersionId;
           const actions = memberActions?.find(
             (entry) => entry.collectionId === member.collectionId && entry.versionId === currentVersionId,
           );
-          const selected = selectedMemberIds.has(member.artifactVersionId);
           return (
             <li
               key={member.artifactVersionId}
               className="flex flex-wrap items-center gap-2 text-sm text-neutral-700"
             >
-              {selectingMembers ? (
-                <button
-                  type="button"
-                  aria-pressed={selected}
-                  aria-label={`选择 ${member.shortLabel} ${member.filename}`}
-                  onClick={() => toggleMemberSelection(member.artifactVersionId)}
-                  className="shrink-0 text-neutral-500 hover:text-neutral-800"
-                  data-smoke="output-package-member-select"
-                  data-version-id={member.artifactVersionId}
-                >
-                  {selected ? <CheckSquare size={16} /> : <Square size={16} />}
-                </button>
-              ) : null}
               <FileText className="h-3.5 w-3.5 shrink-0 text-neutral-400" aria-hidden="true" />
               <span className="w-8 shrink-0 text-xs font-medium text-neutral-500">{member.shortLabel}</span>
               <div className="min-w-0 flex-1">
@@ -346,7 +229,7 @@ export function OutputPackageCard({
                 </span>
               ) : null}
               {/* 原型对齐:成员行「预览」→ 包内预览/编辑浮窗(聚焦该成员) */}
-              {onOpenPreview && !selectingMembers ? (
+              {onOpenPreview ? (
                 <button
                   type="button"
                   onClick={() => onOpenPreview(member.artifactVersionId)}
@@ -357,54 +240,11 @@ export function OutputPackageCard({
                   预览
                 </button>
               ) : null}
-              {/* #1063 单文件引用 */}
-              {onAddReference && !selectingMembers ? (
-                <button
-                  type="button"
-                  disabled={referencing}
-                  onClick={() => addMembersReference([{ collectionId: member.collectionId, versionId: member.artifactVersionId }])}
-                  className="shrink-0 rounded-md border border-sky-300 bg-white px-2 py-0.5 text-xs text-sky-700 hover:bg-sky-50 disabled:opacity-50"
-                  data-smoke="output-package-member-ref"
-                  data-version-id={member.artifactVersionId}
-                >
-                  引用
-                </button>
-              ) : null}
             </li>
           );
         })}
       </ul>
-      {/* #1063 多选提交条 */}
-      {selectingMembers && (
-        <div className="mt-2 flex items-center gap-2 border-t border-neutral-200 pt-2 text-xs text-neutral-600" data-smoke="output-package-member-select-bar">
-          <span>已选 {selectedVersionIds.length} 个文件</span>
-          <button
-            type="button"
-            disabled={referencing}
-            onClick={() => {
-              const members = selectedVersionIds
-                .map((versionId) => memberMetaById.get(versionId))
-                .filter((meta): meta is NonNullable<typeof meta> => Boolean(meta))
-                .map((meta) => ({ collectionId: meta.collectionId, versionId: meta.artifactVersionId }));
-              addMembersReference(members);
-            }}
-            className="shrink-0 rounded-md border border-sky-300 bg-sky-50 px-2 py-0.5 text-sky-700 hover:bg-sky-100 disabled:opacity-50"
-            data-smoke="output-package-member-select-confirm"
-          >
-            引用所选
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedMemberIds(new Set());
-              setSelectingMembers(false);
-            }}
-            className="shrink-0 rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-neutral-600 hover:bg-neutral-100"
-            data-smoke="output-package-member-select-cancel"
-          >
-            取消
-          </button>
-        </div>
+      </>
       )}
       {packageMeta.agentName ? (
         <p className="mt-2 flex items-center gap-1 text-xs text-neutral-500">
