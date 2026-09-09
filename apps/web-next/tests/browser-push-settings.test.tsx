@@ -37,7 +37,7 @@ test('授权未响应时提示用户并恢复按钮，过期的授权结果不�
   let grant!: (permission: NotificationPermission) => void;
   mocks.permission.mockReturnValue(new Promise<NotificationPermission>((resolve) => { grant = resolve; }));
   render(<Surface />);
-  const button = await screen.findByLabelText('开启系统推送');
+  const button = await screen.findByRole('switch', { name: '系统推送', checked: false });
   vi.useFakeTimers();
   fireEvent.click(button);
   expect(screen.getByText('请在浏览器弹窗中允许通知')).toBeTruthy();
@@ -49,15 +49,15 @@ test('授权未响应时提示用户并恢复按钮，过期的授权结果不�
 });
 test('只有点击才请求权限；开启保存绑定；关闭清理本地与服务端订阅', async () => {
   render(<Surface />);
-  const enable = await screen.findByLabelText('开启系统推送');
+  const enable = await screen.findByRole('switch', { name: '系统推送', checked: false });
   expect(mocks.permission).not.toHaveBeenCalled();
   expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
   fireEvent.click(enable);
-  await screen.findByLabelText('关闭系统推送');
+  await screen.findByRole('switch', { name: '系统推送', checked: true });
   expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true');
   expect(mocks.permission).toHaveBeenCalledTimes(1);
   expect(mocks.binding).toHaveBeenCalledWith({ userId: 'user', publicKey: 'key' });
-  fireEvent.click(screen.getByLabelText('关闭系统推送'));
+  fireEvent.click(screen.getByRole('switch', { name: '系统推送', checked: true }));
   await screen.findByText('系统推送已关闭，侧栏提醒仍保留');
   expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
   expect(mocks.clear).toHaveBeenCalledOnce();
@@ -66,14 +66,14 @@ test('只有点击才请求权限；开启保存绑定；关闭清理本地与�
 test('拒绝授权不注册订阅；Server 未配置时不显示开启按钮', async () => {
   mocks.permission.mockResolvedValue('denied');
   const view = render(<Surface />);
-  fireEvent.click(await screen.findByLabelText('开启系统推送'));
+  fireEvent.click(await screen.findByRole('switch', { name: '系统推送', checked: false }));
   await screen.findByText('请在浏览器设置中允许通知');
   expect(mocks.enable).not.toHaveBeenCalled();
   view.unmount();
   mocks.config.mockResolvedValue({ ok: true, publicKey: null });
   render(<Surface />);
   await screen.findByText('系统推送尚未启用');
-  expect(screen.queryByLabelText('开启系统推送')).toBeNull();
+  expect(screen.queryByRole('switch', { name: '系统推送' })).toBeNull();
 });
 test('换账号先撤销旧本机绑定，绝不自动继承其他账号的订阅', async () => {
   mocks.binding.mockResolvedValue({ userId: 'old-user', publicKey: 'key' });

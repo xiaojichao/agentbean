@@ -94,7 +94,7 @@ export function BrowserPushSettings({ state }: { state: ReturnType<typeof useBro
       <span className="font-medium text-neutral-700">系统推送</span>
       {available && <button type="button" onClick={() => { void toggle(); }} disabled={busy || !connected}
         role="switch" aria-checked={enabled} aria-busy={busy}
-        className={'relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ' + (enabled ? 'bg-pink-600' : 'bg-neutral-300')} aria-label={enabled ? '关闭系统推送' : '开启系统推送'}>
+        className={'relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ' + (enabled ? 'bg-pink-600' : 'bg-neutral-300')} aria-label="系统推送">
         <span aria-hidden="true" className={'absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ' + (enabled ? 'translate-x-4' : 'translate-x-0')} />
       </button>}
     </div>
