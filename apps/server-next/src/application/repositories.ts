@@ -1,4 +1,4 @@
-import type { AgentDto, ArtifactDto, ChannelDocumentDto, ChannelDocumentRevisionDto, ChannelDto, DeviceDto, DeviceWorkspaceSnapshotDto, DispatchDto, HumanMemberDto, ID, MessageDto, ProjectChannelWorkspaceRevisionDto, ProjectChannelWorkspaceDto, RuntimeDto, SkillDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import type { ChannelHistoryPaginationDto, AgentDto, ArtifactDto, ChannelDocumentDto, ChannelDocumentRevisionDto, ChannelDto, DeviceDto, DeviceWorkspaceSnapshotDto, DispatchDto, HumanMemberDto, ID, MessageDto, ProjectChannelWorkspaceRevisionDto, ProjectChannelWorkspaceDto, RuntimeDto, SkillDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import type { ManagementRepositories } from './management-repositories.js';
 import type { ManagementUnitOfWork } from './management-unit-of-work.js';
 import type { TaskCoordinationRepositories } from './task-coordination-repositories.js';
@@ -356,6 +356,7 @@ export interface MessageRepository {
   listByChannel(channelId: ID, limit: number): Promise<MessageRecord[]>;
   /** 用户对话视图：排除内部 system 消息，limit 仅计主消息，附带其回复并按时间排序。 */
   listVisibleByChannel(channelId: ID, limit: number): Promise<MessageRecord[]>;
+  listVisiblePageByChannel(channelId: ID, limit: number, beforeMessageId?: ID): Promise<ChannelHistoryPaginationDto & { messages: MessageRecord[] }>;
   listByThread(input: { channelId: ID; threadId: ID; limit: number }): Promise<MessageRecord[]>;
   search(input: { channelIds: ID[]; query: string; limit: number }): Promise<MessageRecord[]>;
   listThreadBefore(input: { channelId: ID; threadId: ID; beforeMessageId: ID; limit: number }): Promise<MessageRecord[]>;

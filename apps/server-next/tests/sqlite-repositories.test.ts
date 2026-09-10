@@ -603,6 +603,58 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test.each(['sqlite', 'memory'] as const)('%s pages 50 then 10 main messages without losing timestamp ties or replies', async (storage) => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = storage === 'sqlite' ? createSqliteRepositories({ globalDb, teamDb }) : createInMemoryRepositories();
+      const append = (id: string, threadId = id, createdAt = 100, channelId = 'channel-1') => repositories.messages.append({
+        id, threadId, createdAt, channelId, teamId: 'team-1', senderKind: 'human', senderId: 'user-1', body: id,
+      });
+      for (let i = 0; i < 73; i += 1) await append(`root-${i}`);
+      for (let i = 0; i < 75; i += 1) await append(`reply-${i}`, 'root-15', 200 + i);
+      const first = await repositories.messages.listVisiblePageByChannel('channel-1', 50);
+      expect(first.messages).toHaveLength(50);
+      expect(first).toMatchObject({ hasMore: true, nextBeforeMessageId: 'root-23' });
+      // A concurrent new message must not shift an ID cursor like an offset would.
+      await append('new-live', 'new-live', 1000);
+      const second = await repositories.messages.listVisiblePageByChannel('channel-1', 10, first.nextBeforeMessageId!);
+      expect(second.messages).toHaveLength(85);
+      expect(second).toMatchObject({ hasMore: true, nextBeforeMessageId: 'root-13' });
+      const third = await repositories.messages.listVisiblePageByChannel('channel-1', 10, second.nextBeforeMessageId!);
+      expect(third.messages).toHaveLength(10);
+      expect(third).toMatchObject({ hasMore: true, nextBeforeMessageId: 'root-3' });
+      const last = await repositories.messages.listVisiblePageByChannel('channel-1', 10, third.nextBeforeMessageId!);
+      expect(last).toMatchObject({ hasMore: false, nextBeforeMessageId: null });
+      expect(last.messages.map((message) => message.id)).toEqual(['root-0', 'root-1', 'root-2']);
+      const ids = [last, third, second, first].flatMap((page) => page.messages.map((message) => message.id));
+      expect(new Set(ids).size).toBe(148);
+      expect(ids).toHaveLength(148);
+      expect(second.messages.filter((message) => message.id.startsWith('root-')).map((message) => message.id))
+        .toEqual(Array.from({ length: 10 }, (_, i) => `root-${13 + i}`));
+      await append('foreign', 'foreign', 3000, 'channel-2');
+      await expect(repositories.messages.listVisiblePageByChannel('channel-1', 10, 'foreign'))
+        .resolves.toEqual({ messages: [], hasMore: false, nextBeforeMessageId: null });
+    } finally {
+      close();
+    }
+  });
+
+  test.each(['sqlite', 'memory'] as const)('%s reports no more history at the exact page boundary', async (storage) => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = storage === 'sqlite' ? createSqliteRepositories({ globalDb, teamDb }) : createInMemoryRepositories();
+      await expect(repositories.messages.listVisiblePageByChannel('channel-1', 50))
+        .resolves.toEqual({ messages: [], hasMore: false, nextBeforeMessageId: null });
+      for (let i = 0; i < 50; i += 1) await repositories.messages.append({
+        id: `root-${i}`, threadId: `root-${i}`, createdAt: i, channelId: 'channel-1',
+        teamId: 'team-1', senderKind: 'human', senderId: 'user-1', body: 'message',
+      });
+      const page = await repositories.messages.listVisiblePageByChannel('channel-1', 50);
+      expect(page.messages).toHaveLength(50);
+      expect(page).toMatchObject({ hasMore: false, nextBeforeMessageId: null });
+    } finally { close(); }
+  });
+
   test.each(['sqlite', 'memory'] as const)('%s channel history reserves 50 slots for roots and retains their replies', async (storage) => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {

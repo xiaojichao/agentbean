@@ -24,7 +24,7 @@ describe('channel collaboration composer', () => {
   test('refreshes authoritative history after Server-owned collaboration messages are appended', () => {
     expect(source).toContain('WEB_EVENTS.message.messageTracer.delivered, onServerMessageDelivered');
     expect(source).toContain('const result = await channelEvents(socket).join(currentTeamId, activeChannel)');
-    expect(source).toContain('applyChannelHistory(activeChannel, result.messages)');
+    expect(source).toContain('applyChannelHistory(activeChannel, result.messages, channelHistoryPagination(result))');
     expect(source).toContain('deliveredRefreshPending = true');
     expect(source).toContain('socket.off(WEB_EVENTS.message.messageTracer.delivered, onServerMessageDelivered)');
   });

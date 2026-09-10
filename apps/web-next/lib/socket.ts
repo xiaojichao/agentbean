@@ -1,3 +1,4 @@
+import type { ChannelHistoryPaginationDto } from '@agentbean/contracts';
 'use client';
 import { WEB_EVENTS, type ActiveMemoryAttributionDto, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ConsistencyTokenV1, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiConfigurationReadinessDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type OutputPackageDto, type OutputPackagePendingDeliveryDto, type OutputPackageProjectionResultV1, type OutputPackageSummaryDto, type PackageMemberAvailableActionsDto, type PackageReviewAction, type PackageReviewDto, type ProjectArtifactCollectionDto, type ProjectArtifactFinalizationDto, type ProjectArtifactLibraryDto, type ProjectArtifactReviewDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type SetProjectArtifactFinalVersionInput, type StageDeliveryReviewWorkspaceV1, type SubmitProjectArtifactReviewInput, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type TaskDeliveryOverviewV1, type ChannelTaskWorkspaceV1, type UpdatePiProviderCardInput, type ProjectChannelWorkspaceDto, type ArtifactRevisionConflictDto, type ArtifactVersionRevisionSaveResultDto, type PackageReviewRevisionSaveV1 } from '@agentbean/contracts';
 
@@ -630,8 +631,11 @@ export function userMemoryEvents(socket: Socket = getWebSocket()): UserMemoryEve
   };
 }
 
+export type ChannelHistoryAck = Partial<ChannelHistoryPaginationDto> & { ok: boolean; messages?: ChatMessage[]; error?: string };
+
 export interface ChannelEvents {
-  join(teamId: string, channelId: string, limit?: number): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
+  join(teamId: string, channelId: string, limit?: number): Promise<ChannelHistoryAck>;
+  historyBefore(teamId: string, channelId: string, beforeMessageId: string): Promise<ChannelHistoryAck>;
   subscribe(teamId: string): void;
   create(payload: { teamId: string; name: string; title?: string; visibility: 'public' | 'private'; humanMemberIds?: string[]; agentMemberIds?: string[] }): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   update(payload: { teamId?: string; channelId: string; name?: string; title?: string | null; visibility?: 'public' | 'private' }): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
@@ -657,6 +661,9 @@ export interface ChannelEvents {
 export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
   return {
     join(teamId, channelId, limit) { return emitWithTimeout(socket, WEB_EVENTS.channel.join, { teamId, channelId, limit }); },
+    historyBefore(teamId, channelId, beforeMessageId) {
+      return emitWithTimeout(socket, WEB_EVENTS.channel.join, { teamId, channelId, beforeMessageId, limit: 10 });
+    },
     subscribe(teamId) { socket.emit(WEB_EVENTS.channel.subscribe, { teamId }); },
     create(payload) { return emitWithTimeout(socket, WEB_EVENTS.channel.create, payload); },
     update(payload) { return emitWithTimeout(socket, WEB_EVENTS.channel.update, payload); },

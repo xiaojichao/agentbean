@@ -1,4 +1,6 @@
 'use client';
+import type { ChannelHistoryPaginationDto } from '@agentbean/contracts';
+import { mergeOlderChannelMessages, type ChannelHistoryState } from './channel-history';
 import { create } from 'zustand';
 import type { AgentSnapshot, ChannelSummary, ChatMessage, ConnState, DispatchStatus, OutboundMessage, DiscoveredAgent, RuntimeInfo, TeamSummary, AgentMetricsSummary, UserInfo, DeviceInfo, HumanMember } from './schema.js';
 import type { DmChannel } from './socket.js';
@@ -180,6 +182,7 @@ interface State {
   channels: ChannelSummary[];
   dms: DmChannel[];
   messagesByChannel: Record<string, ChatMessage[]>;
+  channelHistoryByChannel: Record<string, ChannelHistoryState>;
   activityMessages: ChatMessage[];
   outbox: Record<string, OutboundMessage>;
   discovered: DiscoveredAgent[];
@@ -199,7 +202,8 @@ interface State {
   updateAgent(id: string, patch: Partial<AgentSnapshot>): void;
   applyChannelsSnapshot(list: ChannelSummary[]): void;
   applyDmsSnapshot(list: DmChannel[]): void;
-  applyChannelHistory(channelId: string, msgs: ChatMessage[]): void;
+  applyChannelHistory(channelId: string, msgs: ChatMessage[], pagination?: ChannelHistoryPaginationDto): void;
+  prependChannelHistory(channelId: string, msgs: ChatMessage[], pagination: ChannelHistoryPaginationDto): void;
   appendMessage(msg: ChatMessage): void;
   applyDispatchStatus(channelId: string, messageId: string, dispatchStatus: DispatchStatus, dispatchId?: string, dispatchError?: string): void;
   upsertMessages(msgs: ChatMessage[]): void;
@@ -284,6 +288,7 @@ export const useAgentBeanStore = create<State>((set) => ({
   channels: [],
   dms: [],
   messagesByChannel: {},
+  channelHistoryByChannel: {},
   activityMessages: [],
   outbox: {},
   discovered: [],
@@ -335,11 +340,31 @@ export const useAgentBeanStore = create<State>((set) => ({
   },
   applyChannelsSnapshot(list) { set({ channels: list }); },
   applyDmsSnapshot(list) { set({ dms: list }); },
-  applyChannelHistory(channelId, msgs) {
+  applyChannelHistory(channelId, msgs, pagination) {
+    set((s) => {
+      const current = s.messagesByChannel[channelId] ?? [];
+      const history = s.channelHistoryByChannel[channelId];
+      const fresh = mergeChannelHistory(msgs, current);
+      return {
+        messagesByChannel: {
+          ...s.messagesByChannel,
+          [channelId]: history?.loadedOlder ? mergeOlderChannelMessages(fresh, current) : fresh,
+        },
+        ...(pagination && !history?.loadedOlder ? {
+          channelHistoryByChannel: { ...s.channelHistoryByChannel, [channelId]: { ...pagination, loadedOlder: false } },
+        } : {}),
+      };
+    });
+  },
+  prependChannelHistory(channelId, msgs, pagination) {
     set((s) => ({
       messagesByChannel: {
         ...s.messagesByChannel,
-        [channelId]: mergeChannelHistory(msgs, s.messagesByChannel[channelId] ?? []),
+        [channelId]: mergeOlderChannelMessages(s.messagesByChannel[channelId] ?? [], msgs),
+      },
+      channelHistoryByChannel: {
+        ...s.channelHistoryByChannel,
+        [channelId]: { ...pagination, loadedOlder: true },
       },
     }));
   },
@@ -410,6 +435,7 @@ export const useAgentBeanStore = create<State>((set) => ({
         channels: [],
         dms: [],
         messagesByChannel: {},
+        channelHistoryByChannel: {},
         activityMessages: [],
         outbox: {},
         agentMetrics: {},
