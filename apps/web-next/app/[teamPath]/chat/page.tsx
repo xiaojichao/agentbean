@@ -1,5 +1,8 @@
 'use client';
 
+import { channelHistoryPagination } from '@/lib/channel-history';
+import { useChannelHistoryPagination } from '@/lib/use-channel-history-pagination';
+import type { ChannelHistoryPaginationDto } from '@agentbean/contracts';
 import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Bookmark, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, ChevronRight, Smile, ChevronDown, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
@@ -286,6 +289,8 @@ export default function ChatPage() {
   const dms = useAgentBeanStore((s) => s.dms);
   const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
   const applyChannelHistory = useAgentBeanStore((s) => s.applyChannelHistory);
+  const prependChannelHistory = useAgentBeanStore((s) => s.prependChannelHistory);
+  const channelHistoryByChannel = useAgentBeanStore((s) => s.channelHistoryByChannel);
   const upsertMessages = useAgentBeanStore((s) => s.upsertMessages);
   const appendMessage = useAgentBeanStore((s) => s.appendMessage);
   const upsertActivityMessages = useAgentBeanStore((s) => s.upsertActivityMessages);
@@ -450,7 +455,6 @@ export default function ChatPage() {
     objective: string;
   } | null>(null);
   const [threadContinuationSubmitting, setThreadContinuationSubmitting] = useState(false);
-  const [showBackToBottom, setShowBackToBottom] = useState(false);
   const [stoppingChannelAgents, setStoppingChannelAgents] = useState(false);
   const [chatTaskMenuTarget, setChatTaskMenuTarget] = useState<ChatTaskMenuTarget>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -473,10 +477,20 @@ export default function ChatPage() {
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? EMPTY_CHAT_MESSAGES) : EMPTY_CHAT_MESSAGES;
   const activityPrefetchedChannelIdsRef = useRef<Set<string>>(new Set());
   const historySettledChannelIdRef = useRef<string | null>(null);
-  const previousScrollRef = useRef<{ channelId: string | null; messageCount: number }>({
-    channelId: null,
-    messageCount: 0,
+  const loadOlderPage = useCallback((teamId: string, channelId: string, cursor: string) =>
+    channelEvents(getWebSocket()).historyBefore(teamId, channelId, cursor), []);
+  const historyPagination = useChannelHistoryPagination({
+    channelId: activeChannel,
+    teamId: currentTeamId,
+    enabled: conn === 'open' && tab === 'chat',
+    messages,
+    pagination: activeChannel ? channelHistoryByChannel[activeChannel] : undefined,
+    listRef: messageListRef,
+    endRef: messagesEndRef,
+    loadPage: loadOlderPage,
+    prepend: prependChannelHistory,
   });
+  const { showBackToBottom } = historyPagination;
 
   useEffect(() => {
     dmsRef.current = dms;
@@ -586,13 +600,16 @@ export default function ChatPage() {
       if (!result) return;
       if (result.ok) {
         activityPrefetchedChannelIdsRef.current.add(activeChannel);
-        if (result.messages) upsertActivityMessages(recentActivityHistory(result.messages));
+        if (result.messages) {
+          applyChannelHistory(activeChannel, result.messages, channelHistoryPagination(result));
+          upsertActivityMessages(recentActivityHistory(result.messages));
+        }
       }
       historySettledChannelIdRef.current = activeChannel;
       setHistorySettledChannelId(activeChannel);
     });
-    const onHistory = (payload: { channelId: string; messages: ChatMessage[] }) => {
-      if (payload.channelId === activeChannel) applyChannelHistory(activeChannel, payload.messages);
+    const onHistory = (payload: { channelId: string; messages: ChatMessage[] } & Partial<ChannelHistoryPaginationDto>) => {
+      if (payload.channelId === activeChannel) applyChannelHistory(activeChannel, payload.messages, channelHistoryPagination(payload));
     };
     const onDispatchStatus = (dispatch: { messageId: string; channelId: string; status: DispatchStatus; id?: string; error?: string }) => {
       if (dispatch.channelId === activeChannel) {
@@ -625,7 +642,7 @@ export default function ChatPage() {
         const result = await channelEvents(socket).join(currentTeamId, activeChannel);
         if (cancelled) break;
         if (result.ok && result.messages) {
-          applyChannelHistory(activeChannel, result.messages);
+          applyChannelHistory(activeChannel, result.messages, channelHistoryPagination(result));
           upsertActivityMessages(recentActivityHistory(result.messages));
         }
       } while (deliveredRefreshPending && !cancelled);
@@ -662,15 +679,6 @@ export default function ChatPage() {
     void channelEvents(getWebSocket()).join(currentTeamId, activeChannel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentNameSignature]);
-
-  useEffect(() => {
-    const previous = previousScrollRef.current;
-    const shouldAnimate = previous.channelId === activeChannel
-      && previous.messageCount > 0
-      && messages.length > previous.messageCount;
-    messagesEndRef.current?.scrollIntoView({ behavior: shouldAnimate ? 'smooth' : 'auto' });
-    previousScrollRef.current = { channelId: activeChannel, messageCount: messages.length };
-  }, [activeChannel, messages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2301,7 +2309,6 @@ export default function ChatPage() {
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    setShowBackToBottom(false);
   };
 
   const stopChannelAgents = async () => {
@@ -2329,12 +2336,6 @@ export default function ChatPage() {
     } finally {
       setStoppingChannelAgents(false);
     }
-  };
-
-  const handleMessageListScroll = () => {
-    const el = messageListRef.current;
-    if (!el) return;
-    setShowBackToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 160);
   };
 
   const toggleActiveChannelMute = () => {
@@ -2595,16 +2596,21 @@ export default function ChatPage() {
         {tab === 'chat' ? (
           <>
             <div className="relative min-h-0 flex-1">
-      <div ref={messageListRef} onScroll={handleMessageListScroll} className="h-full overflow-y-auto px-4 py-3">
+      <div ref={messageListRef} onScroll={historyPagination.onScroll} data-smoke="channel-message-list" style={{ overflowAnchor: 'none' }} className="h-full overflow-y-auto px-4 py-3">
                 {!activeChannel && <div className="py-12 text-center text-sm text-neutral-400">选择一个频道或私聊开始聊天</div>}
-                {activeChannel && rootMessages.length === 0 && (
+                {activeChannel && !historyPagination.hasMore && rootMessages.length === 0 && (
                   <div className="py-8 text-center text-xs text-neutral-400">
                     <div className="mb-1">消息的开头</div>
                     <div className="text-neutral-300">发送第一条消息开始对话</div>
                   </div>
                 )}
-                {activeChannel && rootMessages.length > 0 && (
-                  <div className="mb-4 text-center text-xs text-neutral-300">消息的开头</div>
+                {activeChannel && (historyPagination.hasMore || rootMessages.length > 0) && (
+                  <div className="mb-4 flex min-h-5 items-center justify-center text-xs text-neutral-400" aria-live="polite">
+                    {historyPagination.loading ? <span role="status">正在加载更早的消息…</span>
+                      : historyPagination.error ? <button onClick={() => void historyPagination.loadOlder()} className="text-amber-700 hover:underline">加载失败，点击重试</button>
+                        : historyPagination.hasMore ? <button onClick={() => void historyPagination.loadOlder()} className="hover:text-neutral-600">加载更早的消息</button>
+                          : <span>消息的开头</span>}
+                  </div>
                 )}
                 <div>
                   {rootMessages.map((msg, index) => {

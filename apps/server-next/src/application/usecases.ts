@@ -1,3 +1,4 @@
+import type { ChannelHistoryPageDto } from '../../../../packages/contracts/src/channel-history.js';
 import { createCompletionNotificationService } from './completion-notification-service.js';
 import { createPushNotificationService } from './push-notification-service.js';
 import type { WebPushSender } from '../infra/web-push.js';
@@ -547,7 +548,7 @@ export interface ServerNextUseCases {
   deleteChannel(input: DeleteChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   startDirectMessage(input: StartDirectMessageInput): Promise<Ack<{ dm: DmChannelDto }>>;
   listDirectMessages(input: ListDirectMessagesInput): Promise<Ack<{ dms: DmChannelDto[] }>>;
-  snapshotDirectMessage(input: SnapshotDirectMessageInput): Promise<Ack<{ dm: DmChannelDto; messages: MessageDto[] }>>;
+  snapshotDirectMessage(input: SnapshotDirectMessageInput): Promise<Ack<ChannelHistoryPageDto & { dm: DmChannelDto }>>;
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
   /**
@@ -645,7 +646,7 @@ export interface ServerNextUseCases {
   acceptDispatch(input: AcceptDispatchInput): Promise<Ack<AcceptDispatchResult>>;
   cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto; task?: TaskDto }>>;
   cancelChannelDispatches(input: CancelChannelDispatchesInput): Promise<Ack<{ dispatches: DispatchDto[]; tasks?: TaskDto[] }>>;
-  listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<ChannelHistoryPageDto>>;
   listChannelFiles(input: ListChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
   searchChannelFiles(input: SearchChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
   createProjectChannelWorkspace(input: CreateProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
@@ -1366,6 +1367,7 @@ export type AcceptDispatchResult =
 export interface ListChannelMessagesInput {
   channelId: string;
   limit: number;
+  beforeMessageId?: string;
 }
 
 export interface ListChannelFilesInput {
@@ -1808,6 +1810,7 @@ export interface SnapshotDirectMessageInput {
   teamId: string;
   channelId: string;
   limit?: number;
+  beforeMessageId?: string;
 }
 
 export interface ReceiveDispatchArtifactInput {
@@ -5683,10 +5686,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent || !agent.visibleTeamIds.includes(dmInput.teamId)) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      const messages = await repositories.messages.listVisibleByChannel(channel.id, normalizeLimit(dmInput.limit));
+      if (dmInput.beforeMessageId) {
+        const cursor = await repositories.messages.getById(dmInput.beforeMessageId);
+        if (!cursor || cursor.channelId !== channel.id) return makeFailure('NOT_FOUND', 'History cursor not found');
+      }
+      const page = await repositories.messages.listVisiblePageByChannel(channel.id, normalizeLimit(dmInput.limit), dmInput.beforeMessageId);
       return makeSuccess({
+        ...page,
         dm: toDmChannelDto(channel, agent),
-        messages: await enrichMessagesWithArtifacts(repositories, messages),
+        messages: await enrichMessagesWithArtifacts(repositories, page.messages),
       });
     },
 
@@ -6492,9 +6500,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async listChannelMessages(listInput) {
-      const messages = await repositories.messages.listVisibleByChannel(listInput.channelId, listInput.limit);
+      if (listInput.beforeMessageId) {
+        const cursor = await repositories.messages.getById(listInput.beforeMessageId);
+        if (!cursor || cursor.channelId !== listInput.channelId) return makeFailure('NOT_FOUND', 'History cursor not found');
+      }
+      const page = await repositories.messages.listVisiblePageByChannel(listInput.channelId, listInput.limit, listInput.beforeMessageId);
       return makeSuccess({
-        messages: await enrichMessagesWithArtifacts(repositories, messages),
+        ...page,
+        messages: await enrichMessagesWithArtifacts(repositories, page.messages),
       });
     },
 

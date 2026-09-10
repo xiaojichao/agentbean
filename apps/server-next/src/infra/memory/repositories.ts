@@ -1384,48 +1384,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .slice(-limit);
       },
       async listVisibleByChannel(channelId, limit) {
-        const visible = Array.from(messages.values())
-          .filter((message) =>
-            message.channelId === channelId
-            && !isHiddenSystemMessage({ senderKind: message.senderKind, meta: message.meta })
-          )
-          .sort((left, right) => left.createdAt - right.createdAt);
-        const parentId = (message: MessageRecord): string | undefined => {
-          const explicit = typeof message.meta?.parentMessageId === 'string'
-            ? message.meta.parentMessageId
-            : typeof message.meta?.inReplyTo === 'string' ? message.meta.inReplyTo : undefined;
-          if (message.senderKind === 'agent' && explicit) return explicit;
-          if (message.senderKind === 'agent' && message.meta?.replyScope !== 'thread') {
-            const origin = message.threadId ? messages.get(message.threadId) : undefined;
-            if ((origin?.channelId === channelId && origin.threadId === origin.id)
-              || (!origin && message.meta?.replyScope === 'channel')) return undefined;
-          }
-          return message.threadId && message.threadId !== message.id ? message.threadId : explicit || undefined;
-        };
-        // Limit conversation roots, then include their replies without spending root slots.
-        const visibleIds = new Set(visible.map((message) => message.id));
-        const selected = new Set(visible.filter((message) => {
-          const parent = parentId(message);
-          return !parent || !visibleIds.has(parent);
-        }).slice(-limit).map((message) => message.id));
-        const children = new Map<string, string[]>();
-        for (const message of visible) {
-          const parent = parentId(message);
-          if (parent) {
-            const siblings = children.get(parent);
-            if (siblings) siblings.push(message.id);
-            else children.set(parent, [message.id]);
-          }
-        }
-        for (const id of selected) {
-          for (const child of children.get(id) ?? []) selected.add(child);
-        }
-        return visible.filter((message) => selected.has(message.id)).map((message) => {
-          // Legacy channel replies need an explicit scope when their origin falls outside the window.
-          if (message.senderKind === 'agent' && message.threadId && message.threadId !== message.id
-            && !parentId(message)) return { ...message, meta: { ...message.meta, replyScope: 'channel' } };
-          return message;
-        });
+        return readVisibleChannelPage(messages, channelId, limit).messages;
+      },
+      async listVisiblePageByChannel(channelId, limit, beforeMessageId) {
+        return readVisibleChannelPage(messages, channelId, limit, beforeMessageId);
       },
       async listByThread(input) {
         return Array.from(messages.values())
@@ -3223,4 +3185,57 @@ function hydrateProjectReferenceSet(
 function restoreMap<K, V>(target: Map<K, V>, snapshot: Map<K, V>): void {
   target.clear();
   for (const [key, value] of snapshot) target.set(key, value);
+}
+
+function readVisibleChannelPage(messages: Map<string, MessageRecord>, channelId: string, limit: number, beforeMessageId?: string) {
+  const channelMessages = Array.from(messages.values()).filter((message) => message.channelId === channelId)
+    .sort((left, right) => left.createdAt - right.createdAt);
+  const beforeIndex = beforeMessageId ? channelMessages.findIndex((message) => message.id === beforeMessageId) : channelMessages.length;
+  const beforeIds = new Set(channelMessages.slice(0, Math.max(0, beforeIndex)).map((message) => message.id));
+  const visible = channelMessages
+    .filter((message) =>
+      message.channelId === channelId
+      && !isHiddenSystemMessage({ senderKind: message.senderKind, meta: message.meta })
+    )
+    .sort((left, right) => left.createdAt - right.createdAt);
+  const parentId = (message: MessageRecord): string | undefined => {
+    const explicit = typeof message.meta?.parentMessageId === 'string'
+      ? message.meta.parentMessageId
+      : typeof message.meta?.inReplyTo === 'string' ? message.meta.inReplyTo : undefined;
+    if (message.senderKind === 'agent' && explicit) return explicit;
+    if (message.senderKind === 'agent' && message.meta?.replyScope !== 'thread') {
+      const origin = message.threadId ? messages.get(message.threadId) : undefined;
+      if ((origin?.channelId === channelId && origin.threadId === origin.id)
+        || (!origin && message.meta?.replyScope === 'channel')) return undefined;
+    }
+    return message.threadId && message.threadId !== message.id ? message.threadId : explicit || undefined;
+  };
+  // Limit conversation roots, then include their replies without spending root slots.
+  const visibleIds = new Set(visible.map((message) => message.id));
+  const roots = visible.filter((message) => {
+    const parent = parentId(message);
+    return beforeIds.has(message.id) && (!parent || !visibleIds.has(parent));
+  });
+  const pageRoots = roots.slice(-limit);
+  const hasMore = roots.length > limit;
+  const selected = new Set(pageRoots.map((message) => message.id));
+  const children = new Map<string, string[]>();
+  for (const message of visible) {
+    const parent = parentId(message);
+    if (parent) {
+      const siblings = children.get(parent);
+      if (siblings) siblings.push(message.id);
+      else children.set(parent, [message.id]);
+    }
+  }
+  for (const id of selected) {
+    for (const child of children.get(id) ?? []) selected.add(child);
+  }
+  const pageMessages = visible.filter((message) => selected.has(message.id)).map((message) => {
+    // Legacy channel replies need an explicit scope when their origin falls outside the window.
+    if (message.senderKind === 'agent' && message.threadId && message.threadId !== message.id
+      && !parentId(message)) return { ...message, meta: { ...message.meta, replyScope: 'channel' } };
+    return message;
+  });
+  return { messages: pageMessages, hasMore, nextBeforeMessageId: hasMore ? pageRoots[0]!.id : null };
 }

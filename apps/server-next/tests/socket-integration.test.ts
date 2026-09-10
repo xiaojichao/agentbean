@@ -678,6 +678,57 @@ describe('server-next Socket.IO namespaces', () => {
     }
   });
 
+  test('channel history pagination uses authenticated access, bounded pages and ack-only delivery', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories, clock: { now: () => 1000 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'user-2', 'team-2', 'channel-2', 'private-1']) },
+    });
+    const owner = await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team one' });
+    const other = await app.registerUser({ username: 'other', password: 'secret', teamName: 'Team two' });
+    if (!owner.ok || !other.ok) throw new Error('registration failed');
+    await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'private', visibility: 'private' });
+    for (let i = 0; i < 65; i += 1) await repositories.messages.append({
+      id: `root-${i}`, threadId: `root-${i}`, createdAt: i, channelId: 'channel-1',
+      teamId: 'team-1', senderKind: 'human', senderId: 'user-1', body: 'message',
+    });
+    await repositories.messages.append({ id: 'foreign', threadId: 'foreign', createdAt: 100,
+      channelId: 'channel-2', teamId: 'team-2', senderKind: 'human', senderId: 'user-2', body: 'private' });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`, { auth: { token: owner.token } });
+    const outsider = await connectClient(`${baseUrl}/web`, { auth: { token: other.token } });
+    cleanups.push(async () => { web.disconnect(); outsider.disconnect(); });
+    const histories: unknown[] = [];
+    web.on(WEB_EVENTS.channel.history, (payload) => histories.push(payload));
+    const initial = await web.emitWithAck(WEB_EVENTS.channel.join, { teamId: 'team-1', channelId: 'channel-1' });
+    expect(initial).toMatchObject({ ok: true, hasMore: true, nextBeforeMessageId: 'root-15', messages: expect.any(Array) });
+    expect((initial as { messages: unknown[] }).messages).toHaveLength(50);
+    expect(histories).toHaveLength(1);
+    const page = await web.emitWithAck(WEB_EVENTS.channel.join, {
+      teamId: 'team-1', channelId: 'channel-1', beforeMessageId: 'root-15', limit: 999,
+    });
+    expect(page).toMatchObject({ ok: true, hasMore: true, nextBeforeMessageId: 'root-5' });
+    expect((page as { messages: unknown[] }).messages).toHaveLength(10);
+    expect(histories).toHaveLength(1);
+    await expect(web.emitWithAck(WEB_EVENTS.channel.join, {
+      teamId: 'team-1', channelId: 'channel-1', beforeMessageId: 'foreign',
+    })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+    await expect(web.emitWithAck(WEB_EVENTS.channel.join, {
+      teamId: 'team-1', channelId: 'channel-1', beforeMessageId: 42,
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(outsider.emitWithAck(WEB_EVENTS.channel.join, {
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', beforeMessageId: 'root-15',
+    })).resolves.toMatchObject({ ok: false });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-2', role: 'member', joinedAt: 1000 });
+    await expect(outsider.emitWithAck(WEB_EVENTS.channel.join, {
+      userId: 'user-1', teamId: 'team-1', channelId: 'private-1', beforeMessageId: 'root-15',
+    })).resolves.toMatchObject({ ok: false });
+  });
+
   test('derives web command user identity from authenticated socket session', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
@@ -3138,6 +3189,7 @@ describe('server-next Socket.IO namespaces', () => {
       expect(historyEvents).toEqual([
         {
           channelId: 'dm-channel-1',
+          hasMore: false, nextBeforeMessageId: null,
           messages: [expect.objectContaining({ id: 'message-1', body: 'hello', channelId: 'dm-channel-1' })],
         },
       ]);

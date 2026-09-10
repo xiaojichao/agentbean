@@ -187,6 +187,7 @@ export const WEB_EVENTS = {
   channel: {
     subscribe: 'channels:subscribe',
     create: 'channel:create',
+    /** beforeMessageId 请求较早主消息页（默认 10 条），仅通过 ack 返回，不替换 history 快照。 */
     join: 'channel:join',
     leave: 'channel:leave',
     history: 'channel:history',

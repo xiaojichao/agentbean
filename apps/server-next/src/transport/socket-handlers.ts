@@ -615,24 +615,27 @@ export function registerWebSocketHandlers(
       if (channels.ok) {
         const channel = channels.channels.find((candidate) => candidate.id === input.channelId);
         if (channel) {
-          const messages = await app.listChannelMessages({ channelId: input.channelId, limit: input.limit });
+          const messages = await app.listChannelMessages({ channelId: input.channelId, limit: input.limit, beforeMessageId: input.beforeMessageId });
           if (!messages.ok) {
             ack?.(messages);
             return;
           }
-          socket.emit?.(WEB_EVENTS.channel.history, { channelId: input.channelId, messages: messages.messages });
-          ack?.({ ok: true, channel, messages: messages.messages });
+          const page = { messages: messages.messages, hasMore: messages.hasMore, nextBeforeMessageId: messages.nextBeforeMessageId };
+          // Older pages are ack-only: they must never replace the live channel snapshot.
+          if (!input.beforeMessageId) socket.emit?.(WEB_EVENTS.channel.history, { channelId: input.channelId, ...page });
+          ack?.({ ok: true, channel, ...page });
           return;
         }
       }
       // Channel not found in regular channels — try DM
-      const dmResult = await app.snapshotDirectMessage({ userId: input.userId, teamId: input.teamId, channelId: input.channelId, limit: input.limit });
+      const dmResult = await app.snapshotDirectMessage({ userId: input.userId, teamId: input.teamId, channelId: input.channelId, limit: input.limit, beforeMessageId: input.beforeMessageId });
       if (!dmResult.ok) {
         ack?.(dmResult);
         return;
       }
-      socket.emit?.(WEB_EVENTS.channel.history, { channelId: input.channelId, messages: dmResult.messages });
-      ack?.({ ok: true, channel: dmResult.dm.channel, messages: dmResult.messages });
+      const page = { messages: dmResult.messages, hasMore: dmResult.hasMore, nextBeforeMessageId: dmResult.nextBeforeMessageId };
+      if (!input.beforeMessageId) socket.emit?.(WEB_EVENTS.channel.history, { channelId: input.channelId, ...page });
+      ack?.({ ok: true, channel: dmResult.dm.channel, ...page });
     } catch (error) {
       ack?.(socketErrorAck(error, WEB_EVENTS.channel.join));
     }
@@ -1393,15 +1396,17 @@ export class UnauthenticatedSocketError extends Error {
   }
 }
 
-function asChannelJoinInput(payload: unknown): { userId: string; teamId: string; channelId: string; limit: number } | null {
+function asChannelJoinInput(payload: unknown): { userId: string; teamId: string; channelId: string; limit: number; beforeMessageId?: string } | null {
   if (!payload || typeof payload !== 'object') {
     return null;
   }
-  const candidate = payload as { userId?: unknown; teamId?: unknown; channelId?: unknown; limit?: unknown };
+  const candidate = payload as { userId?: unknown; teamId?: unknown; channelId?: unknown; limit?: unknown; beforeMessageId?: unknown };
   if (
     typeof candidate.userId !== 'string' ||
     typeof candidate.teamId !== 'string' ||
     typeof candidate.channelId !== 'string'
+    || (candidate.beforeMessageId !== undefined && (typeof candidate.beforeMessageId !== 'string'
+      || candidate.beforeMessageId.trim().length === 0 || candidate.beforeMessageId.length > 200))
   ) {
     return null;
   }
@@ -1412,7 +1417,8 @@ function asChannelJoinInput(payload: unknown): { userId: string; teamId: string;
     userId: candidate.userId,
     teamId: candidate.teamId,
     channelId: candidate.channelId,
-    limit: Math.min(Math.max(limit, 1), 200),
+    limit: candidate.beforeMessageId ? 10 : Math.min(Math.max(limit, 1), 200),
+    ...(typeof candidate.beforeMessageId === 'string' ? { beforeMessageId: candidate.beforeMessageId } : {}),
   };
 }
 

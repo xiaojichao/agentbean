@@ -76,6 +76,8 @@ export interface ThreadMessageIndex<T extends MessageId> {
 }
 
 export interface ChannelHistoryResult<T> {
+  hasMore?: boolean;
+  nextBeforeMessageId?: string | null;
   ok: boolean;
   messages?: T[];
   error?: string;
