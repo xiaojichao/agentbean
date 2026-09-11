@@ -9,6 +9,7 @@ import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { useLocalFirstArtifactUrls } from '@/lib/use-local-first-artifact-urls';
+import { useMessageLinkContext } from '@/lib/use-message-link-context';
 import { taskRootIdFromMessageMeta } from '@/lib/task-status-event';
 import {
   projectChatViewMessages,
@@ -666,9 +667,11 @@ export default function ChatPage() {
     const shouldAnimate = previous.channelId === activeChannel
       && previous.messageCount > 0
       && messages.length > previous.messageCount;
-    messagesEndRef.current?.scrollIntoView({ behavior: shouldAnimate ? 'smooth' : 'auto' });
+    if (!activeChannel || !parseScopedMessageId(messageParam, activeChannel)) {
+      messagesEndRef.current?.scrollIntoView({ behavior: shouldAnimate ? 'smooth' : 'auto' });
+    }
     previousScrollRef.current = { channelId: activeChannel, messageCount: messages.length };
-  }, [activeChannel, messages]);
+  }, [activeChannel, messages, messageParam]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1882,9 +1885,19 @@ export default function ChatPage() {
     ? channelTaskWorkspace?.entries.find((entry) => entry.task.id === taskDetailTask.id)
     : undefined;
 
+  const linkedMessageId = activeChannel ? parseScopedMessageId(messageParam, activeChannel) : null;
+  useMessageLinkContext(
+    activeChannel,
+    linkedMessageId,
+    conn === 'open' && historySettledChannelId === activeChannel,
+    messages.some((message) => message.id === linkedMessageId),
+    upsertMessages,
+    markContextLoadedMessage,
+  );
+
   useEffect(() => {
     if (!activeChannel) return;
-    const targetMessageId = parseScopedMessageId(messageParam, activeChannel);
+    const targetMessageId = linkedMessageId;
     if (!targetMessageId) {
       if (messageParam === null) setSelectedMessageId(null);
       return;
@@ -1917,7 +1930,7 @@ export default function ChatPage() {
       document.getElementById(`message-${targetMessageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [activeChannel, messageParam, threadParam, messages, router, searchParams]);
+  }, [activeChannel, linkedMessageId, messageParam, threadParam, messages, router, searchParams]);
   const toggleSave = (msgId: string) => {
     const isSaved = savedIds.has(msgId);
     // Optimistic update
