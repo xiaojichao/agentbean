@@ -9,8 +9,15 @@ export async function resolveDirectDispatchTask(
   if (!origin || origin.teamId !== dispatch.teamId || origin.channelId !== dispatch.channelId) return null;
   if (typeof origin.meta?.taskId === 'string') {
     const task = await repositories.tasks.getById(origin.meta.taskId);
-    return task?.teamId === dispatch.teamId && (!task.channelId || task.channelId === dispatch.channelId)
-      ? task : null;
+    if (!task || task.teamId !== dispatch.teamId || (task.channelId && task.channelId !== dispatch.channelId)) return null;
+    // 冻结只确定补交归属；重连/接受前仍须复验当前执行资格。
+    if (origin.threadId && origin.threadId !== origin.id
+      && (task.channelId !== dispatch.channelId
+        || ['done', 'closed', 'cancelled'].includes(task.status)
+        || (task.assigneeId && task.assigneeId !== dispatch.agentId)
+        || await repositories.taskCoordination.coordinations.getByTaskId(task.id)
+        || await repositories.management.runs.getByRootTaskId(task.id))) return null;
+    return task;
   }
   if (!origin.threadId || origin.threadId === origin.id) return null;
   const threadId = origin.threadId;

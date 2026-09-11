@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 import { describeDirectTaskExecution, markDirectTaskInReview } from '../src/application/direct-task-execution.js';
 import { createOrReuseMessageTask } from '../src/application/message-task-link.js';
+import { createManagementKernel } from '../src/application/management/management-kernel.js';
 import { resolveDirectDispatchTask } from '../src/application/direct-dispatch-task.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 import { applyGlobalMigrations, applyTeamMigrations, createSqliteRepositories, type SqliteDatabase } from '../src/infra/sqlite/repositories.js';
@@ -63,6 +64,36 @@ describe.each([false, true])('direct Task evidence (sqlite=%s)', (sqlite) => {
       expect(frozen?.meta?.taskId).toBe('task');
       await h.repositories.messages.append({ ...h.origin, id: 'later-task', threadId: 'origin', createdAt: 11, meta: { taskId: 'other' } });
       expect(await resolveDirectDispatchTask(h.repositories, dispatch, frozen)).toMatchObject({ id: 'task' });
+    } finally { h.close(); }
+  });
+
+  test.each(['done', 'closed', 'cancelled', 'reassigned', 'managed', 'management-root'] as const)('冻结后 %s 不再授权补交执行', async (change) => {
+    const h = await fixture(sqlite);
+    try {
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: 'origin', createdAt: 10, meta: {} });
+      const dispatch = { ...h.dispatch, messageId: followup.id };
+      expect(await resolveDirectDispatchTask(h.repositories, dispatch, followup)).toMatchObject({ id: 'task' });
+      if (change === 'managed' || change === 'management-root') {
+        let id = 0;
+        const kernel = createManagementKernel({ repositories: h.repositories.management, unitOfWork: h.repositories.managementUnitOfWork,
+          clock: { now: () => 11 }, ids: { nextId: () => `management-${++id}` } });
+        const created = await kernel.createOrResumeRun({ teamId: 'team', channelId: 'channel',
+          rootTaskId: change === 'management-root' ? h.task.id : 'root', rootMessageId: 'origin',
+          requestKey: 'management', requestHash: 'hash',
+          placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+          budget: { maxSubtasks: 4, maxDepth: 2, maxExternalInvocations: 4 } });
+        if (change === 'managed') await h.repositories.taskCoordination.coordinations.create({
+          schemaVersion: 1, taskId: h.task.id, teamId: 'team', managementRunId: created.run.id, rootTaskId: 'root',
+          nodeKind: 'subtask', reviewPolicy: 'manager', claimPolicy: 'open', requiredCapabilities: [],
+          taskRevision: 1, attempt: 1, maxAttempts: 3, createdAt: 11, updatedAt: 11,
+        });
+      } else {
+        await h.repositories.tasks.update({ taskId: h.task.id,
+          changes: change === 'reassigned' ? { assigneeId: 'other' } : { status: change } });
+      }
+      const frozen = await h.repositories.messages.getById(followup.id);
+      expect(await resolveDirectDispatchTask(h.repositories, dispatch, frozen)).toBeNull();
+      expect(frozen?.meta?.taskId).toBe(h.task.id);
     } finally { h.close(); }
   });
 
