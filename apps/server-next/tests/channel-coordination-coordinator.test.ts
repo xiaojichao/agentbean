@@ -1329,7 +1329,7 @@ describe('channel coordinator: task_followup evidence binding (#709)', () => {
 
   async function seedFollowupJob(
     repos: Setup['repos'],
-    options: { objective?: string; priorTaskIdInThread?: string } = {},
+    options: { objective?: string; priorTaskIdInThread?: string; priorMessageCount?: number } = {},
   ): Promise<void> {
     await seedAccessContext(repos);
     if (options.priorTaskIdInThread) {
@@ -1343,6 +1343,11 @@ describe('channel coordinator: task_followup evidence binding (#709)', () => {
           },
         },
       });
+    }
+    for (let index = 0; index < (options.priorMessageCount ?? 0); index++) {
+      await repos.messages.append({ id: `filler-${index}`, teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
+        senderKind: 'human', senderId: 'user-1', body: '讨论', createdAt: 801 + index,
+        ...(index === 54 ? { meta: { taskId: 'recent-task' } } : {}) });
     }
     await repos.messages.append({
       id: 'message-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
@@ -1387,18 +1392,27 @@ describe('channel coordinator: task_followup evidence binding (#709)', () => {
     const { repos, coordinator } = setup({
       fetch: makeFetch([okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'followup', risk: 'low', objective: '补充进度' }))]),
     });
-    await seedFollowupJob(repos, { priorTaskIdInThread: 'older-task' });
+    await seedFollowupJob(repos, { priorTaskIdInThread: 'older-task', priorMessageCount: 55 });
     await seedChannelTask(repos, 'older-task');
     await seedChannelTask(repos, 'recent-task');
-    for (let index = 0; index < 55; index++) {
-      await repos.messages.append({ id: `filler-${index}`, teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
-        senderKind: 'human', senderId: 'user-1', body: '讨论', createdAt: 801 + index,
-        ...(index === 54 ? { meta: { taskId: 'recent-task' } } : {}) });
-    }
     await coordinator.processJob('job-1');
     const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
     expect(decision?.gateStatus).toBe('blocked');
     expect(decision?.linkedTaskId).toBeNull();
+    expect((await repos.messages.getById('message-1'))?.meta?.taskId).toBeUndefined();
+  });
+
+  test('延迟协调不能将后发Task倒灌到更早消息', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'followup', risk: 'low', objective: '补充进度' }))]),
+    });
+    await seedFollowupJob(repos);
+    await repos.tasks.create({ id: 'future-task', teamId: 'team-1', channelId: 'channel-1', title: '补充进度',
+      status: 'in_progress', creatorId: 'user-1', tags: [], sortOrder: 0, createdAt: 910, updatedAt: 910 });
+    await repos.messages.append({ id: 'future-task-message', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
+      senderKind: 'human', senderId: 'user-1', body: '后续任务', createdAt: 910, meta: { taskId: 'future-task' } });
+    await coordinator.processJob('job-1');
+    expect((await repos.channelCoordination.decisions.getByJobId('job-1'))?.linkedTaskId).toBeNull();
     expect((await repos.messages.getById('message-1'))?.meta?.taskId).toBeUndefined();
   });
 

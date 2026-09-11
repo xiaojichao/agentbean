@@ -485,21 +485,25 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
       // #709 task_followup 证据关联：用 resolveTaskFollowupBinding 判定强绑定/弱建议/需确认/无候选。
       // 仅在门禁未 blocked 时处理（服从高风险/归档/无权限硬门禁）；binding 只收紧、不放松。
       if (parsed.intent === 'task_followup' && verdict.status !== 'blocked') {
-        const threadMessages = await transaction.messages.listByThread({
+        const currentMessage = await transaction.messages.getById(job.messageId);
+        const threadMessages = await transaction.messages.listThreadBefore({
           channelId: job.channelId,
           threadId: ctx.threadId,
+          beforeMessageId: job.messageId,
           limit: 50,
         });
         const rootMessage = await transaction.messages.getById(ctx.threadId);
+        const evidenceMessages = currentMessage ? [currentMessage, ...threadMessages] : threadMessages;
         const threadTaskIds = collectThreadTaskIds(rootMessage
           && rootMessage.teamId === job.teamId && rootMessage.channelId === job.channelId
-          ? [rootMessage, ...threadMessages] : threadMessages);
+          ? [rootMessage, ...evidenceMessages] : evidenceMessages);
         const channelActiveTasks = (await transaction.tasks.list({
           teamId: job.teamId,
           channelIds: [job.channelId],
           includeGlobal: false,
         }))
-          .filter((task) => task.status !== 'done' && task.status !== 'closed')
+          .filter((task) => task.status !== 'done' && task.status !== 'closed'
+            && currentMessage && task.createdAt < currentMessage.createdAt)
           .map((task) => ({ taskId: task.id, objective: task.title }));
         // 截断窗口不能证明唯一性，即便窗口内只有一个 Task 也必须明确目标。
         const binding = threadMessages.length >= 50
