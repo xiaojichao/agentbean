@@ -5355,6 +5355,15 @@ function createSqliteOutputPackageRepository(teamDb: SqliteDatabase): OutputPack
                 || sqliteText(existingVersionRow, 'collection_id') !== member.collection.collectionId) {
                 throw new Error('OUTPUT_PACKAGE_ARTIFACT_VERSION_EXISTS');
               }
+              if (member.collection.expectedCurrentRevision !== undefined) {
+                const current = teamDb.prepare(
+                  'SELECT revision, current_version_id FROM project_artifact_collections WHERE id = ? AND team_id = ? AND channel_id = ?',
+                ).get(member.collection.collectionId, teamId, channelId) as Record<string, unknown> | undefined;
+                if (!current || sqliteNumber(current, 'revision') !== member.collection.expectedCurrentRevision
+                  || sqliteText(current, 'current_version_id') !== member.collection.expectedVersionId) {
+                  throw new Error('OUTPUT_PACKAGE_COLLECTION_REVISION_STALE');
+                }
+              }
               collectionId = member.collection.collectionId;
               versionNumber = 0; // 不写 collection/version;成员直接引用既有 version。
               return { collectionId, versionNumber, reuse: true };
@@ -5365,19 +5374,8 @@ function createSqliteOutputPackageRepository(teamDb: SqliteDatabase): OutputPack
                  WHERE team_id = ? AND channel_id = ? AND name = ?`,
               ).get(teamId, channelId, member.collection.name) as Record<string, unknown> | undefined;
               if (byName) {
-                collectionId = sqliteText(byName, 'id');
-                versionNumber = sqliteNumber(byName, 'version_count') + 1;
-                teamDb.prepare(
-                  `UPDATE project_artifact_collections
-                   SET revision = ?, current_version_id = ?, version_count = ?, updated_at = ?
-                   WHERE id = ?`,
-                ).run(
-                  sqliteNumber(byName, 'revision') + 1,
-                  member.version.id,
-                  versionNumber,
-                  input.record.createdAt,
-                  collectionId,
-                );
+                // 另一批发布已创建同名集合：重新加载版本后才能判断是否允许追加。
+                throw new Error('OUTPUT_PACKAGE_COLLECTION_REVISION_STALE');
               } else {
                 collectionId = member.collection.collectionId;
                 versionNumber = 1;

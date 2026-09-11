@@ -1,6 +1,7 @@
 import type { ChannelHistoryPageDto } from '../../../../packages/contracts/src/channel-history.js';
 import { createOrReuseMessageTask } from './message-task-link.js';
 import { describeDirectTaskExecution, markDirectTaskInReview } from './direct-task-execution.js';
+import { resolveDirectDispatchTask } from './direct-dispatch-task.js';
 import { createCompletionNotificationService } from './completion-notification-service.js';
 import { createPushNotificationService } from './push-notification-service.js';
 import type { WebPushSender } from '../infra/web-push.js';
@@ -15333,16 +15334,8 @@ async function buildDispatchRequest(
     : [];
   const memoryContext = [...capsuleContext, ...projectionContext];
   const artifactSourceRoots = parseAgentArtifactSourceRoots(executionConfig?.env);
-  const directTaskId = !managementInvocation && typeof originMessage?.meta?.taskId === 'string'
-    ? originMessage.meta.taskId
-    : undefined;
-  const directTaskCandidate = directTaskId
-    ? await repositories.tasks.getById(directTaskId)
-    : null;
-  const directTask = directTaskCandidate
-    && directTaskCandidate.teamId === dispatch.teamId
-    && (!directTaskCandidate.channelId || directTaskCandidate.channelId === dispatch.channelId)
-    ? directTaskCandidate
+  const directTask = !managementInvocation
+    ? await resolveDirectDispatchTask(repositories, dispatch, originMessage)
     : null;
   const directTaskCoordination = directTask
     ? await repositories.taskCoordination.coordinations.getByTaskId(directTask.id)
@@ -15355,6 +15348,7 @@ async function buildDispatchRequest(
         originMessage,
         managementInvocation,
         projectReferenceSets,
+        directTaskId: directTask?.id,
         ...(directTaskCoordination ? { directTaskAttempt: directTaskCoordination.attempt } : {}),
       })
     : undefined;
@@ -15435,6 +15429,7 @@ async function buildDispatchWorkspaceSnapshot(
     originMessage: MessageRecord | null;
     managementInvocation: Awaited<ReturnType<ServerNextRepositories['management']['invocations']['getById']>>;
     projectReferenceSets: readonly ProjectReferenceSetRecord[];
+    directTaskId?: string;
     directTaskAttempt?: number;
   },
 ): Promise<DeviceWorkspaceSnapshotDto | undefined> {
@@ -15500,7 +15495,7 @@ async function buildDispatchWorkspaceSnapshot(
   // boundary for task identity.
   const taskContext = input.managementInvocation?.intent.taskContext;
   const taskId: string = taskContext?.taskId
-    ?? (typeof input.originMessage?.meta?.taskId === 'string' ? input.originMessage.meta.taskId : undefined)
+    ?? input.directTaskId
     ?? input.dispatch.id;
   const taskAttempt = taskContext?.taskAttempt ?? input.directTaskAttempt ?? 1;
   // A management invocation may be retried.  The dispatch id is allocated per

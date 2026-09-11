@@ -44,7 +44,7 @@ export type TaskFollowupBinding =
 
 /**
  * 解析 task_followup 消息的关联裁决。判定优先级（前者压倒后者）：
- * 1. 强绑定（线程 taskId）→ strong：取最近一个，即用户最可能回复的对象（AC1）。
+ * 1. 唯一线程 taskId → strong；多 Task 线程需明确目标，不能按时间猜测归属。
  * 2. 重大变化（objective 命中高风险词表）→ needs_confirmation，无论候选数（AC3）。
  * 3. 多候选 → needs_confirmation（AC3）。
  * 4. 唯一候选 + 非重大变化 → suggested（AC2）。
@@ -52,8 +52,16 @@ export type TaskFollowupBinding =
  */
 export function resolveTaskFollowupBinding(input: TaskFollowupBindingInput): TaskFollowupBinding {
   // AC1 强绑定：线程内有 Task 引用（讨论串 / 回复系统消息 / 明确引用）。优先级最高，压倒重大变化。
-  if (input.threadTaskIds.length > 0) {
-    const taskId = input.threadTaskIds[input.threadTaskIds.length - 1]!;
+  const threadTaskIds = [...new Set(input.threadTaskIds)];
+  if (threadTaskIds.length > 1) {
+    return {
+      kind: 'needs_confirmation',
+      candidates: threadTaskIds,
+      reasonCode: TASK_FOLLOWUP_BINDING_REASON.NEEDS_CONFIRMATION_MULTIPLE_CANDIDATES,
+    };
+  }
+  if (threadTaskIds.length === 1) {
+    const taskId = threadTaskIds[0]!;
     return { kind: 'strong', taskId, reasonCode: TASK_FOLLOWUP_BINDING_REASON.STRONG_THREAD_TASK };
   }
 

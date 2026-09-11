@@ -329,6 +329,14 @@ export async function attemptOutputPackageFormation(
   };
 
   // 预读既有 collection(为 member.collection 决定 create vs append + revision fence)。
+  const existingCollections = await repositories.channelProjects.listArtifactCollections({ teamId, channelId: input.channelId });
+  const existingVersions = await repositories.channelProjects.listArtifactVersions({ teamId, channelId: input.channelId });
+  const formationDispatchId = workspaceDispatch?.id ?? workspaceRun?.dispatchId;
+  const inputSnapshot = formationDispatchId
+    ? await repositories.deviceWorkspaceSnapshots.getById({
+        teamId, channelId: input.channelId, snapshotId: `dispatch:${formationDispatchId}:workspace-snapshot`,
+      })
+    : null;
   const members: OutputPackageMemberWrite[] = [];
   for (const member of plan.members) {
     const existingVersion = await repositories.channelProjects.getArtifactVersionByArtifact({
@@ -360,13 +368,51 @@ export async function attemptOutputPackageFormation(
       });
       continue;
     }
-    const existingCollection = await repositories.channelProjects.listArtifactCollections({
-      teamId,
-      channelId: input.channelId,
-    });
-    const match = existingCollection.find((collection) => collection.name === member.collectionKey);
+    const match = existingCollections.find((collection) => collection.name === member.collectionKey);
     const stageId = await resolveStageIdForTask(repositories, teamId, input.channelId, plan.taskId);
     if (match) {
+      const current = existingVersions.find((version) => version.id === match.currentVersionId);
+      const currentArtifact = current
+        ? await repositories.artifacts.getForTeam({ teamId, artifactId: current.artifactId })
+        : null;
+      const hasDigest = Boolean(member.sha256 && /^[a-f0-9]{64}$/i.test(member.sha256));
+      // 原样重传复用当前版本及其审核事实。冻结包仍保留本次交付的路径与内容摘要。
+      if (current && currentArtifact?.channelId === input.channelId && hasDigest
+        && currentArtifact.sha256?.toLowerCase() === member.sha256!.toLowerCase()
+        && currentArtifact.sizeBytes === member.sizeBytes) {
+        members.push({
+          sequence: member.sequence, shortLabel: member.shortLabel, role: 'deliverable', requiredForFinal: true,
+          sourcePath: member.sourcePath, filename: member.filename, sha256: member.sha256, sizeBytes: member.sizeBytes,
+          collection: {
+            mode: 'reuse', collectionId: match.id, expectedVersionId: current.id,
+            expectedCurrentRevision: match.revision,
+          },
+          version: {
+            id: current.id, artifactId: current.artifactId, taskId: plan.taskId, taskRevision: plan.taskRevision ?? 1,
+          },
+        });
+        continue;
+      }
+      const usesCurrentInput = current
+        && inputSnapshot?.provenance.agentId === plan.agentId
+        && inputSnapshot.provenance.taskId === plan.taskId
+        && inputSnapshot.provenance.workspaceRunId === formationDispatchId
+        && inputSnapshot.inputSet.items.some((item) =>
+          item.collectionId === match.id && item.artifactVersionId === current.id);
+      // 人工修订必须成为执行输入，不能让 Agent 本地旧底稿移动 Server 当前版本。
+      if (current?.revisedFromVersionId && !usesCurrentInput) {
+        return { kind: 'conflict', reasonCode: 'output-package-source-version-stale' };
+      }
+      if (hasDigest && !usesCurrentInput) {
+        for (const version of existingVersions.filter((candidate) =>
+          candidate.collectionId === match.id && candidate.id !== match.currentVersionId)) {
+          const artifact = await repositories.artifacts.getForTeam({ teamId, artifactId: version.artifactId });
+          if (artifact?.channelId === input.channelId && artifact.sha256?.toLowerCase() === member.sha256!.toLowerCase()
+            && artifact.sizeBytes === member.sizeBytes) {
+            return { kind: 'conflict', reasonCode: 'output-package-source-version-stale' };
+          }
+        }
+      }
       members.push({
         sequence: member.sequence,
         shortLabel: member.shortLabel,

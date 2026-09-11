@@ -107,6 +107,8 @@ export type OutputPackageCollectionWrite =
     readonly collectionId: ID;
     /** 既有 version id(必须与 artifact 自然键匹配,否则 conflict)。 */
     readonly expectedVersionId: ID;
+    /** 按内容复用当前版本时，还需防止预读后 current/review 发生变化。 */
+    readonly expectedCurrentRevision?: number;
   };
 
 export interface OutputPackageMemberWrite {
