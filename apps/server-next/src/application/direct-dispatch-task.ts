@@ -50,7 +50,8 @@ export async function resolveDirectDispatchTask(
       || await transaction.management.runs.getByRootTaskId(taskId)) throw new Error('DIRECT_TASK_EXECUTION_STALE');
     // 冻结到发起本次 Dispatch 的消息，后续查询/重连不再根据变化中的线程重新选 Task。
     const linked = await transaction.messages.setTaskIdIfAbsent({ messageId: origin.id, taskId });
-    return linked?.taskId === taskId ? task : null;
+    if (linked?.taskId !== taskId) throw new Error('DIRECT_TASK_FOLLOWUP_NEEDS_CONFIRMATION');
+    return task;
   });
 }
 

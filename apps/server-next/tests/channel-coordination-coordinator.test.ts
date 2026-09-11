@@ -1416,6 +1416,18 @@ describe('channel coordinator: task_followup evidence binding (#709)', () => {
     expect((await repos.messages.getById('message-1'))?.meta?.taskId).toBeUndefined();
   });
 
+  test('同毫秒弱候选无法证明先后时要求确认', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'followup', risk: 'low', objective: '补充进度' }))]),
+    });
+    await seedFollowupJob(repos);
+    await repos.tasks.create({ id: 'same-time-task', teamId: 'team-1', channelId: 'channel-1', title: '补充进度',
+      status: 'in_progress', creatorId: 'user-1', tags: [], sortOrder: 0, createdAt: 900, updatedAt: 900 });
+    await coordinator.processJob('job-1');
+    expect(await repos.channelCoordination.decisions.getByJobId('job-1')).toMatchObject({ linkedTaskId: null, gateStatus: 'blocked' });
+    expect((await repos.messages.getById('message-1'))?.meta?.taskId).toBeUndefined();
+  });
+
   test('suggested: 无线程 taskId + 唯一活跃候选 → 关联 + confirm_suggested (AC2)', async () => {
     const { repos, coordinator } = setup({
       fetch: makeFetch([okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'followup', risk: 'low', objective: '补充一个实现细节' }))]),

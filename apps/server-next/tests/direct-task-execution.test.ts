@@ -149,6 +149,17 @@ describe.each([false, true])('direct Task evidence (sqlite=%s)', (sqlite) => {
     } finally { h.close(); }
   });
 
+  test('读取后并发冻结到不同Task时拒绝合成任务降级', async () => {
+    const h = await fixture(sqlite);
+    try {
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: h.origin.id, createdAt: 10, meta: {} });
+      await h.repositories.messages.setTaskIdIfAbsent({ messageId: followup.id, taskId: 'other-task' });
+      await expect(resolveDirectDispatchTask(h.repositories, { ...h.dispatch, messageId: followup.id }, followup))
+        .rejects.toThrow('DIRECT_TASK_FOLLOWUP_NEEDS_CONFIRMATION');
+      expect((await h.repositories.messages.getById(followup.id))?.meta?.taskId).toBe('other-task');
+    } finally { h.close(); }
+  });
+
   test('多任务线程不能把补交绑到最近的另一个任务', async () => {
     const h = await fixture(sqlite);
     try {

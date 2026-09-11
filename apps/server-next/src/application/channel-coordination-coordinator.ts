@@ -503,11 +503,12 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
           includeGlobal: false,
         }))
           .filter((task) => task.status !== 'done' && task.status !== 'closed'
-            && currentMessage && task.createdAt < currentMessage.createdAt)
-          .map((task) => ({ taskId: task.id, objective: task.title }));
+            && currentMessage && task.createdAt <= currentMessage.createdAt)
+          .map((task) => ({ taskId: task.id, objective: task.title, createdAt: task.createdAt }));
         // 截断窗口不能证明唯一性，即便窗口内只有一个 Task 也必须明确目标。
-        const binding = threadMessages.length >= 50
-          ? { kind: 'needs_confirmation' as const, candidates: threadTaskIds }
+        const binding = threadMessages.length >= 50 || (threadTaskIds.length === 0
+          && channelActiveTasks.some((task) => task.createdAt === currentMessage?.createdAt))
+          ? { kind: 'needs_confirmation' as const, candidates: [...new Set([...threadTaskIds, ...channelActiveTasks.map((task) => task.taskId)])] }
           : resolveTaskFollowupBinding({
           threadTaskIds,
           channelActiveTasks,
