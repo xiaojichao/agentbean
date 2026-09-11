@@ -67,6 +67,21 @@ describe.each([false, true])('direct Task evidence (sqlite=%s)', (sqlite) => {
     } finally { h.close(); }
   });
 
+  test.each(['task', 'coordination'] as const)('普通根消息下从后续 %s 回复解析唯一任务', async (source) => {
+    const h = await fixture(sqlite);
+    try {
+      await h.repositories.messages.updateMeta({ messageId: h.origin.id, meta: {} });
+      await h.repositories.messages.append({ ...h.origin, id: 'task-reply', threadId: h.origin.id, createdAt: 5,
+        meta: source === 'task' ? { taskId: h.task.id } : {
+          coordination: { decisionId: 'decision', jobId: 'job', intent: 'tracked_task', gateStatus: 'applied', taskId: h.task.id },
+        } });
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: h.origin.id, createdAt: 10, meta: {} });
+      expect(await resolveDirectDispatchTask(h.repositories, { ...h.dispatch, messageId: followup.id }, followup))
+        .toMatchObject({ id: h.task.id });
+      expect((await h.repositories.messages.getById(followup.id))?.meta?.taskId).toBe(h.task.id);
+    } finally { h.close(); }
+  });
+
   test.each(['done', 'closed', 'cancelled', 'reassigned', 'managed', 'management-root'] as const)('冻结后 %s 不再授权补交执行', async (change) => {
     const h = await fixture(sqlite);
     try {

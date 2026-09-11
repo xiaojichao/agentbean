@@ -24,15 +24,14 @@ export async function resolveDirectDispatchTask(
 
   return repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
     const root = await transaction.messages.getById(threadId);
-    if (!root || root.teamId !== dispatch.teamId || root.channelId !== dispatch.channelId
-      || typeof root.meta?.taskId !== 'string') return null;
+    if (!root || root.teamId !== dispatch.teamId || root.channelId !== dispatch.channelId) return null;
     // 达到读取上限时不能证明候选唯一，保留无绑定状态。
     const history = await transaction.messages.listThreadBefore({
       channelId: dispatch.channelId, threadId, beforeMessageId: origin.id, limit: 200,
     });
     if (history.length >= 200) return null;
-    const taskIds = new Set<string>([root.meta.taskId]);
-    for (const message of history) {
+    const taskIds = new Set<string>();
+    for (const message of [root, ...history]) {
       if (message.teamId !== dispatch.teamId || message.channelId !== dispatch.channelId) return null;
       if (typeof message.meta?.taskId === 'string') taskIds.add(message.meta.taskId);
       const coordination = message.meta?.coordination;
@@ -40,7 +39,7 @@ export async function resolveDirectDispatchTask(
         && typeof coordination.taskId === 'string') taskIds.add(coordination.taskId);
     }
     if (taskIds.size !== 1) return null;
-    const taskId = root.meta.taskId;
+    const taskId = [...taskIds][0]!;
     const task = await transaction.tasks.getById(taskId);
     if (!task || task.teamId !== dispatch.teamId || task.channelId !== dispatch.channelId
       || ['done', 'closed', 'cancelled'].includes(task.status)
