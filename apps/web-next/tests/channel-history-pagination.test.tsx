@@ -39,6 +39,19 @@ function setup() {
 }
 
 describe('top-of-channel history loading', () => {
+  test('returning to the bottom resumes following live messages after clearing link focus', () => {
+    const fixture = setup();
+    const options = { ...fixture.options, suppressAutoScroll: true };
+    const hook = renderHook(useChannelHistoryPagination, { initialProps: options });
+    expect(fixture.end.scrollIntoView).not.toHaveBeenCalled();
+    fixture.list.scrollTop = 1700;
+    act(() => hook.result.current.onScroll());
+    hook.rerender({ ...options, suppressAutoScroll: false });
+    expect(fixture.end.scrollIntoView).toHaveBeenCalledTimes(1);
+    hook.rerender({ ...options, suppressAutoScroll: false, messages: [...options.messages, message('live', 60)] });
+    expect(fixture.end.scrollIntoView).toHaveBeenCalledTimes(2);
+  });
+
   test('message links suppress automatic bottom scrolling without disabling older history', async () => {
     const fixture = setup();
     const options = { ...fixture.options, suppressAutoScroll: true };

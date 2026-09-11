@@ -493,6 +493,20 @@ export default function ChatPage() {
     prepend: prependChannelHistory,
   });
   const { showBackToBottom } = historyPagination;
+  const [returnToBottomChannelId, setReturnToBottomChannelId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!returnToBottomChannelId) return;
+    if (returnToBottomChannelId !== activeChannel) {
+      setReturnToBottomChannelId(null);
+      return;
+    }
+    // 先让 URL 定位效果清理延迟滚动，并完成当前历史分页的锚点恢复。
+    if (messageParam !== null || historyPagination.loading) return;
+    // 从顶部平滑向下滚动会再次触发顶部翻页；显式返回直接落到底部。
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    setReturnToBottomChannelId(null);
+  }, [returnToBottomChannelId, activeChannel, messageParam, historyPagination.loading]);
 
   useEffect(() => {
     dmsRef.current = dms;
@@ -2320,6 +2334,15 @@ export default function ChatPage() {
   };
 
   const scrollToBottom = () => {
+    if (messageParam !== null) {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('message');
+      setSelectedMessageId(null);
+      setReturnToBottomChannelId(activeChannel);
+      const query = params.toString();
+      router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
+      return;
+    }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
