@@ -82,7 +82,7 @@ export async function describeDirectTaskExecution(
   const dispatches = await repositories.dispatches.listByTaskOrigin({
     teamId: task.teamId, channelId: input.channelId, taskId: task.id,
   });
-  const active = dispatches.find((dispatch) => ['queued', 'accepted', 'running'].includes(dispatch.status));
+  const active = dispatches.find((dispatch) => ['queued', 'sent', 'accepted', 'running'].includes(dispatch.status));
   if (active) return { kind: 'none', detail: active.status === 'running'
     ? '存在执行中的派发记录，请在讨论串核对最新进展'
     : '已派发，等待 Agent 开始执行' };

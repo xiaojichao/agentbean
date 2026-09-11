@@ -5,7 +5,7 @@ const Database = require('better-sqlite3');
 function classifyTask(row, now) {
   const liveClaims = row.claims.filter((claim) => claim.status === 'active' && claim.expiresAt > now
     && claim.taskRevision === row.revision && claim.taskAttempt === row.coordination?.attempt);
-  const activeDispatches = row.dispatches.filter((dispatch) => ['queued', 'accepted', 'running'].includes(dispatch.status));
+  const activeDispatches = row.dispatches.filter((dispatch) => ['queued', 'sent', 'accepted', 'running'].includes(dispatch.status));
   const latest = row.dispatches[0];
   if (row.status === 'in_review') {
     if (row.packages.length) return 'file_review';

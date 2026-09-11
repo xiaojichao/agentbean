@@ -7,7 +7,7 @@ import { applyGlobalMigrations, applyTeamMigrations, createSqliteRepositories, t
 import type { TaskStatus } from '../../../packages/contracts/src/task.js';
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as new (path: string) => SqliteDatabase & { close(): void };
-const { readTaskStateReport } = createRequire(import.meta.url)('../../../scripts/report-task-state.cjs');
+const { readTaskStateReport, classifyTask } = createRequire(import.meta.url)('../../../scripts/report-task-state.cjs');
 
 async function fixture(sqlite: boolean) {
   const globalDb = sqlite ? new Database(':memory:') : undefined;
@@ -51,6 +51,18 @@ test('只读诊断按 Team 隔离，缺失 Team 不返回数据，SQLite query_o
 });
 
 describe.each([false, true])('direct Task evidence (sqlite=%s)', (sqlite) => {
+  test('已发送但尚未接受的派发仍属于活动执行', async () => {
+    const h = await fixture(sqlite);
+    try {
+      await h.repositories.dispatches.create({ ...h.dispatch, id: 'sent', requestId: 'sent', status: 'sent', createdAt: 4 });
+      expect(await describeDirectTaskExecution(h.repositories, { task: h.task, channelId: 'channel', packageCount: 0, pendingCount: 0 }))
+        .toMatchObject({ detail: '已派发，等待 Agent 开始执行' });
+      const row = { ...h.task, claims: [], sourceMessageIds: ['origin'], dispatches: [{ status: 'sent' }] };
+      expect(classifyTask(row, 5)).toBe('execution_record_active');
+      expect(classifyTask({ ...row, status: 'todo' }, 5)).toBe('dispatch_pending');
+    } finally { h.close(); }
+  });
+
   test('合法文字回复进入审核，摘要不伪造文件包或自动验收', async () => {
     const h = await fixture(sqlite);
     try {
