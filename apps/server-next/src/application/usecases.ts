@@ -1,6 +1,7 @@
 import type { ChannelHistoryPageDto } from '../../../../packages/contracts/src/channel-history.js';
 import { createOrReuseMessageTask } from './message-task-link.js';
 import { describeDirectTaskExecution, markDirectTaskInReview } from './direct-task-execution.js';
+import { isFrozenFollowupDispatchCurrent, resolveDirectDispatchTask } from './direct-dispatch-task.js';
 import { createCompletionNotificationService } from './completion-notification-service.js';
 import { createPushNotificationService } from './push-notification-service.js';
 import type { WebPushSender } from '../infra/web-push.js';
@@ -2030,6 +2031,7 @@ export interface CreateServerNextUseCasesInput {
   /** 测试/host 可注入 PI 分析器；生产缺省绑定 Active PI Model + Capability Directory。 */
   analyzeMessageRouteWithPi?: ChannelWorkIntakePiAnalyzer;
   /** 协作状态消息落库后的轻量 realtime fetch 通知（不再生成 PI 汇总气泡）。 */
+  onDispatchFailedBeforeExecution?: (result: unknown) => Promise<void> | void;
   onChannelCollaborationMessageAppended?: (
     delivery: { readonly teamId: string; readonly channelId: string; readonly messageId: string },
   ) => Promise<void> | void;
@@ -3290,6 +3292,45 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     } finally {
       releaseDispatchCoalescingLock();
+    }
+  }
+
+  async function failDispatchBeforeExecution(dispatch: DispatchRecord, error: string, alreadyFailed = false): Promise<void> {
+    const now = clock.now();
+    const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatch.id);
+    if (!alreadyFailed) {
+      if (managedAttempt) await invocationGateway.completeAttempt({ dispatchId: dispatch.id, status: 'failed', error });
+      else await repositories.dispatches.markFailed({ dispatchId: dispatch.id, error, completedAt: now });
+    }
+    const task = !managedAttempt && error.startsWith('DEVICE_WORKSPACE_SNAPSHOT_')
+      ? await repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
+          const origin = await transaction.messages.getById(dispatch.messageId);
+          const taskId = typeof origin?.meta?.taskId === 'string' ? origin.meta.taskId : undefined;
+          const linked = taskId ? await transaction.tasks.getById(taskId) : null;
+          if (!linked || linked.teamId !== dispatch.teamId || linked.channelId !== dispatch.channelId
+            || linked.status !== 'in_progress' || (linked.assigneeId && linked.assigneeId !== dispatch.agentId)
+            || await transaction.coordination.coordinations.getByTaskId(linked.id)
+            || await transaction.management.runs.getByRootTaskId(linked.id)) return null;
+          const pending = await transaction.dispatches.listByTaskOrigin({ teamId: dispatch.teamId, channelId: dispatch.channelId, taskId: linked.id });
+          if (pending.some((candidate) => isPendingDispatchStatus(candidate.status))) return null;
+          return transaction.tasks.update({ taskId: linked.id, changes: { status: 'todo', updatedAt: now } });
+        })
+      : null;
+    const agent = await repositories.agents.getById(dispatch.agentId);
+    if (agent && agent.deletedAt === undefined && agent.status !== 'offline') {
+      await markAgentOnlineIfIdle(repositories, { agentId: dispatch.agentId, teamId: dispatch.teamId, lastSeenAt: now });
+    }
+    const failedDispatch = await repositories.dispatches.getById(dispatch.id);
+    if (failedDispatch) await Promise.resolve(input.onDispatchFailedBeforeExecution?.(
+      makeSuccess({ dispatch: toDispatchDto(failedDispatch), ...(task ? { task } : {}) }),
+    )).catch(() => undefined);
+    if (managedAttempt) {
+      const status = await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
+        dispatchId: dispatch.id, status: 'failed', actorId: 'server', errorCode: error,
+      });
+      if (status) await Promise.resolve(input.onChannelCollaborationMessageAppended?.({
+        teamId: status.teamId, channelId: status.channelId, messageId: status.id,
+      })).catch(() => undefined);
     }
   }
 
@@ -6427,17 +6468,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      return makeSuccess({
-        request: await buildDispatchRequest(
-          repositories,
-          dispatch,
-          agent,
-          clock.now(),
-          requestInput.purpose !== 'route',
-          input.serverCapsuleRuntimeContextResolver,
-          projectCollaborationRollout.inputSetOutput,
-        ),
-      });
+      try {
+        return makeSuccess({
+          request: await buildDispatchRequest(
+            repositories, dispatch, agent, clock.now(), requestInput.purpose !== 'route',
+            input.serverCapsuleRuntimeContextResolver, projectCollaborationRollout.inputSetOutput,
+          ),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.startsWith('DEVICE_WORKSPACE_SNAPSHOT_') && !message.startsWith('DIRECT_TASK_')) throw error;
+        await failDispatchBeforeExecution(dispatch, message);
+        return makeFailure('CONFLICT', message);
+      }
     },
 
     async acceptDispatch(acceptInput) {
@@ -6473,21 +6516,23 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         recordProjectInputSetRuntimeFailure(message);
-        if (!message.startsWith('PROJECT_DOCUMENT_INPUT_SET_')) throw error;
-        await repositories.dispatches.markFailed({
-          dispatchId: dispatch.id,
-          error: message,
-          completedAt: now,
-        });
+        if (!message.startsWith('PROJECT_DOCUMENT_INPUT_SET_')
+          && !message.startsWith('DEVICE_WORKSPACE_SNAPSHOT_') && !message.startsWith('DIRECT_TASK_')) throw error;
+        await failDispatchBeforeExecution(dispatch, message);
         return makeFailure('CONFLICT', message);
       }
-      const accepted = await repositories.dispatches.markAccepted({
-        dispatchId: dispatch.id,
-        agentId: agent.id,
-        expectedUpdatedAt: dispatch.updatedAt,
-        prompt: request.prompt,
-        acceptedAt: now,
+      const accepted = await repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
+        if (!request.managementInvocationId && !await isFrozenFollowupDispatchCurrent(transaction, dispatch, request.taskId)) {
+          await transaction.dispatches.markFailed({ dispatchId: dispatch.id, error: 'DIRECT_TASK_EXECUTION_STALE', completedAt: now });
+          return 'stale' as const;
+        }
+        return transaction.dispatches.markAccepted({ dispatchId: dispatch.id, agentId: agent.id,
+          expectedUpdatedAt: dispatch.updatedAt, prompt: request.prompt, acceptedAt: now });
       });
+      if (accepted === 'stale') {
+        await failDispatchBeforeExecution(dispatch, 'DIRECT_TASK_EXECUTION_STALE', true);
+        return makeFailure('CONFLICT', 'DIRECT_TASK_EXECUTION_STALE');
+      }
       if (!accepted) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
@@ -15333,17 +15378,13 @@ async function buildDispatchRequest(
     : [];
   const memoryContext = [...capsuleContext, ...projectionContext];
   const artifactSourceRoots = parseAgentArtifactSourceRoots(executionConfig?.env);
-  const directTaskId = !managementInvocation && typeof originMessage?.meta?.taskId === 'string'
-    ? originMessage.meta.taskId
-    : undefined;
-  const directTaskCandidate = directTaskId
-    ? await repositories.tasks.getById(directTaskId)
+  const directTask = !managementInvocation
+    ? await resolveDirectDispatchTask(repositories, dispatch, originMessage)
     : null;
-  const directTask = directTaskCandidate
-    && directTaskCandidate.teamId === dispatch.teamId
-    && (!directTaskCandidate.channelId || directTaskCandidate.channelId === dispatch.channelId)
-    ? directTaskCandidate
-    : null;
+  if (!managementInvocation && originMessage?.threadId && originMessage.threadId !== originMessage.id
+    && typeof originMessage.meta?.taskId === 'string' && !directTask) {
+    throw new Error('DIRECT_TASK_EXECUTION_STALE');
+  }
   const directTaskCoordination = directTask
     ? await repositories.taskCoordination.coordinations.getByTaskId(directTask.id)
     : null;
@@ -15355,6 +15396,7 @@ async function buildDispatchRequest(
         originMessage,
         managementInvocation,
         projectReferenceSets,
+        directTaskId: directTask?.id,
         ...(directTaskCoordination ? { directTaskAttempt: directTaskCoordination.attempt } : {}),
       })
     : undefined;
@@ -15435,9 +15477,18 @@ async function buildDispatchWorkspaceSnapshot(
     originMessage: MessageRecord | null;
     managementInvocation: Awaited<ReturnType<ServerNextRepositories['management']['invocations']['getById']>>;
     projectReferenceSets: readonly ProjectReferenceSetRecord[];
+    directTaskId?: string;
     directTaskAttempt?: number;
   },
 ): Promise<DeviceWorkspaceSnapshotDto | undefined> {
+  // V1 and V2 invocations both carry the frozen task context.  It must be
+  // authoritative for provenance; schema V2 is the InputSet gate, not the
+  // boundary for task identity.
+  const taskContext = input.managementInvocation?.intent.taskContext;
+  const taskId: string = taskContext?.taskId
+    ?? input.directTaskId
+    ?? input.dispatch.id;
+  const taskAttempt = taskContext?.taskAttempt ?? input.directTaskAttempt ?? 1;
   const references = input.projectReferenceSets.flatMap((set) => set.selections.flatMap((selection) => selection.items))
     .filter((item) => item.kind === 'artifact_version'
       && typeof item.collectionId === 'string'
@@ -15458,7 +15509,13 @@ async function buildDispatchWorkspaceSnapshot(
     channelId: input.dispatch.channelId,
     snapshotId,
   });
-  if (existing) return existing;
+  if (existing) {
+    if (existing.provenance.taskId !== taskId || existing.provenance.taskAttempt !== taskAttempt
+      || existing.provenance.agentId !== input.agent.id) {
+      throw new Error('DEVICE_WORKSPACE_SNAPSHOT_UNAVAILABLE');
+    }
+    return existing;
+  }
 
   const versions = await repositories.channelProjects.listArtifactVersions({
     teamId: input.dispatch.teamId,
@@ -15495,14 +15552,6 @@ async function buildDispatchWorkspaceSnapshot(
     });
   }
 
-  // V1 and V2 invocations both carry the frozen task context.  It must be
-  // authoritative for provenance; schema V2 is the InputSet gate, not the
-  // boundary for task identity.
-  const taskContext = input.managementInvocation?.intent.taskContext;
-  const taskId: string = taskContext?.taskId
-    ?? (typeof input.originMessage?.meta?.taskId === 'string' ? input.originMessage.meta.taskId : undefined)
-    ?? input.dispatch.id;
-  const taskAttempt = taskContext?.taskAttempt ?? input.directTaskAttempt ?? 1;
   // A management invocation may be retried.  The dispatch id is allocated per
   // attempt and is already a safe path segment, so use it as the immutable run
   // identity instead of reusing the invocation id (or the colon-delimited

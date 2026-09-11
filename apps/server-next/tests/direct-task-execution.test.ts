@@ -2,6 +2,9 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 import { describeDirectTaskExecution, markDirectTaskInReview } from '../src/application/direct-task-execution.js';
 import { createOrReuseMessageTask } from '../src/application/message-task-link.js';
+import { createServerNextUseCases } from '../src/application/usecases.js';
+import { createManagementKernel } from '../src/application/management/management-kernel.js';
+import { resolveDirectDispatchTask } from '../src/application/direct-dispatch-task.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 import { applyGlobalMigrations, applyTeamMigrations, createSqliteRepositories, type SqliteDatabase } from '../src/infra/sqlite/repositories.js';
 import type { TaskStatus } from '../../../packages/contracts/src/task.js';
@@ -51,6 +54,145 @@ test('只读诊断按 Team 隔离，缺失 Team 不返回数据，SQLite query_o
 });
 
 describe.each([false, true])('direct Task evidence (sqlite=%s)', (sqlite) => {
+  test('线程补交继承唯一原任务并冻结到当前消息，后来的其他任务不改变关联', async () => {
+    const h = await fixture(sqlite);
+    try {
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: 'origin',
+        body: '补交原文件', createdAt: 10, meta: {} });
+      const dispatch = { ...h.dispatch, messageId: followup.id };
+      expect(await resolveDirectDispatchTask(h.repositories, dispatch, followup)).toMatchObject({ id: 'task' });
+      const frozen = await h.repositories.messages.getById(followup.id);
+      expect(frozen?.meta?.taskId).toBe('task');
+      await h.repositories.messages.append({ ...h.origin, id: 'later-task', threadId: 'origin', createdAt: 11, meta: { taskId: 'other' } });
+      expect(await resolveDirectDispatchTask(h.repositories, dispatch, frozen)).toMatchObject({ id: 'task' });
+    } finally { h.close(); }
+  });
+
+  test.each(['task', 'coordination'] as const)('普通根消息下从后续 %s 回复解析唯一任务', async (source) => {
+    const h = await fixture(sqlite);
+    try {
+      await h.repositories.messages.updateMeta({ messageId: h.origin.id, meta: {} });
+      await h.repositories.messages.append({ ...h.origin, id: 'task-reply', threadId: h.origin.id, createdAt: 5,
+        meta: source === 'task' ? { taskId: h.task.id } : {
+          coordination: { decisionId: 'decision', jobId: 'job', intent: 'tracked_task', gateStatus: 'applied', taskId: h.task.id },
+        } });
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: h.origin.id, createdAt: 10, meta: {} });
+      expect(await resolveDirectDispatchTask(h.repositories, { ...h.dispatch, messageId: followup.id }, followup))
+        .toMatchObject({ id: h.task.id });
+      expect((await h.repositories.messages.getById(followup.id))?.meta?.taskId).toBe(h.task.id);
+    } finally { h.close(); }
+  });
+
+  test.each(['done', 'closed', 'cancelled', 'reassigned', 'managed', 'management-root'] as const)('冻结后 %s 不再授权补交执行', async (change) => {
+    const h = await fixture(sqlite);
+    try {
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: 'origin', createdAt: 10, meta: {} });
+      const dispatch = { ...h.dispatch, messageId: followup.id };
+      expect(await resolveDirectDispatchTask(h.repositories, dispatch, followup)).toMatchObject({ id: 'task' });
+      if (change === 'managed' || change === 'management-root') {
+        let id = 0;
+        const kernel = createManagementKernel({ repositories: h.repositories.management, unitOfWork: h.repositories.managementUnitOfWork,
+          clock: { now: () => 11 }, ids: { nextId: () => `management-${++id}` } });
+        const created = await kernel.createOrResumeRun({ teamId: 'team', channelId: 'channel',
+          rootTaskId: change === 'management-root' ? h.task.id : 'root', rootMessageId: 'origin',
+          requestKey: 'management', requestHash: 'hash',
+          placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+          budget: { maxSubtasks: 4, maxDepth: 2, maxExternalInvocations: 4 } });
+        if (change === 'managed') await h.repositories.taskCoordination.coordinations.create({
+          schemaVersion: 1, taskId: h.task.id, teamId: 'team', managementRunId: created.run.id, rootTaskId: 'root',
+          nodeKind: 'subtask', reviewPolicy: 'manager', claimPolicy: 'open', requiredCapabilities: [],
+          taskRevision: 1, attempt: 1, maxAttempts: 3, createdAt: 11, updatedAt: 11,
+        });
+      } else {
+        await h.repositories.tasks.update({ taskId: h.task.id,
+          changes: change === 'reassigned' ? { assigneeId: 'other' } : { status: change } });
+      }
+      const frozen = await h.repositories.messages.getById(followup.id);
+      expect(await resolveDirectDispatchTask(h.repositories, dispatch, frozen)).toBeNull();
+      expect(frozen?.meta?.taskId).toBe(h.task.id);
+    } finally { h.close(); }
+  });
+
+  test.each(['cancelled', 'reassigned'] as const)('接受事务前 %s 不得接受冻结补交', async (change) => {
+    const h = await fixture(sqlite);
+    try {
+      await h.repositories.users.create({ id: 'user', username: 'user', passwordHash: 'test', role: 'user', createdAt: 1, updatedAt: 1 });
+      await h.repositories.teams.create({ id: 'team', ownerId: 'user', name: 'Team', path: 'testteam', visibility: 'private', createdAt: 1 });
+      await h.repositories.agents.upsert({ id: 'agent', primaryTeamId: 'team', visibleTeamIds: ['team'],
+        name: 'agent', source: 'discovered', category: 'agentos-hosted', adapterKind: 'hermes', status: 'busy', lastSeenAt: 1 });
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: h.origin.id, createdAt: 10 });
+      await h.repositories.dispatches.create({ ...h.dispatch, id: 'queued-followup', messageId: followup.id,
+        requestId: 'queued-followup', status: 'queued', createdAt: 10, updatedAt: 10 });
+      const app = createServerNextUseCases({ repositories: h.repositories, clock: { now: () => 20 } });
+      const run = h.repositories.taskCoordinationUnitOfWork.run.bind(h.repositories.taskCoordinationUnitOfWork);
+      h.repositories.taskCoordinationUnitOfWork.run = async (operation) => {
+        // 模拟请求装配完成后、接受事务开始前的状态变化。
+        await h.repositories.tasks.update({ taskId: h.task.id,
+          changes: change === 'cancelled' ? { status: 'cancelled' } : { assigneeId: 'other' } });
+        return run(operation);
+      };
+      expect(await app.acceptDispatch({ dispatchId: 'queued-followup', agentId: 'agent', quietWindowMs: 0 }))
+        .toMatchObject({ ok: false, error: 'CONFLICT' });
+      expect(await h.repositories.dispatches.getById('queued-followup')).toMatchObject({ status: 'failed', error: 'DIRECT_TASK_EXECUTION_STALE' });
+      expect((await h.repositories.agents.getById('agent'))?.status).toBe('online');
+    } finally { h.close(); }
+  });
+
+  test('同毫秒后写入的 Task 回复不是补交的前序证据', async () => {
+    const h = await fixture(sqlite);
+    try {
+      await h.repositories.messages.updateMeta({ messageId: h.origin.id, meta: {} });
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: h.origin.id, createdAt: 10, meta: {} });
+      await h.repositories.messages.append({ ...h.origin, id: 'later-task', threadId: h.origin.id, createdAt: 10, meta: { taskId: h.task.id } });
+      expect(await resolveDirectDispatchTask(h.repositories, { ...h.dispatch, messageId: followup.id }, followup)).toBeNull();
+      expect((await h.repositories.messages.getById(followup.id))?.meta?.taskId).toBeUndefined();
+    } finally { h.close(); }
+  });
+
+  test('读取后并发冻结到不同Task时拒绝合成任务降级', async () => {
+    const h = await fixture(sqlite);
+    try {
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: h.origin.id, createdAt: 10, meta: {} });
+      await h.repositories.messages.setTaskIdIfAbsent({ messageId: followup.id, taskId: 'other-task' });
+      await expect(resolveDirectDispatchTask(h.repositories, { ...h.dispatch, messageId: followup.id }, followup))
+        .rejects.toThrow('DIRECT_TASK_FOLLOWUP_NEEDS_CONFIRMATION');
+      expect((await h.repositories.messages.getById(followup.id))?.meta?.taskId).toBe('other-task');
+    } finally { h.close(); }
+  });
+
+  test('多任务线程不能把补交绑到最近的另一个任务', async () => {
+    const h = await fixture(sqlite);
+    try {
+      await h.repositories.tasks.create({ ...h.task, id: 'other', title: '配置切换' });
+      await h.repositories.messages.append({ ...h.origin, id: 'other-origin', threadId: 'origin', createdAt: 5, meta: { taskId: 'other' } });
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: 'origin', createdAt: 10, meta: {} });
+      await expect(resolveDirectDispatchTask(h.repositories, { ...h.dispatch, messageId: followup.id }, followup)).rejects.toThrow('DIRECT_TASK_FOLLOWUP_NEEDS_CONFIRMATION');
+      expect((await h.repositories.messages.getById(followup.id))?.meta?.taskId).toBeUndefined();
+    } finally { h.close(); }
+  });
+
+  test.each(['done', 'closed', 'cancelled'] as TaskStatus[])('线程补交不得继承终态任务 %s', async (status) => {
+    const h = await fixture(sqlite);
+    try {
+      await h.repositories.tasks.update({ taskId: h.task.id, changes: { status } });
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: 'origin', createdAt: 10, meta: {} });
+      await expect(resolveDirectDispatchTask(h.repositories, { ...h.dispatch, messageId: followup.id }, followup)).rejects.toThrow('DIRECT_TASK_EXECUTION_STALE');
+    } finally { h.close(); }
+  });
+
+  test.each(['team', 'channel', 'agent'])('线程继承不跨越 %s 边界', async (boundary) => {
+    const h = await fixture(sqlite);
+    try {
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: 'origin', createdAt: 10, meta: {} });
+      const dispatch = { ...h.dispatch, messageId: followup.id,
+        ...(boundary === 'team' ? { teamId: 'other' } : {}),
+        ...(boundary === 'channel' ? { channelId: 'other' } : {}),
+        ...(boundary === 'agent' ? { agentId: 'other' } : {}) };
+      if (boundary === 'agent') await expect(resolveDirectDispatchTask(h.repositories, dispatch, followup)).rejects.toThrow('DIRECT_TASK_EXECUTION_STALE');
+      else expect(await resolveDirectDispatchTask(h.repositories, dispatch, followup)).toBeNull();
+    } finally { h.close(); }
+  });
+
   test('已发送但尚未接受的派发仍属于活动执行', async () => {
     const h = await fixture(sqlite);
     try {

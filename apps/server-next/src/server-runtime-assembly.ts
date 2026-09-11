@@ -113,6 +113,7 @@ export type CreateServerRuntimeAssemblyInput = Pick<
   readonly onWorkspaceRevisionCommitted?: (
     payload: WorkspaceRevisionCommittedPayload,
   ) => Promise<void> | void;
+  readonly onDispatchFailedBeforeExecution?: (result: unknown) => Promise<void> | void;
   readonly onChannelCollaborationMessageAppended?: (
     delivery: { teamId: string; channelId: string; messageId: string },
   ) => Promise<void> | void;
@@ -201,6 +202,7 @@ export function createServerRuntimeAssembly(
     },
     isDeviceRuntimeDisconnected: (deviceId) => taskClaimBroker.isDeviceDisconnected(deviceId),
     onChannelCollaborationTasksPublished: management.publishChannelCollaborationTasks,
+    onDispatchFailedBeforeExecution: input.onDispatchFailedBeforeExecution,
     onChannelCollaborationMessageAppended,
     ...(projectCollaborationRollout.managerAutoAdvance
       ? {

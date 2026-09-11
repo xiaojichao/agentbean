@@ -15,16 +15,16 @@ describe('resolveTaskFollowupBinding', () => {
     });
   });
 
-  test('strong: multiple thread taskIds → picks the most recent (AC1)', () => {
+  test('multiple thread taskIds require an explicit choice instead of picking the most recent', () => {
     const result = resolveTaskFollowupBinding({
       threadTaskIds: ['task-old', 'task-new'],
       channelActiveTasks: [],
       followupObjective: '跟进',
     });
     expect(result).toEqual({
-      kind: 'strong',
-      taskId: 'task-new',
-      reasonCode: TASK_FOLLOWUP_BINDING_REASON.STRONG_THREAD_TASK,
+      kind: 'needs_confirmation',
+      candidates: ['task-old', 'task-new'],
+      reasonCode: TASK_FOLLOWUP_BINDING_REASON.NEEDS_CONFIRMATION_MULTIPLE_CANDIDATES,
     });
   });
 

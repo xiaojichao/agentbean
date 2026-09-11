@@ -1411,7 +1411,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (!before) {
           return [];
         }
-        return Array.from(messages.values())
+        const ordered = Array.from(messages.values());
+        return ordered.slice(0, ordered.findIndex((message) => message.id === input.beforeMessageId))
           .filter((message) =>
             message.channelId === input.channelId &&
             message.threadId === input.threadId &&
@@ -2489,7 +2490,33 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           const members = outputPackageMembers.get(`${teamId}:${existing.packageId}`) ?? [];
           return { kind: 'replayed' as const, package: existing, members };
         }
-        // verify+apply 单循环:memory 单线程,逐项先验证后写;复核失败回 conflict。
+        // 先验证整包，再写入；后一个成员冲突不能留下前一个成员的部分写入。
+        for (const member of input.members) {
+          const write = member.collection;
+          const version = Array.from(projectArtifactVersions.values()).find((candidate) =>
+            candidate.teamId === teamId && candidate.channelId === channelId && candidate.artifactId === member.version.artifactId);
+          if (version && version.id !== member.version.id) return { kind: 'conflict', reason: 'artifact-version-conflict' };
+          const collection = projectArtifactCollections.get(write.collectionId);
+          if (write.mode === 'create') {
+            if (Array.from(projectArtifactCollections.values()).some((candidate) =>
+              candidate.teamId === teamId && candidate.channelId === channelId && candidate.name === write.name)) {
+              return { kind: 'conflict', reason: 'collection-revision-stale' };
+            }
+          } else if (write.mode === 'append') {
+            if (!collection || collection.teamId !== teamId || collection.channelId !== channelId
+              || collection.revision !== write.expectedRevision || collection.versionCount !== write.expectedVersionCount) {
+              return { kind: 'conflict', reason: 'collection-revision-stale' };
+            }
+          } else {
+            if (!version || version.id !== write.expectedVersionId || version.collectionId !== write.collectionId) {
+              return { kind: 'conflict', reason: 'artifact-version-conflict' };
+            }
+            if (write.expectedCurrentRevision !== undefined && (!collection
+              || collection.revision !== write.expectedCurrentRevision || collection.currentVersionId !== write.expectedVersionId)) {
+              return { kind: 'conflict', reason: 'collection-revision-stale' };
+            }
+          }
+        }
         // collection 写入指令(name/kind)与版本号在同一成员内确定,避免跨成员联合收窄。
         const now = input.record.createdAt;
         const memberRecords: import('../../application/output-package-repositories.js').OutputPackageMemberRecord[] = [];
@@ -2510,6 +2537,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
               || existingVersion.id !== collectionWrite.expectedVersionId
               || existingVersion.collectionId !== collectionWrite.collectionId) {
               return { kind: 'conflict' as const, reason: 'artifact-version-conflict' as const };
+            }
+            if (collectionWrite.expectedCurrentRevision !== undefined) {
+              const current = projectArtifactCollections.get(collectionWrite.collectionId);
+              if (!current || current.revision !== collectionWrite.expectedCurrentRevision
+                || current.currentVersionId !== collectionWrite.expectedVersionId) {
+                return { kind: 'conflict' as const, reason: 'collection-revision-stale' as const };
+              }
             }
             collectionId = collectionWrite.collectionId;
             versionNumber = existingVersion.versionNumber;

@@ -271,6 +271,9 @@ export async function startServerNextDevServer(
         await realtimeRef?.emitMessageDelivered(delivery);
       }
     : undefined;
+  const onDispatchFailedBeforeExecution = async (result: unknown) => {
+    await realtimeRef?.emitDispatchMutation(result);
+  };
   const onChannelCollaborationMessageAppended = async (
     delivery: { teamId: string; channelId: string; messageId: string },
   ) => {
@@ -295,6 +298,7 @@ export async function startServerNextDevServer(
         onMessageTracerDelivered,
         onWorkspaceRevisionCommitted,
         onChannelCollaborationMessageAppended,
+        onDispatchFailedBeforeExecution,
       );
   const app = appWithCleanup.app;
   const taskClaimBroker = input.taskClaimBroker ?? appWithCleanup.taskClaimBroker;
@@ -2282,6 +2286,7 @@ function createDefaultApp(
   onChannelCollaborationMessageAppended?: (
     delivery: { teamId: string; channelId: string; messageId: string },
   ) => Promise<void> | void,
+  onDispatchFailedBeforeExecution?: (result: unknown) => Promise<void> | void,
 ): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
   // #1005：生产/dev host 始终用 dataDir 磁盘 staging，避免大文件塞 team SQLite BLOB。
@@ -2315,6 +2320,7 @@ function createDefaultApp(
       ...artifactPreviewBindings(artifactPreviewService, config.dataDir),
       ...(config.serverWorker ? { serverWorker: config.serverWorker } : {}),
       onChannelCollaborationMessageAppended,
+      onDispatchFailedBeforeExecution,
       messageIngestionMode,
       messageTracerEnabled,
       onMessageTracerDelivered,
@@ -2370,6 +2376,7 @@ function createDefaultApp(
     ...artifactPreviewBindings(artifactPreviewService, config.dataDir),
     ...(config.serverWorker ? { serverWorker: config.serverWorker } : {}),
     onChannelCollaborationMessageAppended,
+    onDispatchFailedBeforeExecution,
     messageIngestionMode,
     messageTracerEnabled,
     onMessageTracerDelivered,

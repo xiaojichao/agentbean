@@ -12,7 +12,7 @@
  */
 import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 import {
   applyGlobalMigrations,
@@ -73,6 +73,12 @@ async function seed(variant: (typeof variants)[number]): Promise<Seed> {
     repositories,
     clock: { now: () => ++now },
     ids: { nextId: () => `id-${++id}` },
+    artifactContentStore: {
+      async writeContent(input) {
+        return { storagePath: `artifacts/${input.artifactId}/${input.filename}`,
+          sizeBytes: input.content.length, sha256: sha256(input.content) };
+      },
+    },
   });
   const registered = await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
   if (!registered.ok) throw new Error(registered.error);
@@ -138,7 +144,7 @@ async function commitDelivery(
     files: files.map((file) => ({
       path: file.path,
       filename: file.path.split('/').pop()!,
-      mimeType: 'text/plain',
+      mimeType: file.path.endsWith('.md') ? 'text/markdown' : 'text/plain',
       expectedSizeBytes: file.body.length,
       expectedSha256: sha256(file.body),
     })),
@@ -326,6 +332,133 @@ for (const variant of variants) {
         [1, 'F1', 'docs/ep1.md'],
         [2, 'F2', 'docs/ep2.md'],
       ]);
+    });
+
+    test('原样重新上传复用已审核版本，不重置 current 或审核记录', async () => {
+      seedValue = await seed(variant);
+      const s = seedValue;
+      const provenance = { agentId: s.agentId, taskId: 'task-synthetic-1', taskAttempt: 1 };
+      const files = [{ path: 'report.md', body: Buffer.from('approved report') }];
+      await commitDelivery(s, 'original', files, provenance);
+      const first = (await s.repositories.outputPackages.getPackageByPublishId({ teamId: s.teamId, publishId: 'original' }))!;
+      const member = first.members[0]!;
+      await s.repositories.channelProjects.appendArtifactReview({
+        review: { id: 'approved', teamId: s.teamId, channelId: s.channelId, collectionId: member.collectionId,
+          versionId: member.artifactVersionId, authorityBasis: 'team-owner', basis: [], decision: 'approved', comment: '通过', reviewedBy: s.userId, createdAt: 500 },
+        mutation: { teamId: s.teamId, channelId: s.channelId, idempotencyKey: 'approved', requestFingerprint: 'approved',
+          kind: 'review', collectionId: member.collectionId, versionId: member.artifactVersionId, reviewId: 'approved', createdAt: 500 },
+      });
+      const before = await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId });
+      await commitDelivery(s, 'same-bytes', files, provenance);
+      const second = (await s.repositories.outputPackages.getPackageByPublishId({ teamId: s.teamId, publishId: 'same-bytes' }))!;
+      expect(second.members[0]!.artifactVersionId).toBe(member.artifactVersionId);
+      expect(await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId })).toEqual(before);
+      expect(await s.repositories.channelProjects.listArtifactReviews({ teamId: s.teamId, channelId: s.channelId }))
+        .toEqual([expect.objectContaining({ id: 'approved', versionId: member.artifactVersionId })]);
+    });
+
+    test('旧底稿不能覆盖人工修订，整包拒绝时其他文件也不移动 current', async () => {
+      seedValue = await seed(variant);
+      const s = seedValue;
+      const provenance = { agentId: s.agentId, taskId: 'task-synthetic-1', taskAttempt: 1 };
+      await commitDelivery(s, 'original', [
+        { path: 'a-cover.md', body: Buffer.from('old cover') },
+        { path: 'report.md', body: Buffer.from('old draft') },
+      ], provenance);
+      const first = (await s.repositories.outputPackages.getPackageByPublishId({ teamId: s.teamId, publishId: 'original' }))!;
+      const member = first.members.find((m) => m.filename === 'report.md')!;
+      const saved = await s.app.saveArtifactVersionRevision({
+        userId: s.userId, teamId: s.teamId, channelId: s.channelId, collectionId: member.collectionId,
+        baseVersionId: member.artifactVersionId, content: 'human revision', expectedCollectionRevision: 1,
+        revisionBasis: { sourceVersionId: member.artifactVersionId }, idempotencyKey: 'human-revision',
+      });
+      expect(saved.ok).toBe(true);
+      const before = await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId });
+      const commit = await commitDelivery(s, 'stale', [
+        { path: 'a-cover.md', body: Buffer.from('new cover') },
+        { path: 'report.md', body: Buffer.from('old draft') },
+      ], provenance);
+      expect(await s.repositories.outputPackages.getPackageByPublishId({ teamId: s.teamId, publishId: 'stale' })).toBeNull();
+      expect(await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId })).toEqual(before);
+      const retried = await attemptOutputPackageFormation({ repositories: s.repositories, clock: { now: () => 999 }, ids: { nextId: () => 'unused' } }, {
+        teamId: s.teamId, channelId: s.channelId, publishId: 'stale', workspaceRevisionId: commit.workspace.currentRevisionId,
+      });
+      expect(retried).toEqual({ kind: 'conflict', reasonCode: 'output-package-source-version-stale' });
+
+      // 显式冻结人工修订为输入后，仍允许 Agent 正常提交下一版。
+      if (!saved.ok) throw new Error(saved.error);
+      const version = (await s.repositories.channelProjects.listArtifactVersions({ teamId: s.teamId, channelId: s.channelId }))
+        .find((v) => v.id === saved.revision.versionId)!;
+      const artifact = (await s.repositories.artifacts.getForTeam({ teamId: s.teamId, artifactId: version.artifactId }))!;
+      await s.repositories.messages.append({ id: 'revision-origin', teamId: s.teamId, channelId: s.channelId,
+        senderKind: 'human', senderId: s.userId, body: '基于当前人工修订继续', createdAt: 600 });
+      await s.repositories.dispatches.create({ id: 'revision-dispatch', teamId: s.teamId, channelId: s.channelId,
+        messageId: 'revision-origin', agentId: s.agentId, status: 'running', prompt: '继续', requestId: 'revision-dispatch', createdAt: 600, updatedAt: 600 });
+      await s.repositories.deviceWorkspaceSnapshots.create({
+        id: 'dispatch:revision-dispatch:workspace-snapshot', teamId: s.teamId, channelId: s.channelId,
+        workspaceRevisionId: commit.workspace.currentRevisionId,
+        inputSet: { id: 'revision-input', contractVersion: 1,
+          selections: [{ kind: 'version', collectionId: member.collectionId, versionId: version.id }],
+          items: [{ collectionId: member.collectionId, artifactVersionId: version.id, artifactId: artifact.id,
+            path: 'report.md', filename: 'report.md', mimeType: artifact.mimeType, sizeBytes: artifact.sizeBytes, sha256: artifact.sha256! }] },
+        provenance: { createdByDeviceId: s.device.id, agentId: s.agentId, taskId: provenance.taskId,
+          taskAttempt: 1, workspaceRunId: 'revision-dispatch', createdAt: 600 }, immutable: true,
+      });
+      await commitDelivery(s, 'valid-revision', [{ path: 'report.md', body: Buffer.from('based on human revision') }], {
+        ...provenance, workspaceRunId: 'revision-dispatch',
+      });
+      expect(await s.repositories.outputPackages.getPackageByPublishId({ teamId: s.teamId, publishId: 'valid-revision' })).not.toBeNull();
+      const afterValid = await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId });
+      await commitDelivery(s, 'late-derived', [{ path: 'report.md', body: Buffer.from('novel content from old draft') }], provenance);
+      expect(await s.repositories.outputPackages.getPackageByPublishId({ teamId: s.teamId, publishId: 'late-derived' })).toBeNull();
+      expect(await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId })).toEqual(afterValid);
+    });
+
+    test('历史版本重传不回滚较新的 Agent 版本', async () => {
+      seedValue = await seed(variant);
+      const s = seedValue;
+      const provenance = { agentId: s.agentId, taskId: 'task-synthetic-1', taskAttempt: 1 };
+      for (const [publishId, body] of [['v1', 'first'], ['v2', 'second'], ['stale-v1', 'first']]) {
+        await commitDelivery(s, publishId!, [{ path: 'report.md', body: Buffer.from(body!) }], provenance);
+      }
+      expect(await s.repositories.outputPackages.getPackageByPublishId({ teamId: s.teamId, publishId: 'stale-v1' })).toBeNull();
+      const collections = await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId });
+      expect(collections[0]!.versionCount).toBe(2);
+    });
+
+    test('按内容复用的 current fence 冲突时，整包不留下部分集合', async () => {
+      seedValue = await seed(variant);
+      const s = seedValue;
+      const provenance = { agentId: s.agentId, taskId: 'task-synthetic-1', taskAttempt: 1 };
+      await commitDelivery(s, 'original', [{ path: 'z-report.md', body: Buffer.from('same') }], provenance);
+      const before = await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId });
+      const original = s.repositories.outputPackages.recordPackageFormation.bind(s.repositories.outputPackages);
+      const spy = vi.spyOn(s.repositories.outputPackages, 'recordPackageFormation').mockImplementation((input) => original({
+        ...input, members: input.members.map((member) => ({ ...member,
+          collection: member.collection.mode === 'reuse' ? { ...member.collection, expectedCurrentRevision: -1 } : member.collection,
+        })),
+      }));
+      try {
+        await commitDelivery(s, 'stale-fence', [
+          { path: 'a-new.md', body: Buffer.from('new') }, { path: 'z-report.md', body: Buffer.from('same') },
+        ], provenance);
+      } finally { spy.mockRestore(); }
+      expect(await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId })).toEqual(before);
+      expect(await s.repositories.outputPackages.getPackageByPublishId({ teamId: s.teamId, publishId: 'stale-fence' })).toBeNull();
+    });
+
+    test('同名集合在预读后出现时必须重读，不能绕过版本保护直接追加', async () => {
+      seedValue = await seed(variant);
+      const s = seedValue;
+      const provenance = { agentId: s.agentId, taskId: 'task-synthetic-1', taskAttempt: 1 };
+      await commitDelivery(s, 'original', [{ path: 'report.md', body: Buffer.from('first') }], provenance);
+      const before = await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId });
+      const spy = vi.spyOn(s.repositories.channelProjects, 'listArtifactCollections').mockResolvedValue([]);
+      try {
+        await commitDelivery(s, 'racing', [{ path: 'report.md', body: Buffer.from('other') }], provenance);
+      } finally { spy.mockRestore(); }
+      expect(await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId })).toEqual(before);
+      expect(await s.repositories.outputPackages.getPackageByPublishId({ teamId: s.teamId, publishId: 'racing' })).toBeNull();
     });
 
     test('AC4/AC9:重复 commit 与同 key replay 收敛同一 package,不重复创建', async () => {
