@@ -237,8 +237,12 @@ async function seedBatchPackage(
 }> {
   const suffix = opts?.suffix ?? 'batch';
   const taskId = opts?.taskId ?? `task-${seedValue.channelId}-batch`;
+  const collections = await repositories.channelProjects.listArtifactCollections({
+    teamId: seedValue.teamId, channelId: seedValue.channelId,
+  });
   const targets = [1, 2].map((index) => ({
-    collectionId: `col-${seedValue.channelId}-${suffix}-${index}`,
+    collectionId: collections.find((collection) => collection.name === `out/report-${index}.md`)?.id
+      ?? `col-${seedValue.channelId}-${suffix}-${index}`,
     artifactVersionId: `ver-${seedValue.channelId}-${suffix}-${index}`,
   }));
   for (const [index, target] of targets.entries()) {
@@ -281,7 +285,12 @@ async function seedBatchPackage(
       sourcePath: `out/report-${index + 1}.md`,
       filename: `report-${index + 1}.md`,
       sizeBytes: 12,
-      collection: { mode: 'create' as const, collectionId: target.collectionId, name: `out/report-${index + 1}.md`, kind: 'deliverable' as const },
+      collection: (() => {
+        const existing = collections.find((collection) => collection.id === target.collectionId);
+        return existing
+          ? { mode: 'append' as const, collectionId: existing.id, expectedRevision: existing.revision, expectedVersionCount: existing.versionCount }
+          : { mode: 'create' as const, collectionId: target.collectionId, name: `out/report-${index + 1}.md`, kind: 'deliverable' as const };
+      })(),
       version: {
         id: target.artifactVersionId,
         artifactId: `art-${seedValue.channelId}-${suffix}-${index + 1}`,
