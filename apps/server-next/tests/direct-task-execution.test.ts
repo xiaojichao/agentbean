@@ -119,7 +119,7 @@ describe.each([false, true])('direct Task evidence (sqlite=%s)', (sqlite) => {
       await h.repositories.users.create({ id: 'user', username: 'user', passwordHash: 'test', role: 'user', createdAt: 1, updatedAt: 1 });
       await h.repositories.teams.create({ id: 'team', ownerId: 'user', name: 'Team', path: 'testteam', visibility: 'private', createdAt: 1 });
       await h.repositories.agents.upsert({ id: 'agent', primaryTeamId: 'team', visibleTeamIds: ['team'],
-        name: 'agent', source: 'discovered', category: 'agentos-hosted', adapterKind: 'hermes', status: 'online', lastSeenAt: 1 });
+        name: 'agent', source: 'discovered', category: 'agentos-hosted', adapterKind: 'hermes', status: 'busy', lastSeenAt: 1 });
       const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: h.origin.id, createdAt: 10 });
       await h.repositories.dispatches.create({ ...h.dispatch, id: 'queued-followup', messageId: followup.id,
         requestId: 'queued-followup', status: 'queued', createdAt: 10, updatedAt: 10 });
@@ -134,6 +134,7 @@ describe.each([false, true])('direct Task evidence (sqlite=%s)', (sqlite) => {
       expect(await app.acceptDispatch({ dispatchId: 'queued-followup', agentId: 'agent', quietWindowMs: 0 }))
         .toMatchObject({ ok: false, error: 'CONFLICT' });
       expect(await h.repositories.dispatches.getById('queued-followup')).toMatchObject({ status: 'failed', error: 'DIRECT_TASK_EXECUTION_STALE' });
+      expect((await h.repositories.agents.getById('agent'))?.status).toBe('online');
     } finally { h.close(); }
   });
 
@@ -154,7 +155,7 @@ describe.each([false, true])('direct Task evidence (sqlite=%s)', (sqlite) => {
       await h.repositories.tasks.create({ ...h.task, id: 'other', title: '配置切换' });
       await h.repositories.messages.append({ ...h.origin, id: 'other-origin', threadId: 'origin', createdAt: 5, meta: { taskId: 'other' } });
       const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: 'origin', createdAt: 10, meta: {} });
-      expect(await resolveDirectDispatchTask(h.repositories, { ...h.dispatch, messageId: followup.id }, followup)).toBeNull();
+      await expect(resolveDirectDispatchTask(h.repositories, { ...h.dispatch, messageId: followup.id }, followup)).rejects.toThrow('DIRECT_TASK_FOLLOWUP_NEEDS_CONFIRMATION');
       expect((await h.repositories.messages.getById(followup.id))?.meta?.taskId).toBeUndefined();
     } finally { h.close(); }
   });
@@ -164,7 +165,7 @@ describe.each([false, true])('direct Task evidence (sqlite=%s)', (sqlite) => {
     try {
       await h.repositories.tasks.update({ taskId: h.task.id, changes: { status } });
       const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: 'origin', createdAt: 10, meta: {} });
-      expect(await resolveDirectDispatchTask(h.repositories, { ...h.dispatch, messageId: followup.id }, followup)).toBeNull();
+      await expect(resolveDirectDispatchTask(h.repositories, { ...h.dispatch, messageId: followup.id }, followup)).rejects.toThrow('DIRECT_TASK_EXECUTION_STALE');
     } finally { h.close(); }
   });
 
@@ -176,7 +177,8 @@ describe.each([false, true])('direct Task evidence (sqlite=%s)', (sqlite) => {
         ...(boundary === 'team' ? { teamId: 'other' } : {}),
         ...(boundary === 'channel' ? { channelId: 'other' } : {}),
         ...(boundary === 'agent' ? { agentId: 'other' } : {}) };
-      expect(await resolveDirectDispatchTask(h.repositories, dispatch, followup)).toBeNull();
+      if (boundary === 'agent') await expect(resolveDirectDispatchTask(h.repositories, dispatch, followup)).rejects.toThrow('DIRECT_TASK_EXECUTION_STALE');
+      else expect(await resolveDirectDispatchTask(h.repositories, dispatch, followup)).toBeNull();
     } finally { h.close(); }
   });
 

@@ -30,7 +30,7 @@ export async function resolveDirectDispatchTask(
     const history = await transaction.messages.listThreadBefore({
       channelId: dispatch.channelId, threadId, beforeMessageId: origin.id, limit: 200,
     });
-    if (history.length >= 200) return null;
+    if (history.length >= 200) throw new Error('DIRECT_TASK_FOLLOWUP_NEEDS_CONFIRMATION');
     const taskIds = new Set<string>();
     for (const message of [root, ...history]) {
       if (message.teamId !== dispatch.teamId || message.channelId !== dispatch.channelId) return null;
@@ -39,14 +39,15 @@ export async function resolveDirectDispatchTask(
       if (coordination && typeof coordination === 'object' && 'taskId' in coordination
         && typeof coordination.taskId === 'string') taskIds.add(coordination.taskId);
     }
-    if (taskIds.size !== 1) return null;
+    if (taskIds.size === 0) return null;
+    if (taskIds.size > 1) throw new Error('DIRECT_TASK_FOLLOWUP_NEEDS_CONFIRMATION');
     const taskId = [...taskIds][0]!;
     const task = await transaction.tasks.getById(taskId);
     if (!task || task.teamId !== dispatch.teamId || task.channelId !== dispatch.channelId
       || ['done', 'closed', 'cancelled'].includes(task.status)
       || (task.assigneeId && task.assigneeId !== dispatch.agentId)
       || await transaction.coordination.coordinations.getByTaskId(taskId)
-      || await transaction.management.runs.getByRootTaskId(taskId)) return null;
+      || await transaction.management.runs.getByRootTaskId(taskId)) throw new Error('DIRECT_TASK_EXECUTION_STALE');
     // 冻结到发起本次 Dispatch 的消息，后续查询/重连不再根据变化中的线程重新选 Task。
     const linked = await transaction.messages.setTaskIdIfAbsent({ messageId: origin.id, taskId });
     return linked?.taskId === taskId ? task : null;

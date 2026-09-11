@@ -3294,6 +3294,27 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     }
   }
 
+  async function failDispatchBeforeExecution(dispatch: DispatchRecord, error: string, alreadyFailed = false): Promise<void> {
+    const now = clock.now();
+    const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatch.id);
+    if (!alreadyFailed) {
+      if (managedAttempt) await invocationGateway.completeAttempt({ dispatchId: dispatch.id, status: 'failed', error });
+      else await repositories.dispatches.markFailed({ dispatchId: dispatch.id, error, completedAt: now });
+    }
+    const agent = await repositories.agents.getById(dispatch.agentId);
+    if (agent && agent.deletedAt === undefined && agent.status !== 'offline') {
+      await markAgentOnlineIfIdle(repositories, { agentId: dispatch.agentId, teamId: dispatch.teamId, lastSeenAt: now });
+    }
+    if (managedAttempt) {
+      const status = await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
+        dispatchId: dispatch.id, status: 'failed', actorId: 'server', errorCode: error,
+      });
+      if (status) await Promise.resolve(input.onChannelCollaborationMessageAppended?.({
+        teamId: status.teamId, channelId: status.channelId, messageId: status.id,
+      })).catch(() => undefined);
+    }
+  }
+
   return {
     async runCoordinationCycle(input?: { now?: number; limit?: number }): Promise<CoordinationCycleSummary> {
       // 与现有 durable coordinator 共用 host tick，使 PI/模型暂时不可用留下的 route
@@ -6437,8 +6458,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (!message.startsWith('DEVICE_WORKSPACE_SNAPSHOT_') && message !== 'DIRECT_TASK_EXECUTION_STALE') throw error;
-        await repositories.dispatches.markFailed({ dispatchId: dispatch.id, error: message, completedAt: clock.now() });
+        if (!message.startsWith('DEVICE_WORKSPACE_SNAPSHOT_') && !message.startsWith('DIRECT_TASK_')) throw error;
+        await failDispatchBeforeExecution(dispatch, message);
         return makeFailure('CONFLICT', message);
       }
     },
@@ -6477,12 +6498,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         const message = error instanceof Error ? error.message : String(error);
         recordProjectInputSetRuntimeFailure(message);
         if (!message.startsWith('PROJECT_DOCUMENT_INPUT_SET_')
-          && !message.startsWith('DEVICE_WORKSPACE_SNAPSHOT_') && message !== 'DIRECT_TASK_EXECUTION_STALE') throw error;
-        await repositories.dispatches.markFailed({
-          dispatchId: dispatch.id,
-          error: message,
-          completedAt: now,
-        });
+          && !message.startsWith('DEVICE_WORKSPACE_SNAPSHOT_') && !message.startsWith('DIRECT_TASK_')) throw error;
+        await failDispatchBeforeExecution(dispatch, message);
         return makeFailure('CONFLICT', message);
       }
       const accepted = await repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
@@ -6493,7 +6510,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return transaction.dispatches.markAccepted({ dispatchId: dispatch.id, agentId: agent.id,
           expectedUpdatedAt: dispatch.updatedAt, prompt: request.prompt, acceptedAt: now });
       });
-      if (accepted === 'stale') return makeFailure('CONFLICT', 'DIRECT_TASK_EXECUTION_STALE');
+      if (accepted === 'stale') {
+        await failDispatchBeforeExecution(dispatch, 'DIRECT_TASK_EXECUTION_STALE', true);
+        return makeFailure('CONFLICT', 'DIRECT_TASK_EXECUTION_STALE');
+      }
       if (!accepted) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
