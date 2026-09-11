@@ -12,6 +12,7 @@ import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { useLocalFirstArtifactUrls } from '@/lib/use-local-first-artifact-urls';
+import { useMessageLinkContext } from '@/lib/use-message-link-context';
 import { taskRootIdFromMessageMeta } from '@/lib/task-status-event';
 import {
   projectChatViewMessages,
@@ -483,6 +484,7 @@ export default function ChatPage() {
     channelId: activeChannel,
     teamId: currentTeamId,
     enabled: conn === 'open' && tab === 'chat',
+    suppressAutoScroll: Boolean(activeChannel && parseScopedMessageId(messageParam, activeChannel)),
     messages,
     pagination: activeChannel ? channelHistoryByChannel[activeChannel] : undefined,
     listRef: messageListRef,
@@ -491,6 +493,20 @@ export default function ChatPage() {
     prepend: prependChannelHistory,
   });
   const { showBackToBottom } = historyPagination;
+  const [returnToBottomChannelId, setReturnToBottomChannelId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!returnToBottomChannelId) return;
+    if (returnToBottomChannelId !== activeChannel) {
+      setReturnToBottomChannelId(null);
+      return;
+    }
+    // 先让 URL 定位效果清理延迟滚动，并完成当前历史分页的锚点恢复。
+    if (messageParam !== null || historyPagination.loading) return;
+    // 从顶部平滑向下滚动会再次触发顶部翻页；显式返回直接落到底部。
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    setReturnToBottomChannelId(null);
+  }, [returnToBottomChannelId, activeChannel, messageParam, historyPagination.loading]);
 
   useEffect(() => {
     dmsRef.current = dms;
@@ -1892,9 +1908,19 @@ export default function ChatPage() {
     ? channelTaskWorkspace?.entries.find((entry) => entry.task.id === taskDetailTask.id)
     : undefined;
 
+  const linkedMessageId = activeChannel ? parseScopedMessageId(messageParam, activeChannel) : null;
+  useMessageLinkContext(
+    activeChannel,
+    linkedMessageId,
+    conn === 'open' && historySettledChannelId === activeChannel,
+    messages.some((message) => message.id === linkedMessageId),
+    upsertMessages,
+    markContextLoadedMessage,
+  );
+
   useEffect(() => {
     if (!activeChannel) return;
-    const targetMessageId = parseScopedMessageId(messageParam, activeChannel);
+    const targetMessageId = linkedMessageId;
     if (!targetMessageId) {
       if (messageParam === null) setSelectedMessageId(null);
       return;
@@ -1927,7 +1953,7 @@ export default function ChatPage() {
       document.getElementById(`message-${targetMessageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [activeChannel, messageParam, threadParam, messages, router, searchParams]);
+  }, [activeChannel, linkedMessageId, messageParam, threadParam, messages, router, searchParams]);
   const toggleSave = (msgId: string) => {
     const isSaved = savedIds.has(msgId);
     // Optimistic update
@@ -2308,6 +2334,15 @@ export default function ChatPage() {
   };
 
   const scrollToBottom = () => {
+    if (messageParam !== null) {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('message');
+      setSelectedMessageId(null);
+      setReturnToBottomChannelId(activeChannel);
+      const query = params.toString();
+      router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
+      return;
+    }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 

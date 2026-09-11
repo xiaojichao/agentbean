@@ -9,6 +9,7 @@ interface Options {
   channelId: string | null;
   teamId: string;
   enabled: boolean;
+  suppressAutoScroll?: boolean;
   messages: ChatMessage[];
   pagination?: ChannelHistoryPaginationDto;
   listRef: RefObject<HTMLDivElement | null>;
@@ -25,7 +26,7 @@ interface ScrollAnchor {
 }
 
 export function useChannelHistoryPagination(options: Options) {
-  const { channelId, teamId, enabled, messages, pagination, listRef, endRef, loadPage, prepend } = options;
+  const { channelId, teamId, enabled, suppressAutoScroll = false, messages, pagination, listRef, endRef, loadPage, prepend } = options;
   const key = `${teamId}:${channelId ?? ''}`;
   const generation = useRef(0);
   const busy = useRef(false);
@@ -57,13 +58,13 @@ export function useChannelHistoryPagination(options: Options) {
       } else {
         list.scrollTop = anchor.scrollTop + list.scrollHeight - anchor.height;
       }
-    } else if (!previous.current || previous.current.key !== key || previous.current.count === 0 || nearBottom.current) {
+    } else if (!suppressAutoScroll && (!previous.current || previous.current.key !== key || previous.current.count === 0 || nearBottom.current)) {
       endRef.current?.scrollIntoView({ behavior: previous.current?.count ? 'smooth' : 'auto' });
     }
     previous.current = { key, count: messages.length };
     nearBottom.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 160;
     setShowBackToBottom(!nearBottom.current);
-  }, [key, enabled, messages, listRef, endRef]);
+  }, [key, enabled, suppressAutoScroll, messages, listRef, endRef]);
 
   const loadOlder = useCallback(async () => {
     const cursor = pagination?.nextBeforeMessageId;
