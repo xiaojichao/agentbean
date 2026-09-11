@@ -1383,6 +1383,25 @@ describe('channel coordinator: task_followup evidence binding (#709)', () => {
     expect(bindingCoordMeta(sys)?.taskId).toBe('existing-task');
   });
 
+  test('截断线程窗口不能把唯一可见 Task 当作强绑定', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'followup', risk: 'low', objective: '补充进度' }))]),
+    });
+    await seedFollowupJob(repos, { priorTaskIdInThread: 'older-task' });
+    await seedChannelTask(repos, 'older-task');
+    await seedChannelTask(repos, 'recent-task');
+    for (let index = 0; index < 55; index++) {
+      await repos.messages.append({ id: `filler-${index}`, teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
+        senderKind: 'human', senderId: 'user-1', body: '讨论', createdAt: 801 + index,
+        ...(index === 54 ? { meta: { taskId: 'recent-task' } } : {}) });
+    }
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.gateStatus).toBe('blocked');
+    expect(decision?.linkedTaskId).toBeNull();
+    expect((await repos.messages.getById('message-1'))?.meta?.taskId).toBeUndefined();
+  });
+
   test('suggested: 无线程 taskId + 唯一活跃候选 → 关联 + confirm_suggested (AC2)', async () => {
     const { repos, coordinator } = setup({
       fetch: makeFetch([okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'followup', risk: 'low', objective: '补充一个实现细节' }))]),

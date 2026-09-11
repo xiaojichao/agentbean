@@ -15433,6 +15433,14 @@ async function buildDispatchWorkspaceSnapshot(
     directTaskAttempt?: number;
   },
 ): Promise<DeviceWorkspaceSnapshotDto | undefined> {
+  // V1 and V2 invocations both carry the frozen task context.  It must be
+  // authoritative for provenance; schema V2 is the InputSet gate, not the
+  // boundary for task identity.
+  const taskContext = input.managementInvocation?.intent.taskContext;
+  const taskId: string = taskContext?.taskId
+    ?? input.directTaskId
+    ?? input.dispatch.id;
+  const taskAttempt = taskContext?.taskAttempt ?? input.directTaskAttempt ?? 1;
   const references = input.projectReferenceSets.flatMap((set) => set.selections.flatMap((selection) => selection.items))
     .filter((item) => item.kind === 'artifact_version'
       && typeof item.collectionId === 'string'
@@ -15453,7 +15461,13 @@ async function buildDispatchWorkspaceSnapshot(
     channelId: input.dispatch.channelId,
     snapshotId,
   });
-  if (existing) return existing;
+  if (existing) {
+    if (existing.provenance.taskId !== taskId || existing.provenance.taskAttempt !== taskAttempt
+      || existing.provenance.agentId !== input.agent.id) {
+      throw new Error('DEVICE_WORKSPACE_SNAPSHOT_UNAVAILABLE');
+    }
+    return existing;
+  }
 
   const versions = await repositories.channelProjects.listArtifactVersions({
     teamId: input.dispatch.teamId,
@@ -15490,14 +15504,6 @@ async function buildDispatchWorkspaceSnapshot(
     });
   }
 
-  // V1 and V2 invocations both carry the frozen task context.  It must be
-  // authoritative for provenance; schema V2 is the InputSet gate, not the
-  // boundary for task identity.
-  const taskContext = input.managementInvocation?.intent.taskContext;
-  const taskId: string = taskContext?.taskId
-    ?? input.directTaskId
-    ?? input.dispatch.id;
-  const taskAttempt = taskContext?.taskAttempt ?? input.directTaskAttempt ?? 1;
   // A management invocation may be retried.  The dispatch id is allocated per
   // attempt and is already a safe path segment, so use it as the immutable run
   // identity instead of reusing the invocation id (or the colon-delimited

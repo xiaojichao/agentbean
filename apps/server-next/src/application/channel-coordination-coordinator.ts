@@ -490,7 +490,10 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
           threadId: ctx.threadId,
           limit: 50,
         });
-        const threadTaskIds = collectThreadTaskIds(threadMessages);
+        const rootMessage = await transaction.messages.getById(ctx.threadId);
+        const threadTaskIds = collectThreadTaskIds(rootMessage
+          && rootMessage.teamId === job.teamId && rootMessage.channelId === job.channelId
+          ? [rootMessage, ...threadMessages] : threadMessages);
         const channelActiveTasks = (await transaction.tasks.list({
           teamId: job.teamId,
           channelIds: [job.channelId],
@@ -498,7 +501,10 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         }))
           .filter((task) => task.status !== 'done' && task.status !== 'closed')
           .map((task) => ({ taskId: task.id, objective: task.title }));
-        const binding = resolveTaskFollowupBinding({
+        // 截断窗口不能证明唯一性，即便窗口内只有一个 Task 也必须明确目标。
+        const binding = threadMessages.length >= 50
+          ? { kind: 'needs_confirmation' as const, candidates: threadTaskIds }
+          : resolveTaskFollowupBinding({
           threadTaskIds,
           channelActiveTasks,
           followupObjective: parsed.objective ?? '',

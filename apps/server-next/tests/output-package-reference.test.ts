@@ -493,6 +493,14 @@ for (const variant of variants) {
           },
         });
 
+      // 当前裁决失去 Task 时，既有快照不得继续携带旧 Task 下发。
+      const linkedOrigin = await seedValue.repositories.messages.getById(sent.message.id);
+      await seedValue.repositories.messages.updateMeta({ messageId: sent.message.id,
+        meta: { ...linkedOrigin?.meta, taskId: 'missing-task' } });
+      await expect(seedValue.app.getDispatchRequest({ dispatchId: 'dispatch-direct-snapshot' }))
+        .rejects.toThrow('DEVICE_WORKSPACE_SNAPSHOT_UNAVAILABLE');
+      await seedValue.repositories.messages.updateMeta({ messageId: sent.message.id, meta: linkedOrigin!.meta! });
+
       // 后续同路径 append v2(current 指针漂移),历史消息引用不变。
       await commitDelivery(seedValue, 'pub-2', [{ path: 'docs/ep1.md', body: Buffer.from('v2') }], {
         agentId: seedValue.agentId, taskId: 'task-1', taskAttempt: 2,
