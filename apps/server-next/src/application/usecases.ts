@@ -1,3 +1,6 @@
+import type { ChannelHistoryPageDto } from '../../../../packages/contracts/src/channel-history.js';
+import { createOrReuseMessageTask } from './message-task-link.js';
+import { describeDirectTaskExecution, markDirectTaskInReview } from './direct-task-execution.js';
 import { createCompletionNotificationService } from './completion-notification-service.js';
 import { createPushNotificationService } from './push-notification-service.js';
 import type { WebPushSender } from '../infra/web-push.js';
@@ -547,7 +550,7 @@ export interface ServerNextUseCases {
   deleteChannel(input: DeleteChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   startDirectMessage(input: StartDirectMessageInput): Promise<Ack<{ dm: DmChannelDto }>>;
   listDirectMessages(input: ListDirectMessagesInput): Promise<Ack<{ dms: DmChannelDto[] }>>;
-  snapshotDirectMessage(input: SnapshotDirectMessageInput): Promise<Ack<{ dm: DmChannelDto; messages: MessageDto[] }>>;
+  snapshotDirectMessage(input: SnapshotDirectMessageInput): Promise<Ack<ChannelHistoryPageDto & { dm: DmChannelDto }>>;
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
   /**
@@ -645,7 +648,7 @@ export interface ServerNextUseCases {
   acceptDispatch(input: AcceptDispatchInput): Promise<Ack<AcceptDispatchResult>>;
   cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto; task?: TaskDto }>>;
   cancelChannelDispatches(input: CancelChannelDispatchesInput): Promise<Ack<{ dispatches: DispatchDto[]; tasks?: TaskDto[] }>>;
-  listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<ChannelHistoryPageDto>>;
   listChannelFiles(input: ListChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
   searchChannelFiles(input: SearchChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
   createProjectChannelWorkspace(input: CreateProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
@@ -1366,6 +1369,7 @@ export type AcceptDispatchResult =
 export interface ListChannelMessagesInput {
   channelId: string;
   limit: number;
+  beforeMessageId?: string;
 }
 
 export interface ListChannelFilesInput {
@@ -1808,6 +1812,7 @@ export interface SnapshotDirectMessageInput {
   teamId: string;
   channelId: string;
   limit?: number;
+  beforeMessageId?: string;
 }
 
 export interface ReceiveDispatchArtifactInput {
@@ -5683,10 +5688,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent || !agent.visibleTeamIds.includes(dmInput.teamId)) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      const messages = await repositories.messages.listVisibleByChannel(channel.id, normalizeLimit(dmInput.limit));
+      if (dmInput.beforeMessageId) {
+        const cursor = await repositories.messages.getById(dmInput.beforeMessageId);
+        if (!cursor || cursor.channelId !== channel.id) return makeFailure('NOT_FOUND', 'History cursor not found');
+      }
+      const page = await repositories.messages.listVisiblePageByChannel(channel.id, normalizeLimit(dmInput.limit), dmInput.beforeMessageId);
       return makeSuccess({
+        ...page,
         dm: toDmChannelDto(channel, agent),
-        messages: await enrichMessagesWithArtifacts(repositories, messages),
+        messages: await enrichMessagesWithArtifacts(repositories, page.messages),
       });
     },
 
@@ -6315,7 +6325,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const coordinatedManagedRoot = management.kind === 'managed' && management.managementPhase >= 2;
       let task: TaskRecord | null = null;
       if (shouldCreateTask && taskId) {
-        task = await repositories.tasks.create({
+        task = await repositories.channelCoordinationUnitOfWork.run((transaction) => createOrReuseMessageTask(transaction, outcome.message.id, {
           id: taskId,
           teamId: messageInput.teamId,
           title: messageInput.body.trim() || '附件',
@@ -6328,8 +6338,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           sortOrder: now,
           createdAt: now,
           updatedAt: now,
-        });
-        await repositories.messages.setTaskIdIfAbsent({ messageId: outcome.message.id, taskId: task.id });
+        }));
+        if (management.kind === 'managed' && task.id !== taskId) {
+          return makeFailure('CONFLICT', 'Message is already linked to another task');
+        }
       }
       if (task && management.kind === 'managed' && management.managementPhase >= 2) {
         await taskCoordinationKernel.bootstrapRootCoordination({
@@ -6492,9 +6504,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async listChannelMessages(listInput) {
-      const messages = await repositories.messages.listVisibleByChannel(listInput.channelId, listInput.limit);
+      if (listInput.beforeMessageId) {
+        const cursor = await repositories.messages.getById(listInput.beforeMessageId);
+        if (!cursor || cursor.channelId !== listInput.channelId) return makeFailure('NOT_FOUND', 'History cursor not found');
+      }
+      const page = await repositories.messages.listVisiblePageByChannel(listInput.channelId, listInput.limit, listInput.beforeMessageId);
       return makeSuccess({
-        messages: await enrichMessagesWithArtifacts(repositories, messages),
+        ...page,
+        messages: await enrichMessagesWithArtifacts(repositories, page.messages),
       });
     },
 
@@ -12119,7 +12136,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               let recoveredTask: TaskDto | null = null;
               if (!replayAttempt && dispatch.status === 'succeeded') {
                 const recoveredOrigin = await repositories.messages.getById(dispatch.messageId);
-                recoveredTask = await markLinkedTaskInReview(repositories, recoveredOrigin, clock.now());
+                recoveredTask = await markDirectTaskInReview(repositories, recoveredOrigin, dispatch, clock.now());
                 if (replayDeliveryMessage) {
                   const currentReply = await repositories.messages.getById(replayDeliveryMessage.id);
                   await repositories.messages.updateMeta({
@@ -12781,7 +12798,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       if (resultSucceeded && !managedAttempt) {
-        completedTask = await markLinkedTaskInReview(repositories, originMessage, now);
+        completedTask = await markDirectTaskInReview(repositories, originMessage, completed.dispatch, now);
       }
       if (resultSucceeded && !managedAttempt && authoritativeMessage) {
         await repositories.messages.updateMeta({
@@ -16586,28 +16603,6 @@ async function restoreAgentBusyIfDispatchArrived(
   });
 }
 
-async function markLinkedTaskInReview(
-  repositories: ServerNextRepositories,
-  message: MessageRecord | null,
-  updatedAt: number,
-): Promise<TaskDto | null> {
-  const taskId = typeof message?.meta?.taskId === 'string' ? message.meta.taskId : null;
-  if (!taskId) {
-    return null;
-  }
-  const task = await repositories.tasks.getById(taskId);
-  if (!task || task.status === 'in_review' || task.status === 'done' || task.status === 'closed') {
-    return null;
-  }
-  return await repositories.tasks.update({
-    taskId,
-    changes: {
-      status: 'in_review',
-      updatedAt,
-    },
-  });
-}
-
 async function markLinkedTaskTodoIfInProgress(
   repositories: ServerNextRepositories,
   message: MessageRecord | null,
@@ -18470,10 +18465,9 @@ async function buildTaskDeliveryOverview(
   timeline.sort((a, b) => a.at - b.at);
 
   // 当前责任焦点(AC3/AC10:只由 Offer/claim/execution/delivery/review 等 Server 事实投影)。
-  const focus = await deriveTaskResponsibilityFocus(
-    repositories,
-    { task, coordination, offers, claim },
-  );
+  const focus = !coordination && !managementRun
+    ? await describeDirectTaskExecution(repositories, { task, channelId, packageCount: packages.length, pendingCount: pendingDeliveries.length })
+    : await deriveTaskResponsibilityFocus(repositories, { task, coordination, offers, claim });
 
   // Task 级可发现性动作(AC9:Server 计算,web 只渲染;command 提交仍完整复验)。
   const acceptanceRun = task.status === 'in_review' ? managementRun : null;

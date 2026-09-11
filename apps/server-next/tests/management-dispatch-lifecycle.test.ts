@@ -712,13 +712,13 @@ async function createHarness(
     ? (await kernel.createOrResumeRun({ teamId: 'team-1', channelId: 'channel-1', rootTaskId: 'task-1', rootMessageId: 'message-1', requestKey: 'request-1', requestHash: 'hash-1', placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true }, budget: { maxSubtasks: 4, maxDepth: 2, maxExternalInvocations: 4 } })).run
     : undefined;
   if (run) await kernel.acquireLease({ managementRunId: run.id, workerId: 'worker-1', host: { deviceId: 'device-1', profileId: 'profile-1' }, leaseToken: 'token', ttlMs: 100 });
-  await repositories.taskCoordination.coordinations.create({
+  if (run) await repositories.taskCoordination.coordinations.create({
     schemaVersion: 1, taskId: 'task-1', teamId: 'team-1',
     managementRunId: run?.id ?? 'unused', rootTaskId: 'task-1', nodeKind: 'root',
     reviewPolicy: 'human', claimPolicy: 'open', requiredCapabilities: [],
     taskRevision: 1, attempt: 1, maxAttempts: 2, createdAt: 1, updatedAt: 1,
   });
-  await repositories.taskCoordination.claimLeases.create({
+  if (run) await repositories.taskCoordination.claimLeases.create({
     id: 'claim-1', teamId: 'team-1', taskId: 'task-1', taskRevision: 1, taskAttempt: 1,
     agentId: 'agent-1', leaseTokenHash: 'hash', leaseFingerprint: 'fingerprint',
     fencingToken: 1, status: 'active', acquiredAt: 1, heartbeatAt: 1, expiresAt: 100,

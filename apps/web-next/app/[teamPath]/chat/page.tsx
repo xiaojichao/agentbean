@@ -1,5 +1,8 @@
 'use client';
 
+import { channelHistoryPagination } from '@/lib/channel-history';
+import { useChannelHistoryPagination } from '@/lib/use-channel-history-pagination';
+import type { ChannelHistoryPaginationDto } from '@agentbean/contracts';
 import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Bookmark, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, ChevronRight, Smile, ChevronDown, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
@@ -66,6 +69,7 @@ import { artifactVersionRevisionFromMeta } from '@/lib/artifact-revision';
 import { loadAllPromotableArtifacts } from '@/lib/promotable-artifacts';
 import { ProjectFilesBoard } from '@/components/project/ProjectFilesBoard';
 import { outputPackageFromMeta, inlineOutputPackageFromMeta, type OutputPackageMeta } from '@/lib/output-package';
+import { PackageMemberReferenceLabels } from '@/components/PackageMemberReferenceLabels';
 import { buildPackageReturnComposerDraft } from '@/lib/output-package-return-handoff';
 import { OutputPackagePreviewModal } from '@/components/OutputPackagePreviewModal';
 import { ProjectReferenceChips } from '@/components/project/ProjectReferenceChips';
@@ -286,6 +290,8 @@ export default function ChatPage() {
   const dms = useAgentBeanStore((s) => s.dms);
   const applyDmsSnapshot = useAgentBeanStore((s) => s.applyDmsSnapshot);
   const applyChannelHistory = useAgentBeanStore((s) => s.applyChannelHistory);
+  const prependChannelHistory = useAgentBeanStore((s) => s.prependChannelHistory);
+  const channelHistoryByChannel = useAgentBeanStore((s) => s.channelHistoryByChannel);
   const upsertMessages = useAgentBeanStore((s) => s.upsertMessages);
   const appendMessage = useAgentBeanStore((s) => s.appendMessage);
   const upsertActivityMessages = useAgentBeanStore((s) => s.upsertActivityMessages);
@@ -395,6 +401,7 @@ export default function ChatPage() {
     packageMeta: OutputPackageMeta;
     channelId: string;
     initialVersionId?: string;
+    exactInitialVersion?: boolean;
     readOnly?: boolean;
   } | null>(null);
   const [projectReferenceSelections, setProjectReferenceSelections] = useState<ProjectReferenceSelectionRequestDto[]>([]);
@@ -449,7 +456,6 @@ export default function ChatPage() {
     objective: string;
   } | null>(null);
   const [threadContinuationSubmitting, setThreadContinuationSubmitting] = useState(false);
-  const [showBackToBottom, setShowBackToBottom] = useState(false);
   const [stoppingChannelAgents, setStoppingChannelAgents] = useState(false);
   const [chatTaskMenuTarget, setChatTaskMenuTarget] = useState<ChatTaskMenuTarget>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -472,10 +478,21 @@ export default function ChatPage() {
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? EMPTY_CHAT_MESSAGES) : EMPTY_CHAT_MESSAGES;
   const activityPrefetchedChannelIdsRef = useRef<Set<string>>(new Set());
   const historySettledChannelIdRef = useRef<string | null>(null);
-  const previousScrollRef = useRef<{ channelId: string | null; messageCount: number }>({
-    channelId: null,
-    messageCount: 0,
+  const loadOlderPage = useCallback((teamId: string, channelId: string, cursor: string) =>
+    channelEvents(getWebSocket()).historyBefore(teamId, channelId, cursor), []);
+  const historyPagination = useChannelHistoryPagination({
+    channelId: activeChannel,
+    teamId: currentTeamId,
+    enabled: conn === 'open' && tab === 'chat',
+    suppressAutoScroll: Boolean(activeChannel && parseScopedMessageId(messageParam, activeChannel)),
+    messages,
+    pagination: activeChannel ? channelHistoryByChannel[activeChannel] : undefined,
+    listRef: messageListRef,
+    endRef: messagesEndRef,
+    loadPage: loadOlderPage,
+    prepend: prependChannelHistory,
   });
+  const { showBackToBottom } = historyPagination;
 
   useEffect(() => {
     dmsRef.current = dms;
@@ -585,13 +602,16 @@ export default function ChatPage() {
       if (!result) return;
       if (result.ok) {
         activityPrefetchedChannelIdsRef.current.add(activeChannel);
-        if (result.messages) upsertActivityMessages(recentActivityHistory(result.messages));
+        if (result.messages) {
+          applyChannelHistory(activeChannel, result.messages, channelHistoryPagination(result));
+          upsertActivityMessages(recentActivityHistory(result.messages));
+        }
       }
       historySettledChannelIdRef.current = activeChannel;
       setHistorySettledChannelId(activeChannel);
     });
-    const onHistory = (payload: { channelId: string; messages: ChatMessage[] }) => {
-      if (payload.channelId === activeChannel) applyChannelHistory(activeChannel, payload.messages);
+    const onHistory = (payload: { channelId: string; messages: ChatMessage[] } & Partial<ChannelHistoryPaginationDto>) => {
+      if (payload.channelId === activeChannel) applyChannelHistory(activeChannel, payload.messages, channelHistoryPagination(payload));
     };
     const onDispatchStatus = (dispatch: { messageId: string; channelId: string; status: DispatchStatus; id?: string; error?: string }) => {
       if (dispatch.channelId === activeChannel) {
@@ -624,7 +644,7 @@ export default function ChatPage() {
         const result = await channelEvents(socket).join(currentTeamId, activeChannel);
         if (cancelled) break;
         if (result.ok && result.messages) {
-          applyChannelHistory(activeChannel, result.messages);
+          applyChannelHistory(activeChannel, result.messages, channelHistoryPagination(result));
           upsertActivityMessages(recentActivityHistory(result.messages));
         }
       } while (deliveredRefreshPending && !cancelled);
@@ -661,17 +681,6 @@ export default function ChatPage() {
     void channelEvents(getWebSocket()).join(currentTeamId, activeChannel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentNameSignature]);
-
-  useEffect(() => {
-    const previous = previousScrollRef.current;
-    const shouldAnimate = previous.channelId === activeChannel
-      && previous.messageCount > 0
-      && messages.length > previous.messageCount;
-    if (!activeChannel || !parseScopedMessageId(messageParam, activeChannel)) {
-      messagesEndRef.current?.scrollIntoView({ behavior: shouldAnimate ? 'smooth' : 'auto' });
-    }
-    previousScrollRef.current = { channelId: activeChannel, messageCount: messages.length };
-  }, [activeChannel, messages, messageParam]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2141,12 +2150,13 @@ export default function ChatPage() {
     packageMeta: OutputPackageMeta,
     versionId?: string,
     readOnly = Boolean(activeChannelObj?.archivedAt),
+    exactVersion = false,
   ) => {
     if (!activeChannel) return;
     setOpenPackagePreview({
       packageMeta,
       channelId: activeChannel,
-      ...(versionId ? { initialVersionId: versionId } : {}),
+      ...(versionId ? { initialVersionId: versionId, exactInitialVersion: exactVersion } : {}),
       ...(readOnly ? { readOnly: true } : {}),
     });
   }, [activeChannel, activeChannelObj?.archivedAt]);
@@ -2311,7 +2321,6 @@ export default function ChatPage() {
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    setShowBackToBottom(false);
   };
 
   const stopChannelAgents = async () => {
@@ -2339,12 +2348,6 @@ export default function ChatPage() {
     } finally {
       setStoppingChannelAgents(false);
     }
-  };
-
-  const handleMessageListScroll = () => {
-    const el = messageListRef.current;
-    if (!el) return;
-    setShowBackToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 160);
   };
 
   const toggleActiveChannelMute = () => {
@@ -2605,16 +2608,21 @@ export default function ChatPage() {
         {tab === 'chat' ? (
           <>
             <div className="relative min-h-0 flex-1">
-      <div ref={messageListRef} onScroll={handleMessageListScroll} className="h-full overflow-y-auto px-4 py-3">
+      <div ref={messageListRef} onScroll={historyPagination.onScroll} data-smoke="channel-message-list" style={{ overflowAnchor: 'none' }} className="h-full overflow-y-auto px-4 py-3">
                 {!activeChannel && <div className="py-12 text-center text-sm text-neutral-400">选择一个频道或私聊开始聊天</div>}
-                {activeChannel && rootMessages.length === 0 && (
+                {activeChannel && !historyPagination.hasMore && rootMessages.length === 0 && (
                   <div className="py-8 text-center text-xs text-neutral-400">
                     <div className="mb-1">消息的开头</div>
                     <div className="text-neutral-300">发送第一条消息开始对话</div>
                   </div>
                 )}
-                {activeChannel && rootMessages.length > 0 && (
-                  <div className="mb-4 text-center text-xs text-neutral-300">消息的开头</div>
+                {activeChannel && (historyPagination.hasMore || rootMessages.length > 0) && (
+                  <div className="mb-4 flex min-h-5 items-center justify-center text-xs text-neutral-400" aria-live="polite">
+                    {historyPagination.loading ? <span role="status">正在加载更早的消息…</span>
+                      : historyPagination.error ? <button onClick={() => void historyPagination.loadOlder()} className="text-amber-700 hover:underline">加载失败，点击重试</button>
+                        : historyPagination.hasMore ? <button onClick={() => void historyPagination.loadOlder()} className="hover:text-neutral-600">加载更早的消息</button>
+                          : <span>消息的开头</span>}
+                  </div>
                 )}
                 <div>
                   {rootMessages.map((msg, index) => {
@@ -2728,7 +2736,7 @@ export default function ChatPage() {
                         const label = projectReferenceSelectionLabel(selection, projectDocumentBundles);
                         return (
                           <span key={`${selection.kind}-${index}`} className="inline-flex items-center gap-1 border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] text-sky-800">
-                            {label}
+                            {selection.kind === 'package_members' ? <PackageMemberReferenceLabels selection={selection} library={projectArtifactLibrary} /> : label}
                             <button
                               type="button"
                               aria-label={`移除${label}`}
@@ -3031,6 +3039,7 @@ export default function ChatPage() {
         <OutputPackagePreviewModal
           packageMeta={openPackagePreview.packageMeta}
           channelId={openPackagePreview.channelId}
+          exactInitialVersion={openPackagePreview.exactInitialVersion}
           {...(openPackagePreview.initialVersionId ? { initialVersionId: openPackagePreview.initialVersionId } : {})}
           {...(openPackagePreview.readOnly || activeChannelObj?.archivedAt ? { readOnly: true } : {})}
           renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources collapsible={false} />}
@@ -3763,7 +3772,7 @@ function TaskDetailPanel({
   onClose: () => void;
   onOpenThread: (rootMessageId?: string) => void;
   onViewAssetSource: (packageId: string) => void;
-  onOpenPackagePreview: (packageMeta: OutputPackageMeta, versionId?: string, readOnly?: boolean) => void;
+  onOpenPackagePreview: (packageMeta: OutputPackageMeta, versionId?: string, readOnly?: boolean, exactVersion?: boolean) => void;
   onTaskStatus: (status: TaskStatus) => void;
   /** 原型收敛:任务详情内嵌交付视图的动作导航(交给智能体/审核文件包)。 */
   onDeliveryAction?: (action: TaskLevelAvailableActionDto) => void;
@@ -3950,7 +3959,7 @@ function projectReferenceSelectionLabel(
     case 'artifact_version':
       return `产物版本：${selection.versionId.slice(0, 8)}`;
     case 'package_projection':
-      return `${shortPackageLabel(selection.packageId)} ${selection.policy === 'current' ? 'current' : selection.policy === 'final' ? 'final' : '交付版'}`;
+      return `${shortPackageLabel(selection.packageId)} ${selection.policy === 'current' ? '当前版' : selection.policy === 'final' ? '最终版' : '本次交付版'}`;
     case 'package_members':
       return `${shortPackageLabel(selection.packageId)} · ${selection.members.length} 项`;
     default:
@@ -4081,7 +4090,7 @@ function ThreadPanel({
   /** #1065 AC2：线程内卡片「继续 @Agent」——composer 预填(delivered 引用 + 文本 + 焦点)。 */
   onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
   /** 原型对齐:线程内文件包「预览/编辑」浮窗入口。 */
-  onOpenPackagePreview?: (packageMeta: OutputPackageMeta, versionId?: string) => void;
+  onOpenPackagePreview?: (packageMeta: OutputPackageMeta, versionId?: string, readOnly?: boolean, exactVersion?: boolean) => void;
   /** 原型 @选择器扩展:文件包候选(@文件包 → current projection 引用)。 */
   outputPackages: readonly OutputPackageSummaryDto[];
   /** 原型 @选择器扩展:文件候选(@文件 → artifact_version 引用)。 */
@@ -4377,7 +4386,7 @@ function ThreadPanel({
                 const label = projectReferenceSelectionLabel(selection);
                 return (
                   <span key={`${selection.kind}-${index}`} className="inline-flex items-center gap-1 border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] text-sky-800">
-                    {label}
+                    {selection.kind === 'package_members' ? <PackageMemberReferenceLabels selection={selection} library={artifactLibrary} /> : label}
                     <button
                       type="button"
                       aria-label={`移除${label}`}
@@ -4732,7 +4741,7 @@ function ChatBubble({
   /** #1065 AC2：线程内卡片「继续 @Agent」——composer 预填(delivered 引用 + 文本 + 焦点)。 */
   onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
   /** 原型对齐:文件包「预览/编辑」浮窗入口(standalone + 内嵌卡片共用)。 */
-  onOpenPackagePreview?: (packageMeta: import('@/lib/output-package').OutputPackageMeta, versionId?: string) => void;
+  onOpenPackagePreview?: (packageMeta: import('@/lib/output-package').OutputPackageMeta, versionId?: string, readOnly?: boolean, exactVersion?: boolean) => void;
   replyCount: number;
   /** #all 讨论串附件只读：保留预览/下载，Markdown 预览直接展示全文且不提供编辑入口。 */
   readOnlyArtifacts?: boolean;
@@ -5074,7 +5083,7 @@ function ChatBubble({
             // composer(delivered 整包引用 + 说明文本 + 焦点),未发送不创建任何事实。
             onOpenTask={onOpenTaskDetailById}
             onContinueWithAgent={onContinueWithAgent}
-            onOpenPreview={onOpenPackagePreview ? (versionId) => onOpenPackagePreview(outputPackageMeta, versionId) : undefined}
+            onOpenPreview={onOpenPackagePreview ? (versionId, exactVersion) => onOpenPackagePreview(outputPackageMeta, versionId, undefined, exactVersion) : undefined}
           />
         )}
         {!isDeleted && !editing && artifactVersionRevisionFromMeta(msg.meta) && (

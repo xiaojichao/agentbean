@@ -1,3 +1,4 @@
+import { createInMemoryRepositories } from '../src/infra/memory/repositories';
 import { createRequire } from 'node:module';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -597,6 +598,147 @@ describe('server-next SQLite repositories', () => {
       await expect(repositories.messages.search({
         channelIds: ['channel-1'], query: 'needle', limit: 1,
       })).resolves.toMatchObject([{ id: 'visible-2' }]);
+    } finally {
+      close();
+    }
+  });
+
+  test.each(['sqlite', 'memory'] as const)('%s pages 50 then 10 main messages without losing timestamp ties or replies', async (storage) => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = storage === 'sqlite' ? createSqliteRepositories({ globalDb, teamDb }) : createInMemoryRepositories();
+      const append = (id: string, threadId = id, createdAt = 100, channelId = 'channel-1') => repositories.messages.append({
+        id, threadId, createdAt, channelId, teamId: 'team-1', senderKind: 'human', senderId: 'user-1', body: id,
+      });
+      for (let i = 0; i < 73; i += 1) await append(`root-${i}`);
+      for (let i = 0; i < 75; i += 1) await append(`reply-${i}`, 'root-15', 200 + i);
+      const first = await repositories.messages.listVisiblePageByChannel('channel-1', 50);
+      expect(first.messages).toHaveLength(50);
+      expect(first).toMatchObject({ hasMore: true, nextBeforeMessageId: 'root-23' });
+      // A concurrent new message must not shift an ID cursor like an offset would.
+      await append('new-live', 'new-live', 1000);
+      const second = await repositories.messages.listVisiblePageByChannel('channel-1', 10, first.nextBeforeMessageId!);
+      expect(second.messages).toHaveLength(85);
+      expect(second).toMatchObject({ hasMore: true, nextBeforeMessageId: 'root-13' });
+      const third = await repositories.messages.listVisiblePageByChannel('channel-1', 10, second.nextBeforeMessageId!);
+      expect(third.messages).toHaveLength(10);
+      expect(third).toMatchObject({ hasMore: true, nextBeforeMessageId: 'root-3' });
+      const last = await repositories.messages.listVisiblePageByChannel('channel-1', 10, third.nextBeforeMessageId!);
+      expect(last).toMatchObject({ hasMore: false, nextBeforeMessageId: null });
+      expect(last.messages.map((message) => message.id)).toEqual(['root-0', 'root-1', 'root-2']);
+      const ids = [last, third, second, first].flatMap((page) => page.messages.map((message) => message.id));
+      expect(new Set(ids).size).toBe(148);
+      expect(ids).toHaveLength(148);
+      expect(second.messages.filter((message) => message.id.startsWith('root-')).map((message) => message.id))
+        .toEqual(Array.from({ length: 10 }, (_, i) => `root-${13 + i}`));
+      await append('foreign', 'foreign', 3000, 'channel-2');
+      await expect(repositories.messages.listVisiblePageByChannel('channel-1', 10, 'foreign'))
+        .resolves.toEqual({ messages: [], hasMore: false, nextBeforeMessageId: null });
+    } finally {
+      close();
+    }
+  });
+
+  test.each(['sqlite', 'memory'] as const)('%s reports no more history at the exact page boundary', async (storage) => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = storage === 'sqlite' ? createSqliteRepositories({ globalDb, teamDb }) : createInMemoryRepositories();
+      await expect(repositories.messages.listVisiblePageByChannel('channel-1', 50))
+        .resolves.toEqual({ messages: [], hasMore: false, nextBeforeMessageId: null });
+      for (let i = 0; i < 50; i += 1) await repositories.messages.append({
+        id: `root-${i}`, threadId: `root-${i}`, createdAt: i, channelId: 'channel-1',
+        teamId: 'team-1', senderKind: 'human', senderId: 'user-1', body: 'message',
+      });
+      const page = await repositories.messages.listVisiblePageByChannel('channel-1', 50);
+      expect(page.messages).toHaveLength(50);
+      expect(page).toMatchObject({ hasMore: false, nextBeforeMessageId: null });
+    } finally { close(); }
+  });
+
+  test.each(['sqlite', 'memory'] as const)('%s channel history reserves 50 slots for roots and retains their replies', async (storage) => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = storage === 'sqlite'
+        ? createSqliteRepositories({ globalDb, teamDb })
+        : createInMemoryRepositories();
+      const append = (id: string, threadId: string, createdAt: number, extra = {}) => repositories.messages.append({
+        id, threadId, createdAt, teamId: 'team-1', channelId: 'channel-1',
+        senderKind: 'human', senderId: 'user-1', body: id, ...extra,
+      });
+      // Same timestamps deliberately exercise stable insertion ordering at the limit boundary.
+      for (let i = 0; i < 55; i += 1) await append(`root-${i}`, `root-${i}`, 100);
+      for (let i = 0; i < 80; i += 1) await append(`reply-${i}`, 'root-54', 200 + i);
+      await append('nested-agent', 'root-54', 300, {
+        senderKind: 'agent', meta: { parentMessageId: 'reply-0', replyScope: 'thread' },
+      });
+      await append('legacy-reply', 'legacy-reply', 301, { meta: { inReplyTo: 'root-5' } });
+      await append('channel-agent', 'root-54', 302, { senderKind: 'agent', meta: { replyScope: 'channel' } });
+      await append('excluded-old-reply', 'root-0', 303);
+      await append('hidden-system', 'hidden-system', 304, { senderKind: 'system', meta: { kind: 'management-status' } });
+      await append('other-channel', 'other-channel', 305, { channelId: 'channel-2' });
+
+      const history = await repositories.messages.listVisibleByChannel('channel-1', 50);
+      expect(history.filter((message) => message.id.startsWith('root-')).map((message) => message.id))
+        .toEqual(Array.from({ length: 49 }, (_, i) => `root-${i + 6}`));
+      expect(history).toHaveLength(131);
+      expect(history.slice(-3).map((message) => message.id)).toEqual(['reply-79', 'nested-agent', 'channel-agent']);
+      expect(history.some((message) => message.id === 'reply-0')).toBe(true);
+      expect(history.some((message) => message.id === 'reply-79')).toBe(true);
+      expect(history.some((message) => message.id === 'excluded-old-reply')).toBe(false);
+      expect(history.some((message) => message.id === 'other-channel')).toBe(false);
+    } finally {
+      close();
+    }
+  });
+
+  test.each(['sqlite', 'memory'] as const)('%s counts late channel Agent results as main messages', async (storage) => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = storage === 'sqlite'
+        ? createSqliteRepositories({ globalDb, teamDb })
+        : createInMemoryRepositories();
+      const append = (id: string, threadId: string, createdAt: number, extra = {}) => repositories.messages.append({
+        id, threadId, createdAt, teamId: 'team-1', channelId: 'channel-1',
+        senderKind: 'human', senderId: 'user-1', body: id, ...extra,
+      });
+      await append('old-root', 'old-root', 1);
+      for (let i = 0; i < 50; i += 1) await append(`new-${i}`, `new-${i}`, 10 + i);
+      await append('late-channel', 'old-root', 100, { senderKind: 'agent', meta: { replyScope: 'channel' } });
+      await append('late-legacy', 'old-root', 101, { senderKind: 'agent' });
+      await append('explicit-thread', 'old-root', 102, { senderKind: 'agent', meta: { replyScope: 'thread' } });
+      await append('explicit-parent', 'old-root', 103, { senderKind: 'agent', meta: { parentMessageId: 'old-root' } });
+      const history = await repositories.messages.listVisibleByChannel('channel-1', 50);
+      expect(history).toHaveLength(50);
+      expect(history[0]?.id).toBe('new-2');
+      expect(history.slice(-2)).toMatchObject([
+        { id: 'late-channel', meta: { replyScope: 'channel' } },
+        { id: 'late-legacy', meta: { replyScope: 'channel' } },
+      ]);
+      expect(history.some((message) => message.id === 'old-root')).toBe(false);
+      expect(history.some((message) => message.id.startsWith('explicit-'))).toBe(false);
+      expect((await repositories.messages.getById('late-legacy'))?.meta).toBeUndefined();
+    } finally {
+      close();
+    }
+  });
+
+  test.each(['sqlite', 'memory'] as const)('%s retains replies promoted from hidden roots', async (storage) => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = storage === 'sqlite'
+        ? createSqliteRepositories({ globalDb, teamDb })
+        : createInMemoryRepositories();
+      await repositories.messages.append({
+        id: 'hidden-root', threadId: 'hidden-root', teamId: 'team-1', channelId: 'channel-1',
+        senderKind: 'system', senderId: 'system', body: 'hidden', createdAt: 1,
+        meta: { kind: 'artifact-version-revision' },
+      });
+      await repositories.messages.append({
+        id: 'reply', threadId: 'hidden-root', teamId: 'team-1', channelId: 'channel-1',
+        senderKind: 'human', senderId: 'user-1', body: 'still visible', createdAt: 2,
+      });
+      expect((await repositories.messages.listVisibleByChannel('channel-1', 1)).map((message) => message.id))
+        .toEqual(['reply']);
     } finally {
       close();
     }

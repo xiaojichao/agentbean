@@ -650,6 +650,22 @@ describe('channel coordinator: cycle processing', () => {
 });
 
 describe('channel coordinator: decision gate (#707)', () => {
+  test.each(['in_progress', 'in_review', 'done', 'cancelled', 'closed'] as const)('协调器复用消息已有的 %s 任务，不制造第二条待办', async (status) => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'needs_tracking', risk: 'low', objective: '改写后的目标' }))]),
+    });
+    const { jobId, messageId } = await seedHumanMessageJob(repos);
+    await repos.tasks.create({ id: 'direct-task', teamId: 'team-1', channelId: 'channel-1', title: '用户原始目标',
+      status, creatorId: 'user-1', tags: [], sortOrder: 1, createdAt: 900, updatedAt: 900 });
+    await repos.messages.setTaskIdIfAbsent({ messageId, taskId: 'direct-task' });
+    await coordinator.processJob(jobId);
+    expect(await repos.tasks.list({ teamId: 'team-1', channelIds: ['channel-1'], includeGlobal: false })).toHaveLength(1);
+    expect(await repos.tasks.getById('direct-task')).toMatchObject({ title: '用户原始目标', status });
+    const decision = await repos.channelCoordination.decisions.getByJobId(jobId);
+    expect(decision?.linkedTaskId).toBe('direct-task');
+    if (['done', 'cancelled', 'closed'].includes(status)) expect(decision?.gateStatus).toBe('blocked');
+  });
+
   test('tracked_task auto-on + low-risk → applied: creates a Task and links it', async () => {
     const { repos, coordinator } = setup({
       fetch: makeFetch([okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'needs_tracking', risk: 'low', objective: '交付周报' }))]),

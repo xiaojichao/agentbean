@@ -1998,37 +1998,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           });
       },
       async listVisibleByChannel(channelId, limit) {
-        const hiddenKindPlaceholders = HIDDEN_SYSTEM_MESSAGE_KINDS.map(() => '?').join(', ');
-        return teamDb
-          .prepare(`
-            SELECT * FROM (
-              SELECT *, rowid AS _message_rowid FROM messages
-              WHERE channel_id = ?
-              AND NOT (
-                sender_kind = 'system'
-                AND (
-                  COALESCE(
-                    json_extract(meta_json, '$.kind') IN (
-                      ${hiddenKindPlaceholders}
-                    ),
-                    0
-                  )
-                  OR json_type(meta_json, '$.coordination') IS NOT NULL
-                )
-              )
-              ORDER BY created_at DESC, _message_rowid DESC
-              LIMIT ?
-            )
-            ORDER BY created_at ASC, _message_rowid ASC
-          `)
-          .all(channelId, ...HIDDEN_SYSTEM_MESSAGE_KINDS, limit)
-          .map((row) => {
-            const message = mapMessage(row);
-            if (!message) {
-              throw new Error('SQLite visible message row could not be mapped');
-            }
-            return message;
-          });
+        return readVisibleChannelPage(teamDb, channelId, limit).messages;
+      },
+      async listVisiblePageByChannel(channelId, limit, beforeMessageId) {
+        return readVisibleChannelPage(teamDb, channelId, limit, beforeMessageId);
       },
       async listByThread(input) {
         return teamDb
@@ -2258,6 +2231,19 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             if (!dispatch) {
               throw new Error('SQLite dispatch row could not be mapped');
             }
+            return dispatch;
+          });
+      },
+      async listByTaskOrigin(input) {
+        return teamDb.prepare(`SELECT d.* FROM dispatches d
+          JOIN messages m ON m.id = d.message_id AND m.team_id = d.team_id AND m.channel_id = d.channel_id
+          WHERE d.team_id = ? AND d.channel_id = ?
+            AND json_extract(CASE WHEN json_valid(m.meta_json) THEN m.meta_json ELSE '{}' END, '$.taskId') = ?
+          ORDER BY d.created_at DESC, d.id DESC`)
+          .all(input.teamId, input.channelId, input.taskId)
+          .map((row) => {
+            const dispatch = mapDispatch(row);
+            if (!dispatch) throw new Error('SQLite dispatch row could not be mapped');
             return dispatch;
           });
       },
@@ -6774,4 +6760,89 @@ function escapeSqlLike(value: string): string {
 
 function normalizeName(value: string): string {
   return value.trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/-+/g, '-');
+}
+
+function readVisibleChannelPage(teamDb: SqliteDatabase, channelId: string, limit: number, beforeMessageId?: string) {
+  const hiddenKindPlaceholders = HIDDEN_SYSTEM_MESSAGE_KINDS.map(() => '?').join(', ');
+  const rows = teamDb
+    .prepare(`
+      WITH RECURSIVE visible AS (
+        SELECT *, rowid AS _message_rowid,
+          CASE
+            WHEN sender_kind = 'agent' AND COALESCE(
+              CASE WHEN json_type(meta_json, '$.parentMessageId') = 'text'
+                THEN json_extract(meta_json, '$.parentMessageId')
+                WHEN json_type(meta_json, '$.inReplyTo') = 'text'
+                THEN json_extract(meta_json, '$.inReplyTo') END, '') != ''
+            THEN CASE WHEN json_type(meta_json, '$.parentMessageId') = 'text'
+              THEN json_extract(meta_json, '$.parentMessageId')
+              ELSE json_extract(meta_json, '$.inReplyTo') END
+            WHEN sender_kind = 'agent'
+              AND COALESCE(json_extract(meta_json, '$.replyScope'), '') != 'thread'
+              AND (
+                EXISTS (SELECT 1 FROM messages origin WHERE origin.id = history.thread_id
+                  AND origin.channel_id = history.channel_id AND origin.thread_id = origin.id)
+                OR (json_extract(meta_json, '$.replyScope') = 'channel'
+                  AND NOT EXISTS (SELECT 1 FROM messages origin WHERE origin.id = history.thread_id))
+              ) THEN NULL
+            WHEN thread_id IS NOT NULL AND thread_id != '' AND thread_id != id THEN thread_id
+            ELSE NULLIF(CASE WHEN json_type(meta_json, '$.parentMessageId') = 'text'
+              THEN json_extract(meta_json, '$.parentMessageId')
+              WHEN json_type(meta_json, '$.inReplyTo') = 'text'
+              THEN json_extract(meta_json, '$.inReplyTo') END, '')
+          END AS _parent_id
+        FROM messages history
+        WHERE channel_id = ?
+        AND NOT (
+          sender_kind = 'system'
+          AND (
+            COALESCE(
+              json_extract(meta_json, '$.kind') IN (
+                ${hiddenKindPlaceholders}
+              ),
+              0
+            )
+            OR json_type(meta_json, '$.coordination') IS NOT NULL
+          )
+        )
+      ), candidates AS (
+        SELECT id, created_at, _message_rowid FROM visible root
+        WHERE (_parent_id IS NULL
+          OR NOT EXISTS (SELECT 1 FROM visible parent WHERE parent.id = root._parent_id))
+          AND (? IS NULL OR (created_at, _message_rowid) < (
+            SELECT created_at, rowid FROM messages WHERE id = ? AND channel_id = ?
+          ))
+        ORDER BY created_at DESC, _message_rowid DESC LIMIT ?
+      ), roots AS (
+        SELECT * FROM candidates ORDER BY created_at DESC, _message_rowid DESC LIMIT ?
+      ), selected(id) AS (
+        SELECT id FROM roots
+        UNION
+        SELECT child.id FROM visible child JOIN selected parent ON child._parent_id = parent.id
+      )
+      SELECT visible.*,
+        (SELECT COUNT(*) > ? FROM candidates) AS _has_more,
+        (SELECT id FROM roots ORDER BY created_at ASC, _message_rowid ASC LIMIT 1) AS _oldest_root
+      FROM visible JOIN selected ON selected.id = visible.id
+      ORDER BY created_at ASC, _message_rowid ASC
+    `)
+    .all(channelId, ...HIDDEN_SYSTEM_MESSAGE_KINDS, beforeMessageId ?? null,
+      beforeMessageId ?? null, channelId, limit + 1, limit, limit);
+  const first = rows[0];
+  const hasMore = typeof first === 'object' && first !== null && '_has_more' in first && first._has_more === 1;
+  const nextBeforeMessageId = hasMore && typeof first === 'object' && first !== null
+    && '_oldest_root' in first && typeof first._oldest_root === 'string' ? first._oldest_root : null;
+  const pageMessages = rows.map((row) => {
+      const message = mapMessage(row);
+      if (!message) {
+        throw new Error('SQLite visible message row could not be mapped');
+      }
+      // Preserve the inferred channel scope even when the origin is outside this history window.
+      if (message.senderKind === 'agent' && message.threadId && message.threadId !== message.id
+        && typeof row === 'object' && row !== null && '_parent_id' in row && row._parent_id === null) {
+        return { ...message, meta: { ...message.meta, replyScope: 'channel' } };
+      }
+      return message;
+    });
+  return { messages: pageMessages, hasMore, nextBeforeMessageId };
 }

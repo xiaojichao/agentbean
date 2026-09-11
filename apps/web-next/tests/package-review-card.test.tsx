@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -139,17 +139,12 @@ describe('OutputPackageCard review actions (#1061 AC11)', () => {
       { collectionId: 'col-1', versionId: 'ver-1', reviewState: delivered, isFinalVersion: false, actions: [] },
       { collectionId: 'col-1', versionId: 'ver-2', reviewState: current, isFinalVersion: final, actions: [] },
     ] });
-    const onAddReference = vi.fn();
-    render(<OutputPackageCard packageMeta={packageMeta} channelId="ch-1" onAddReference={onAddReference} />);
+    render(<OutputPackageCard packageMeta={packageMeta} channelId="ch-1" />);
     await waitFor(() => {
       expect(document.querySelector('[data-smoke="package-member-sub"]')?.textContent).toContain('current server v2');
       expect(document.querySelector('[data-smoke="package-review-state"]')?.textContent).toBe(label);
     });
-    // 交付成员身份保持冻结；修复展示不重写现有显式成员引用。
-    fireEvent.click(document.querySelector('[data-smoke="output-package-member-ref"]')!);
-    expect(onAddReference).toHaveBeenCalledWith(expect.objectContaining({
-      members: [{ collectionId: 'col-1', versionId: 'ver-1' }],
-    }));
+
   });
 
   test('当前版没有 Server 审核投影时，不回退展示交付版已通过', async () => {
