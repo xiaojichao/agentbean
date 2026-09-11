@@ -2031,6 +2031,7 @@ export interface CreateServerNextUseCasesInput {
   /** 测试/host 可注入 PI 分析器；生产缺省绑定 Active PI Model + Capability Directory。 */
   analyzeMessageRouteWithPi?: ChannelWorkIntakePiAnalyzer;
   /** 协作状态消息落库后的轻量 realtime fetch 通知（不再生成 PI 汇总气泡）。 */
+  onDispatchFailedBeforeExecution?: (result: unknown) => Promise<void> | void;
   onChannelCollaborationMessageAppended?: (
     delivery: { readonly teamId: string; readonly channelId: string; readonly messageId: string },
   ) => Promise<void> | void;
@@ -3301,10 +3302,28 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (managedAttempt) await invocationGateway.completeAttempt({ dispatchId: dispatch.id, status: 'failed', error });
       else await repositories.dispatches.markFailed({ dispatchId: dispatch.id, error, completedAt: now });
     }
+    const task = !managedAttempt && error.startsWith('DEVICE_WORKSPACE_SNAPSHOT_')
+      ? await repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
+          const origin = await transaction.messages.getById(dispatch.messageId);
+          const taskId = typeof origin?.meta?.taskId === 'string' ? origin.meta.taskId : undefined;
+          const linked = taskId ? await transaction.tasks.getById(taskId) : null;
+          if (!linked || linked.teamId !== dispatch.teamId || linked.channelId !== dispatch.channelId
+            || linked.status !== 'in_progress' || (linked.assigneeId && linked.assigneeId !== dispatch.agentId)
+            || await transaction.coordination.coordinations.getByTaskId(linked.id)
+            || await transaction.management.runs.getByRootTaskId(linked.id)) return null;
+          const pending = await transaction.dispatches.listByTaskOrigin({ teamId: dispatch.teamId, channelId: dispatch.channelId, taskId: linked.id });
+          if (pending.some((candidate) => isPendingDispatchStatus(candidate.status))) return null;
+          return transaction.tasks.update({ taskId: linked.id, changes: { status: 'todo', updatedAt: now } });
+        })
+      : null;
     const agent = await repositories.agents.getById(dispatch.agentId);
     if (agent && agent.deletedAt === undefined && agent.status !== 'offline') {
       await markAgentOnlineIfIdle(repositories, { agentId: dispatch.agentId, teamId: dispatch.teamId, lastSeenAt: now });
     }
+    const failedDispatch = await repositories.dispatches.getById(dispatch.id);
+    if (failedDispatch) await Promise.resolve(input.onDispatchFailedBeforeExecution?.(
+      makeSuccess({ dispatch: toDispatchDto(failedDispatch), ...(task ? { task } : {}) }),
+    )).catch(() => undefined);
     if (managedAttempt) {
       const status = await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
         dispatchId: dispatch.id, status: 'failed', actorId: 'server', errorCode: error,

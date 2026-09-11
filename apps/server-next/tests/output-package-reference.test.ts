@@ -60,7 +60,7 @@ const variants: Array<{ name: string; make: () => { repositories: ServerNextRepo
   },
 ];
 
-async function seed(variant: (typeof variants)[number]): Promise<Seed> {
+async function seed(variant: (typeof variants)[number], failures: unknown[] = []): Promise<Seed> {
   const { repositories, close } = variant.make();
   let now = 100;
   let id = 0;
@@ -68,6 +68,7 @@ async function seed(variant: (typeof variants)[number]): Promise<Seed> {
     repositories,
     clock: { now: () => ++now },
     ids: { nextId: () => `id-${++id}` },
+    onDispatchFailedBeforeExecution: (result) => { failures.push(result); },
   });
   const registered = await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
   if (!registered.ok) throw new Error(registered.error);
@@ -382,7 +383,8 @@ for (const variant of variants) {
     });
 
     test('AC8:发送时冻结具体版本;后续 append 新 version 不改写历史消息引用', async () => {
-      seedValue = await seed(variant);
+      const failures: unknown[] = [];
+      seedValue = await seed(variant, failures);
       await commitDelivery(seedValue, 'pub-1', [{ path: 'docs/ep1.md', body: Buffer.from('v1') }], {
         agentId: seedValue.agentId, taskId: 'task-1', taskAttempt: 1,
       });
@@ -495,13 +497,20 @@ for (const variant of variants) {
 
       // 当前裁决失去 Task 时，既有快照不得继续携带旧 Task 下发。
       const linkedOrigin = await seedValue.repositories.messages.getById(sent.message.id);
+      await seedValue.repositories.tasks.create({ id: 'plain-task', teamId: seedValue.teamId, channelId: seedValue.channelId,
+        title: '普通任务', status: 'in_progress', creatorId: seedValue.userId, assigneeId: seedValue.agentId,
+        tags: [], sortOrder: 1, createdAt: 1, updatedAt: 1 });
       await seedValue.repositories.messages.updateMeta({ messageId: sent.message.id,
-        meta: { ...linkedOrigin?.meta, taskId: 'missing-task' } });
+        meta: { ...linkedOrigin?.meta, taskId: 'plain-task' } });
       await expect(seedValue.app.acceptDispatch({ dispatchId: 'dispatch-direct-snapshot', agentId: seedValue.agentId, quietWindowMs: 0 }))
         .resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
       await expect(seedValue.app.getDispatchRequest({ dispatchId: 'dispatch-direct-snapshot' }))
         .resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
       expect((await seedValue.repositories.dispatches.getById('dispatch-direct-snapshot'))?.status).toBe('failed');
+      expect((await seedValue.repositories.tasks.getById('plain-task'))?.status).toBe('todo');
+      expect(failures).toContainEqual(expect.objectContaining({ ok: true,
+        dispatch: expect.objectContaining({ id: 'dispatch-direct-snapshot', status: 'failed' }),
+        task: expect.objectContaining({ id: 'plain-task', status: 'todo' }) }));
       await seedValue.repositories.messages.updateMeta({ messageId: sent.message.id, meta: linkedOrigin!.meta! });
 
       // 后续同路径 append v2(current 指针漂移),历史消息引用不变。
