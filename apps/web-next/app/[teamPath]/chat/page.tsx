@@ -4997,10 +4997,19 @@ function ChatBubble({
       ) : (
         <button
           onClick={() => { if (canOpenProfile) onOpenProfile(profileTarget); }}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xs font-semibold text-purple-700 hover:ring-2 hover:ring-neutral-900"
+          className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xs font-semibold text-purple-700 hover:ring-2 hover:ring-neutral-900"
           title="查看资料"
         >
           {speaker[0].toUpperCase()}
+          {msg.senderKind === 'agent' && (
+            <span
+              data-smoke="chat-message-agent-status"
+              role="img"
+              aria-label={`Agent 状态：${statusLabel(agent?.status)}`}
+              title={statusLabel(agent?.status)}
+              className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border border-white ${statusDotClass(agent?.status)}`}
+            />
+          )}
         </button>
       )}
       <div className="min-w-0 flex-1">
