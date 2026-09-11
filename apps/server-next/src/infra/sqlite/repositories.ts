@@ -2234,6 +2234,19 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return dispatch;
           });
       },
+      async listByTaskOrigin(input) {
+        return teamDb.prepare(`SELECT d.* FROM dispatches d
+          JOIN messages m ON m.id = d.message_id AND m.team_id = d.team_id AND m.channel_id = d.channel_id
+          WHERE d.team_id = ? AND d.channel_id = ?
+            AND json_extract(CASE WHEN json_valid(m.meta_json) THEN m.meta_json ELSE '{}' END, '$.taskId') = ?
+          ORDER BY d.created_at DESC, d.id DESC`)
+          .all(input.teamId, input.channelId, input.taskId)
+          .map((row) => {
+            const dispatch = mapDispatch(row);
+            if (!dispatch) throw new Error('SQLite dispatch row could not be mapped');
+            return dispatch;
+          });
+      },
       async listByTeam(teamId) {
         return teamDb
           .prepare('SELECT * FROM dispatches WHERE team_id = ? ORDER BY created_at')

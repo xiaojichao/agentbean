@@ -1580,6 +1580,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async listByMessage(messageId) {
         return Array.from(dispatches.values()).filter((dispatch) => dispatch.messageId === messageId);
       },
+      async listByTaskOrigin(input) {
+        return Array.from(dispatches.values()).filter((dispatch) => {
+          const origin = messages.get(dispatch.messageId);
+          return dispatch.teamId === input.teamId && dispatch.channelId === input.channelId
+            && origin?.teamId === input.teamId && origin.channelId === input.channelId
+            && origin.meta?.taskId === input.taskId;
+        }).sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+      },
       async listByTeam(teamId) {
         return Array.from(dispatches.values()).filter((dispatch) => dispatch.teamId === teamId);
       },
