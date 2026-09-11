@@ -400,7 +400,8 @@ export async function attemptOutputPackageFormation(
         && inputSnapshot.inputSet.items.some((item) =>
           item.collectionId === match.id && item.artifactVersionId === current.id);
       // 人工修订必须成为执行输入，不能让 Agent 本地旧底稿移动 Server 当前版本。
-      if (current?.revisedFromVersionId && !usesCurrentInput) {
+      const hasHumanRevision = existingVersions.some((version) => version.collectionId === match.id && version.revisedFromVersionId);
+      if (hasHumanRevision && !usesCurrentInput) {
         return { kind: 'conflict', reasonCode: 'output-package-source-version-stale' };
       }
       if (hasDigest && !usesCurrentInput) {

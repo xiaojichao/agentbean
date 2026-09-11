@@ -408,6 +408,10 @@ for (const variant of variants) {
         ...provenance, workspaceRunId: 'revision-dispatch',
       });
       expect(await s.repositories.outputPackages.getPackageByPublishId({ teamId: s.teamId, publishId: 'valid-revision' })).not.toBeNull();
+      const afterValid = await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId });
+      await commitDelivery(s, 'late-derived', [{ path: 'report.md', body: Buffer.from('novel content from old draft') }], provenance);
+      expect(await s.repositories.outputPackages.getPackageByPublishId({ teamId: s.teamId, publishId: 'late-derived' })).toBeNull();
+      expect(await s.repositories.channelProjects.listArtifactCollections({ teamId: s.teamId, channelId: s.channelId })).toEqual(afterValid);
     });
 
     test('历史版本重传不回滚较新的 Agent 版本', async () => {

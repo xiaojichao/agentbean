@@ -2057,9 +2057,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             `SELECT * FROM messages
              WHERE channel_id = ?
              AND thread_id = ?
-             AND id != ?
+             AND rowid < (SELECT rowid FROM messages WHERE id = ?)
              AND created_at <= ?
-             ORDER BY created_at DESC
+             ORDER BY created_at DESC, rowid DESC
              LIMIT ?`,
           )
           .all(input.channelId, input.threadId, input.beforeMessageId, before.createdAt, input.limit)

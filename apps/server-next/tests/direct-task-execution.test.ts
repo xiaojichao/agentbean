@@ -137,6 +137,17 @@ describe.each([false, true])('direct Task evidence (sqlite=%s)', (sqlite) => {
     } finally { h.close(); }
   });
 
+  test('同毫秒后写入的 Task 回复不是补交的前序证据', async () => {
+    const h = await fixture(sqlite);
+    try {
+      await h.repositories.messages.updateMeta({ messageId: h.origin.id, meta: {} });
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: h.origin.id, createdAt: 10, meta: {} });
+      await h.repositories.messages.append({ ...h.origin, id: 'later-task', threadId: h.origin.id, createdAt: 10, meta: { taskId: h.task.id } });
+      expect(await resolveDirectDispatchTask(h.repositories, { ...h.dispatch, messageId: followup.id }, followup)).toBeNull();
+      expect((await h.repositories.messages.getById(followup.id))?.meta?.taskId).toBeUndefined();
+    } finally { h.close(); }
+  });
+
   test('多任务线程不能把补交绑到最近的另一个任务', async () => {
     const h = await fixture(sqlite);
     try {

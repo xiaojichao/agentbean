@@ -1411,7 +1411,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (!before) {
           return [];
         }
-        return Array.from(messages.values())
+        const ordered = Array.from(messages.values());
+        return ordered.slice(0, ordered.findIndex((message) => message.id === input.beforeMessageId))
           .filter((message) =>
             message.channelId === input.channelId &&
             message.threadId === input.threadId &&
