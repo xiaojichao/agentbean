@@ -12,6 +12,7 @@
  * 幂等（AC#7）：Job 已有 Decision 或已终态 → 跳过；decisions.job_id UNIQUE 是硬兜底。
  */
 
+import { createOrReuseMessageTask } from './message-task-link.js';
 import {
   createOpenAiCompatibleManagementModelAdapter,
   ManagementModelAdapterError,
@@ -462,7 +463,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
       // 使系统消息 meta 能携带 taskId（AC#4）。事务原子，重排不影响外部可观察状态。
       if (verdict.status === 'applied' && (parsed.intent === 'tracked_task' || parsed.intent === 'agent_request')) {
         const taskId = deps.ids.nextId();
-        const task = await transaction.tasks.create({
+        const task = await createOrReuseMessageTask(transaction, job.messageId, {
           id: taskId,
           teamId: job.teamId,
           title: parsed.objective ?? job.messageId,
@@ -475,7 +476,10 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
           updatedAt: now,
         });
         linkedTaskId = task.id;
-        await transaction.messages.setTaskIdIfAbsent({ messageId: job.messageId, taskId: task.id });
+        if (['done', 'cancelled', 'closed'].includes(task.status)) {
+          effectiveVerdict = { status: 'blocked', reason: 'TASK_ALREADY_TERMINAL' };
+          effectiveGateStatus = 'blocked';
+        }
       }
 
       // #709 task_followup 证据关联：用 resolveTaskFollowupBinding 判定强绑定/弱建议/需确认/无候选。

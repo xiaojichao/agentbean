@@ -381,6 +381,8 @@ export interface DispatchRepository {
   touchHeartbeat(input: { dispatchId: ID; at: UnixMs }): Promise<DispatchMutationResult | null>;
   listPendingOlderThan(input: { heartbeatCutoff: UnixMs; legacyCutoff: UnixMs }): Promise<DispatchRecord[]>;
   listByMessage(messageId: ID): Promise<DispatchRecord[]>;
+  /** 仅从同 Team/Channel 的原始 Message.taskId 解析 direct/legacy 执行，不按标题或 Agent 猜测。 */
+  listByTaskOrigin(input: { teamId: ID; channelId: ID; taskId: ID }): Promise<DispatchRecord[]>;
   listByTeam(teamId: ID): Promise<DispatchRecord[]>;
 }
 

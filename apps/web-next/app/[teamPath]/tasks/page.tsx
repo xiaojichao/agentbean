@@ -893,6 +893,7 @@ function TaskCard(props: {
       </div>
       {props.task.description && <div className="mt-2 line-clamp-3 text-xs leading-5 text-neutral-500">{props.task.description}</div>}
       <TaskMeta task={props.task} participants={props.participants} currentUserId={props.currentUserId} />
+      <TaskExecutionDetail entry={props.workspaceEntry} />
       <StatusButton task={props.task} workspaceEntry={props.workspaceEntry} open={props.statusMenuOpen} onOpen={props.onStatusMenu} onMove={props.onMove} />
     </article>
   );
@@ -920,6 +921,7 @@ function TaskRow(props: {
         <div className="truncate text-[11px] font-medium text-neutral-400">{channelLabel(props.task.channelId, props.channels)} #{props.number}</div>
         <div className="truncate text-sm font-semibold text-neutral-900">{props.task.title}</div>
         {props.task.description && <div className="truncate text-xs text-neutral-500">{props.task.description}</div>}
+        <TaskExecutionDetail entry={props.workspaceEntry} />
       </div>
       <div className="truncate text-xs text-neutral-600">{participantName(props.task.creatorId, props.participants, props.currentUserId)}</div>
       <div className="truncate text-xs text-neutral-600">{props.task.assigneeId ? participantName(props.task.assigneeId, props.participants, props.currentUserId) : '未分配'}</div>
@@ -929,6 +931,13 @@ function TaskRow(props: {
         : <span className="text-[10px] font-semibold text-violet-700">{managed ? '流程受管' : '治理加载中'}</span>}
     </article>
   );
+}
+
+function TaskExecutionDetail({ entry }: { entry?: ChannelTaskWorkspaceEntryV1 }) {
+  if (!entry || ['done', 'cancelled', 'closed'].includes(entry.task.status)) return null;
+  return <p data-smoke="task-execution-detail" className="mt-2 text-xs leading-5 text-neutral-500">
+    {entry.responsibilityFocus.detail}
+  </p>;
 }
 
 function TaskActionButtons({ onReorderTop, onDelete, compact }: {

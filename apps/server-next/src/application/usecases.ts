@@ -1,4 +1,6 @@
 import type { ChannelHistoryPageDto } from '../../../../packages/contracts/src/channel-history.js';
+import { createOrReuseMessageTask } from './message-task-link.js';
+import { describeDirectTaskExecution, markDirectTaskInReview } from './direct-task-execution.js';
 import { createCompletionNotificationService } from './completion-notification-service.js';
 import { createPushNotificationService } from './push-notification-service.js';
 import type { WebPushSender } from '../infra/web-push.js';
@@ -6323,7 +6325,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const coordinatedManagedRoot = management.kind === 'managed' && management.managementPhase >= 2;
       let task: TaskRecord | null = null;
       if (shouldCreateTask && taskId) {
-        task = await repositories.tasks.create({
+        task = await repositories.channelCoordinationUnitOfWork.run((transaction) => createOrReuseMessageTask(transaction, outcome.message.id, {
           id: taskId,
           teamId: messageInput.teamId,
           title: messageInput.body.trim() || '附件',
@@ -6336,8 +6338,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           sortOrder: now,
           createdAt: now,
           updatedAt: now,
-        });
-        await repositories.messages.setTaskIdIfAbsent({ messageId: outcome.message.id, taskId: task.id });
+        }));
+        if (management.kind === 'managed' && task.id !== taskId) {
+          return makeFailure('CONFLICT', 'Message is already linked to another task');
+        }
       }
       if (task && management.kind === 'managed' && management.managementPhase >= 2) {
         await taskCoordinationKernel.bootstrapRootCoordination({
@@ -12132,7 +12136,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               let recoveredTask: TaskDto | null = null;
               if (!replayAttempt && dispatch.status === 'succeeded') {
                 const recoveredOrigin = await repositories.messages.getById(dispatch.messageId);
-                recoveredTask = await markLinkedTaskInReview(repositories, recoveredOrigin, clock.now());
+                recoveredTask = await markDirectTaskInReview(repositories, recoveredOrigin, dispatch, clock.now());
                 if (replayDeliveryMessage) {
                   const currentReply = await repositories.messages.getById(replayDeliveryMessage.id);
                   await repositories.messages.updateMeta({
@@ -12794,7 +12798,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       if (resultSucceeded && !managedAttempt) {
-        completedTask = await markLinkedTaskInReview(repositories, originMessage, now);
+        completedTask = await markDirectTaskInReview(repositories, originMessage, completed.dispatch, now);
       }
       if (resultSucceeded && !managedAttempt && authoritativeMessage) {
         await repositories.messages.updateMeta({
@@ -16599,28 +16603,6 @@ async function restoreAgentBusyIfDispatchArrived(
   });
 }
 
-async function markLinkedTaskInReview(
-  repositories: ServerNextRepositories,
-  message: MessageRecord | null,
-  updatedAt: number,
-): Promise<TaskDto | null> {
-  const taskId = typeof message?.meta?.taskId === 'string' ? message.meta.taskId : null;
-  if (!taskId) {
-    return null;
-  }
-  const task = await repositories.tasks.getById(taskId);
-  if (!task || task.status === 'in_review' || task.status === 'done' || task.status === 'closed') {
-    return null;
-  }
-  return await repositories.tasks.update({
-    taskId,
-    changes: {
-      status: 'in_review',
-      updatedAt,
-    },
-  });
-}
-
 async function markLinkedTaskTodoIfInProgress(
   repositories: ServerNextRepositories,
   message: MessageRecord | null,
@@ -18483,10 +18465,9 @@ async function buildTaskDeliveryOverview(
   timeline.sort((a, b) => a.at - b.at);
 
   // 当前责任焦点(AC3/AC10:只由 Offer/claim/execution/delivery/review 等 Server 事实投影)。
-  const focus = await deriveTaskResponsibilityFocus(
-    repositories,
-    { task, coordination, offers, claim },
-  );
+  const focus = !coordination && !managementRun
+    ? await describeDirectTaskExecution(repositories, { task, channelId, packageCount: packages.length, pendingCount: pendingDeliveries.length })
+    : await deriveTaskResponsibilityFocus(repositories, { task, coordination, offers, claim });
 
   // Task 级可发现性动作(AC9:Server 计算,web 只渲染;command 提交仍完整复验)。
   const acceptanceRun = task.status === 'in_review' ? managementRun : null;
