@@ -1,7 +1,7 @@
 import type { ChannelHistoryPageDto } from '../../../../packages/contracts/src/channel-history.js';
 import { createOrReuseMessageTask } from './message-task-link.js';
 import { describeDirectTaskExecution, markDirectTaskInReview } from './direct-task-execution.js';
-import { resolveDirectDispatchTask } from './direct-dispatch-task.js';
+import { isFrozenFollowupDispatchCurrent, resolveDirectDispatchTask } from './direct-dispatch-task.js';
 import { createCompletionNotificationService } from './completion-notification-service.js';
 import { createPushNotificationService } from './push-notification-service.js';
 import type { WebPushSender } from '../infra/web-push.js';
@@ -6428,17 +6428,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      return makeSuccess({
-        request: await buildDispatchRequest(
-          repositories,
-          dispatch,
-          agent,
-          clock.now(),
-          requestInput.purpose !== 'route',
-          input.serverCapsuleRuntimeContextResolver,
-          projectCollaborationRollout.inputSetOutput,
-        ),
-      });
+      try {
+        return makeSuccess({
+          request: await buildDispatchRequest(
+            repositories, dispatch, agent, clock.now(), requestInput.purpose !== 'route',
+            input.serverCapsuleRuntimeContextResolver, projectCollaborationRollout.inputSetOutput,
+          ),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.startsWith('DEVICE_WORKSPACE_SNAPSHOT_') && message !== 'DIRECT_TASK_EXECUTION_STALE') throw error;
+        await repositories.dispatches.markFailed({ dispatchId: dispatch.id, error: message, completedAt: clock.now() });
+        return makeFailure('CONFLICT', message);
+      }
     },
 
     async acceptDispatch(acceptInput) {
@@ -6474,7 +6476,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         recordProjectInputSetRuntimeFailure(message);
-        if (!message.startsWith('PROJECT_DOCUMENT_INPUT_SET_')) throw error;
+        if (!message.startsWith('PROJECT_DOCUMENT_INPUT_SET_')
+          && !message.startsWith('DEVICE_WORKSPACE_SNAPSHOT_') && message !== 'DIRECT_TASK_EXECUTION_STALE') throw error;
         await repositories.dispatches.markFailed({
           dispatchId: dispatch.id,
           error: message,
@@ -6482,13 +6485,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
         return makeFailure('CONFLICT', message);
       }
-      const accepted = await repositories.dispatches.markAccepted({
-        dispatchId: dispatch.id,
-        agentId: agent.id,
-        expectedUpdatedAt: dispatch.updatedAt,
-        prompt: request.prompt,
-        acceptedAt: now,
+      const accepted = await repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
+        if (!request.managementInvocationId && !await isFrozenFollowupDispatchCurrent(transaction, dispatch, request.taskId)) {
+          await transaction.dispatches.markFailed({ dispatchId: dispatch.id, error: 'DIRECT_TASK_EXECUTION_STALE', completedAt: now });
+          return 'stale' as const;
+        }
+        return transaction.dispatches.markAccepted({ dispatchId: dispatch.id, agentId: agent.id,
+          expectedUpdatedAt: dispatch.updatedAt, prompt: request.prompt, acceptedAt: now });
       });
+      if (accepted === 'stale') return makeFailure('CONFLICT', 'DIRECT_TASK_EXECUTION_STALE');
       if (!accepted) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
@@ -15337,6 +15342,10 @@ async function buildDispatchRequest(
   const directTask = !managementInvocation
     ? await resolveDirectDispatchTask(repositories, dispatch, originMessage)
     : null;
+  if (!managementInvocation && originMessage?.threadId && originMessage.threadId !== originMessage.id
+    && typeof originMessage.meta?.taskId === 'string' && !directTask) {
+    throw new Error('DIRECT_TASK_EXECUTION_STALE');
+  }
   const directTaskCoordination = directTask
     ? await repositories.taskCoordination.coordinations.getByTaskId(directTask.id)
     : null;

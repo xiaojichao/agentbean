@@ -1,3 +1,4 @@
+import type { TaskCoordinationTransactionRepositories } from './task-coordination-unit-of-work.js';
 import type { DispatchRecord, MessageRecord, ServerNextRepositories, TaskRecord } from './repositories.js';
 
 /** 普通讨论串补交只继承唯一的原 Task；多任务讨论串不能用“最近一个”猜归属。 */
@@ -50,4 +51,20 @@ export async function resolveDirectDispatchTask(
     const linked = await transaction.messages.setTaskIdIfAbsent({ messageId: origin.id, taskId });
     return linked?.taskId === taskId ? task : null;
   });
+}
+
+/** 接受派发时在同一事务内使用当前事实；冻结的关联不等于授权。 */
+export async function isFrozenFollowupDispatchCurrent(
+  repositories: TaskCoordinationTransactionRepositories,
+  dispatch: DispatchRecord,
+  expectedTaskId: string | undefined,
+): Promise<boolean> {
+  const origin = await repositories.messages.getById(dispatch.messageId);
+  if (!origin?.threadId || origin.threadId === origin.id || typeof origin.meta?.taskId !== 'string') return true;
+  const task = await repositories.tasks.getById(origin.meta.taskId);
+  return Boolean(task && task.id === expectedTaskId && task.teamId === dispatch.teamId && task.channelId === dispatch.channelId
+    && !['done', 'closed', 'cancelled'].includes(task.status)
+    && (!task.assigneeId || task.assigneeId === dispatch.agentId)
+    && !await repositories.coordination.coordinations.getByTaskId(task.id)
+    && !await repositories.management.runs.getByRootTaskId(task.id));
 }

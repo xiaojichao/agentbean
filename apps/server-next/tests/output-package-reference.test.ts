@@ -497,8 +497,11 @@ for (const variant of variants) {
       const linkedOrigin = await seedValue.repositories.messages.getById(sent.message.id);
       await seedValue.repositories.messages.updateMeta({ messageId: sent.message.id,
         meta: { ...linkedOrigin?.meta, taskId: 'missing-task' } });
+      await expect(seedValue.app.acceptDispatch({ dispatchId: 'dispatch-direct-snapshot', agentId: seedValue.agentId, quietWindowMs: 0 }))
+        .resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
       await expect(seedValue.app.getDispatchRequest({ dispatchId: 'dispatch-direct-snapshot' }))
-        .rejects.toThrow('DEVICE_WORKSPACE_SNAPSHOT_UNAVAILABLE');
+        .resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+      expect((await seedValue.repositories.dispatches.getById('dispatch-direct-snapshot'))?.status).toBe('failed');
       await seedValue.repositories.messages.updateMeta({ messageId: sent.message.id, meta: linkedOrigin!.meta! });
 
       // 后续同路径 append v2(current 指针漂移),历史消息引用不变。

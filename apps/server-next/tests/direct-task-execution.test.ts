@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 import { describeDirectTaskExecution, markDirectTaskInReview } from '../src/application/direct-task-execution.js';
 import { createOrReuseMessageTask } from '../src/application/message-task-link.js';
+import { createServerNextUseCases } from '../src/application/usecases.js';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
 import { resolveDirectDispatchTask } from '../src/application/direct-dispatch-task.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
@@ -109,6 +110,30 @@ describe.each([false, true])('direct Task evidence (sqlite=%s)', (sqlite) => {
       const frozen = await h.repositories.messages.getById(followup.id);
       expect(await resolveDirectDispatchTask(h.repositories, dispatch, frozen)).toBeNull();
       expect(frozen?.meta?.taskId).toBe(h.task.id);
+    } finally { h.close(); }
+  });
+
+  test.each(['cancelled', 'reassigned'] as const)('接受事务前 %s 不得接受冻结补交', async (change) => {
+    const h = await fixture(sqlite);
+    try {
+      await h.repositories.users.create({ id: 'user', username: 'user', passwordHash: 'test', role: 'user', createdAt: 1, updatedAt: 1 });
+      await h.repositories.teams.create({ id: 'team', ownerId: 'user', name: 'Team', path: 'testteam', visibility: 'private', createdAt: 1 });
+      await h.repositories.agents.upsert({ id: 'agent', primaryTeamId: 'team', visibleTeamIds: ['team'],
+        name: 'agent', source: 'discovered', category: 'agentos-hosted', adapterKind: 'hermes', status: 'online', lastSeenAt: 1 });
+      const followup = await h.repositories.messages.append({ ...h.origin, id: 'followup', threadId: h.origin.id, createdAt: 10 });
+      await h.repositories.dispatches.create({ ...h.dispatch, id: 'queued-followup', messageId: followup.id,
+        requestId: 'queued-followup', status: 'queued', createdAt: 10, updatedAt: 10 });
+      const app = createServerNextUseCases({ repositories: h.repositories, clock: { now: () => 20 } });
+      const run = h.repositories.taskCoordinationUnitOfWork.run.bind(h.repositories.taskCoordinationUnitOfWork);
+      h.repositories.taskCoordinationUnitOfWork.run = async (operation) => {
+        // 模拟请求装配完成后、接受事务开始前的状态变化。
+        await h.repositories.tasks.update({ taskId: h.task.id,
+          changes: change === 'cancelled' ? { status: 'cancelled' } : { assigneeId: 'other' } });
+        return run(operation);
+      };
+      expect(await app.acceptDispatch({ dispatchId: 'queued-followup', agentId: 'agent', quietWindowMs: 0 }))
+        .toMatchObject({ ok: false, error: 'CONFLICT' });
+      expect(await h.repositories.dispatches.getById('queued-followup')).toMatchObject({ status: 'failed', error: 'DIRECT_TASK_EXECUTION_STALE' });
     } finally { h.close(); }
   });
 
