@@ -546,6 +546,7 @@ export function agentMemoryProjectionEvents(socket: Socket = getWebSocket()) {
 }
 
 export interface PiProviderEvents {
+  deleteCard(cardId: string): Promise<{ ok: boolean; cardId?: string; error?: string; message?: string }>;
   listPresets(): Promise<{ ok: boolean; presets?: PiProviderPresetDescriptorDto[]; error?: string; message?: string }>;
   listCards(): Promise<{ ok: boolean; cards?: PiProviderCardDto[]; error?: string; message?: string }>;
   getCard(cardId: string): Promise<{ ok: boolean; card?: PiProviderCardDto; error?: string; message?: string }>;
@@ -565,6 +566,7 @@ export interface PiProviderEvents {
 
 export function piProviderEvents(socket: Socket = getWebSocket()): PiProviderEvents {
   return {
+    deleteCard(cardId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.deleteCard, { cardId }); },
     listPresets() { return emitWithTimeout(socket, WEB_EVENTS.piProvider.listPresets, {}); },
     listCards() { return emitWithTimeout(socket, WEB_EVENTS.piProvider.listCards, {}); },
     getCard(cardId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.getCard, { cardId }); },

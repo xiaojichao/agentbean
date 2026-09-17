@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   PiProviderCardDto,
   ActivePiModelDto,
@@ -124,10 +124,13 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
   const [loading, setLoading] = useState(true);
   const [activeUnavailable, setActiveUnavailable] = useState(true);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const [selectedPreset, setSelectedPreset] = useState<PiProviderPreset>('openai');
+  const [selectedPreset, setSelectedPreset] = useState<PiProviderPreset>('custom_openai_compatible');
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [editorMode, setEditorMode] = useState<EditorMode>('form');
   const [form, setForm] = useState<CardFormState>(EMPTY_FORM);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [discardPending, setDiscardPending] = useState(false);
+  const [deletePending, setDeletePending] = useState<PiProviderCardDto | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testingCardId, setTestingCardId] = useState<string | null>(null);
@@ -166,7 +169,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
       setMessage({ ok: false, text: activeResult.message ?? activeResult.error ?? '当前模型加载失败，请刷新重试' });
     }
     if (!options.preserveEditor && !editorInitializedRef.current && (presetResult.presets?.length ?? 0) > 0) {
-      const first = presetResult.presets![0]!;
+      const first = presetResult.presets!.find((item) => item.preset === 'custom_openai_compatible') ?? presetResult.presets![0]!;
       editorInitializedRef.current = true;
       setSelectedPreset(first.preset);
       setForm(formFromPreset(first));
@@ -177,10 +180,16 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     void load();
   }, [load]);
 
-  const selectedPresetDescriptor = useMemo(
-    () => presets.find((item) => item.preset === selectedPreset) ?? null,
-    [presets, selectedPreset],
-  );
+  useEffect(() => {
+    if (editorOpen) document.querySelector<HTMLElement>('[data-smoke="settings-pi-editor-title"]')?.focus();
+  }, [editorOpen]);
+
+  useEffect(() => {
+    if (!editorDirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [editorDirty]);
 
   if (!isSystemAdmin) {
     return (
@@ -193,8 +202,32 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     );
   }
 
-  const revealEditor = () => {
-    document.querySelector('[data-smoke="settings-pi-card-editor"]')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  const closeEditor = () => {
+    setEditorOpen(false);
+    setEditorDirty(false);
+    setDiscardPending(false);
+    setForm(EMPTY_FORM);
+    setEditingCardId(null);
+  };
+
+  const deleteCard = async () => {
+    if (!deletePending) return;
+    setSaving(true);
+    try {
+      const result = await piProviderEvents().deleteCard(deletePending.id);
+      if (!result.ok) {
+        setMessage({ ok: false, text: result.message ?? result.error ?? '删除失败' });
+        return;
+      }
+      setCards((current) => current.filter((card) => card.id !== deletePending.id));
+      setDeletePending(null);
+      setMessage({ ok: true, text: '供应商已删除，历史记录与运行中的任务已保留。' });
+      await load({ preserveMessage: true });
+    } catch {
+      setMessage({ ok: false, text: '未能确认删除结果，请刷新供应商列表核实。' });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const startCreate = (preset: PiProviderPreset) => {
@@ -205,7 +238,9 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     setEditorMode('form');
     setForm(descriptor ? formFromPreset(descriptor) : EMPTY_FORM);
     setEditorDirty(false);
-    revealEditor();
+    setEditorOpen(true);
+    setDeletePending(null);
+    setDiscardPending(false);
     setMessage(null);
   };
 
@@ -216,7 +251,9 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     setEditorMode('form');
     setForm(formFromCard(card));
     setEditorDirty(false);
-    revealEditor();
+    setEditorOpen(true);
+    setDeletePending(null);
+    setDiscardPending(false);
     setMessage(null);
   };
 
@@ -263,6 +300,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
       advancedConfig: editorMode === 'advanced' ? form.advancedJson : undefined,
     };
 
+    try {
     const result = editingCardId
       ? await piProviderEvents().updateCard({
           cardId: editingCardId,
@@ -275,16 +313,18 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
           apiKey: form.apiKey,
         });
 
-    setSaving(false);
     if (!result.ok || !result.card) {
       setMessage({ ok: false, text: result.message ?? result.error ?? '保存失败' });
       return;
     }
     setMessage({ ok: true, text: editingCardId ? 'Draft 已更新' : 'Draft 已创建' });
-    setEditingCardId(result.card.id);
-    setForm(formFromCard(result.card));
-    setEditorDirty(false);
+    closeEditor();
     await load({ preserveEditor: true, preserveMessage: true });
+    } catch {
+      setMessage({ ok: false, text: '未能确认保存结果，请返回列表核实后再重试。' });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const copyCard = async (cardId: string) => {
@@ -331,7 +371,6 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
       return;
     }
     const test = result.test as { status?: string; diagnosticCode?: string | null } | undefined;
-    startEdit(result.card);
     setMessage({
       ok: test?.status === 'passed',
       text: test?.status === 'passed'
@@ -361,7 +400,6 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
       setMessage({ ok: false, text: result.message ?? result.error ?? '发布失败' });
       return;
     }
-    startEdit(result.card);
     setMessage({ ok: true, text: '已发布为不可变 revision' });
     await load({ preserveEditor: true, preserveMessage: true });
   };
@@ -398,6 +436,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
       </div>
 
       {message && <p role={message.ok ? 'status' : 'alert'} className={`rounded-lg border p-4 text-sm ${message.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`} data-smoke="settings-pi-message">{message.text}</p>}
+      {!editorOpen && <>
       <PiModelSwitcher cards={cards} activeModel={activeModel} history={activeHistory} readiness={configurationReadiness} loading={loading} disabled={saving || loading || testingCardId !== null} unavailable={activeUnavailable} onActivate={activateRevision} />
 
       <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-pi-provider-supply">
@@ -416,33 +455,21 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
               </button>
             </div>
 
-            <div className="mb-4 flex flex-wrap gap-2" data-smoke="settings-pi-presets" data-mvp-presets={MVP_PRESETS.join(',')}>
-              {presets.map((preset) => (
-                <button
-                  key={preset.preset}
-                  type="button"
-                  onClick={() => startCreate(preset.preset)}
-                  className={`rounded-md border px-3 py-1.5 text-xs ${selectedPreset === preset.preset && !editingCardId ? 'border-pink-300 bg-pink-50 text-pink-800' : 'border-neutral-200 hover:bg-neutral-50'}`}
-                  data-smoke={`settings-pi-preset-${preset.preset}`}
-                  disabled={saving || testingCardId !== null || editorDirty}
-              >
-                  新建 {preset.displayName}
-                </button>
-              ))}
-            </div>
+            <button type="button" onClick={() => startCreate('custom_openai_compatible')} disabled={loading || saving || testingCardId !== null || !!deletePending} className="mb-4 rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50" data-smoke="settings-pi-add">＋ 添加新供应商</button>
 
-            <div className="grid gap-3 lg:grid-cols-2" data-smoke="settings-pi-card-list">
+            <div className="grid gap-3" data-smoke="settings-pi-card-list">
               {cards.length === 0 && !loading ? (
                 <p className="text-sm text-neutral-500">尚未创建 Provider Card。</p>
               ) : cards.map((card) => (
                 <div
                   key={card.id}
-                  className={`space-y-4 rounded-xl border p-4 ${activeModel?.cardId === card.id ? 'border-emerald-200 bg-emerald-50/30' : 'border-neutral-200'}`}
+                  className={`space-y-4 rounded-xl border p-5 ${activeModel?.cardId === card.id ? 'border-emerald-200 bg-emerald-50/30' : 'border-neutral-200'}`}
                   data-smoke="settings-pi-card-row"
                   data-card-id={card.id}
                 >
                   <div>
                     <div className="text-sm font-semibold">{card.displayName}</div>
+                    <p className="mt-1 break-all text-xs text-neutral-500">{card.draftRevision?.config.baseUrl ?? card.publishedRevision?.config.baseUrl}</p>
                     {activeModel?.cardId === card.id && <p className="mt-2 break-all text-xs text-emerald-700">当前生效：{activeModel.modelId} · {activeModel.revisionId}</p>}
                     <p className="my-2 break-all text-sm"><span className="mr-2 text-xs text-neutral-500">{card.draftRevision ? '草稿模型' : '已发布模型'}</span><span className="font-mono">{card.draftRevision?.config.modelId ?? card.publishedRevision?.config.modelId ?? '待选择模型'}</span></p>
                     <div className="text-xs text-neutral-500">
@@ -479,6 +506,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
                     <button type="button" onClick={() => void publishCard(card.id)} disabled={saving || testingCardId !== null || editorDirty || !card.canPublish} className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50" data-smoke="settings-pi-publish">
                       发布
                     </button>
+                    <button type="button" onClick={() => { setDeletePending(card); setMessage(null); }} disabled={saving || testingCardId !== null || activeUnavailable || activeModel?.cardId === card.id} title={activeModel?.cardId === card.id ? '请先切换当前生效模型' : '删除供应商'} className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50" data-smoke="settings-pi-delete">删除</button>
                     <button type="button" onClick={() => void copyCard(card.id)} disabled={saving || testingCardId !== null || editorDirty} className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50">
                       复制
                     </button>
@@ -488,7 +516,20 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
             </div>
           </section>
 
-          <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-pi-card-editor">
+      {deletePending && <div role="alertdialog" aria-labelledby="pi-delete-title" aria-describedby="pi-delete-description" className="rounded-xl border border-red-200 bg-red-50 p-5">
+        <div className="space-y-4">
+          <h3 id="pi-delete-title" className="font-semibold">删除 {deletePending.displayName}？</h3>
+          <p id="pi-delete-description" className="text-sm text-neutral-600">删除后无法再选择此供应商。已发布版本、切换历史和运行中的任务会保留。此操作无法撤销。</p>
+          {message && !message.ok && <p role="alert" className="text-sm text-red-700">{message.text}</p>}
+          <div className="flex justify-end gap-3">
+            <button autoFocus type="button" disabled={saving} onClick={() => setDeletePending(null)} className="rounded border px-4 py-2 text-sm">取消</button>
+            <button type="button" disabled={saving} onClick={() => void deleteCard()} className="rounded bg-red-600 px-4 py-2 text-sm text-white">{saving ? '删除中…' : '确认删除'}</button>
+          </div>
+        </div>
+      </div>}
+      </>}
+
+      {editorOpen && <section className="rounded-xl border border-neutral-200 bg-white p-6" data-smoke="settings-pi-card-editor">
             {editorDirty && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
               <p>有未保存的修改。保存草稿后才能刷新模型、测试或发布；当前生效模型不受影响。</p>
               <button type="button" disabled={saving || testingCardId !== null} onClick={() => {
@@ -497,8 +538,8 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
               }} className="shrink-0 rounded border border-amber-300 px-2 py-1">放弃未保存修改</button>
             </div>}
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-neutral-700">
-                {editingCardId ? '编辑 Draft' : `创建 Draft${selectedPresetDescriptor ? ` · ${selectedPresetDescriptor.displayName}` : ''}`}
+              <h3 tabIndex={-1} data-smoke="settings-pi-editor-title" className="text-lg font-semibold outline-none">
+                {editingCardId ? '编辑供应商' : '添加新供应商'}
               </h3>
               <div className="flex rounded-md border border-neutral-200 p-0.5">
                 <button type="button" disabled={saving || testingCardId !== null} onClick={() => switchEditorMode('form')} className={`rounded px-2 py-1 text-xs ${editorMode === 'form' ? 'bg-neutral-900 text-white' : 'text-neutral-600'}`} data-smoke="settings-pi-editor-form">
@@ -510,10 +551,29 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
               </div>
             </div>
 
+            {!editingCardId && <div className="mb-6"><p className="mb-2 text-sm text-neutral-600">选择预设供应商，或填写自定义连接。已有输入时，请先放弃修改再更换预设。</p>
+            <div className="mb-4 flex flex-wrap gap-2" data-smoke="settings-pi-presets" data-mvp-presets={MVP_PRESETS.join(',')}>
+              {presets.map((preset) => (
+                <button
+                  key={preset.preset}
+                  type="button"
+                  onClick={() => startCreate(preset.preset)}
+                  className={`rounded-md border px-3 py-1.5 text-xs ${selectedPreset === preset.preset && !editingCardId ? 'border-pink-300 bg-pink-50 text-pink-800' : 'border-neutral-200 hover:bg-neutral-50'}`}
+                  data-smoke={`settings-pi-preset-${preset.preset}`}
+                  disabled={saving || testingCardId !== null || editorDirty}
+              >
+                  {preset.displayName}
+                </button>
+              ))}
+            </div>
+
+            </div>}
+            <p className="mb-5 text-sm text-neutral-500">保存后可测试和发布模型，再切换为系统当前模型。</p>
+            {editingCardId && <button type="button" disabled={saving || editorDirty} onClick={() => void discoverModels(editingCardId)} className="mb-4 text-sm text-pink-700 underline disabled:opacity-50">获取模型列表</button>}
             {editorMode === 'form' ? (
               <fieldset disabled={saving || testingCardId !== null} className="grid gap-3 sm:grid-cols-2">
                 <label className="block text-xs text-neutral-500 sm:col-span-2">
-                  显示名称
+                  供应商名称
                   <input value={form.displayName} onChange={(e) => patchForm({ displayName: e.target.value })} className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm" data-smoke="settings-pi-field-display-name" />
                 </label>
                 <label className="block text-xs text-neutral-500 sm:col-span-2">
@@ -521,9 +581,9 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
                   <input value={form.baseUrl} onChange={(e) => patchForm({ baseUrl: e.target.value })} className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm" data-smoke="settings-pi-field-base-url" />
                 </label>
                 <label className="block text-xs text-neutral-500">
-                  Endpoint Mode
+                  接口格式
                   <select value={form.endpointMode} onChange={(e) => patchForm({ endpointMode: e.target.value as PiProviderEndpointMode })} className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm" data-smoke="settings-pi-field-endpoint-mode">
-                    <option value="chat_completions">chat_completions</option>
+                    <option value="chat_completions">OpenAI Chat Completions</option>
                   </select>
                 </label>
                 <label className="block text-xs text-neutral-500">
@@ -544,7 +604,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
                   <input value={form.maxOutputTokens} onChange={(e) => patchForm({ maxOutputTokens: e.target.value })} className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm" data-smoke="settings-pi-field-max-output-tokens" />
                 </label>
                 <label className="block text-xs text-neutral-500 sm:col-span-2">
-                  控制台链接
+                  官网 / 控制台链接
                   <input value={form.consoleUrl} onChange={(e) => patchForm({ consoleUrl: e.target.value })} className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm" data-smoke="settings-pi-field-console-url" />
                 </label>
                 <label className="block text-xs text-neutral-500 sm:col-span-2">
@@ -572,28 +632,19 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
               </div>
             )}
 
-            <div className="mt-4 flex gap-2">
-              <button
-                type="button"
-                onClick={() => void save()}
-                disabled={saving || testingCardId !== null}
-                className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50"
-                data-smoke="settings-pi-save"
-              >
-                {saving ? '保存中…' : '保存 Draft'}
+            {discardPending && <div role="alert" className="mt-5 rounded-lg bg-amber-50 p-4 text-sm text-amber-900">
+              <p>尚有未保存的修改，确认放弃并返回列表？</p>
+              <button type="button" onClick={() => setDiscardPending(false)} className="mr-4 mt-3 underline">继续编辑</button>
+              <button type="button" onClick={closeEditor} className="mt-3 underline">放弃并返回</button>
+            </div>}
+            <div className="sticky bottom-0 mt-6 flex items-center justify-end gap-3 border-t bg-white py-4">
+              <button type="button" disabled={saving} onClick={() => editorDirty ? setDiscardPending(true) : closeEditor()} className="rounded-lg border border-neutral-300 px-4 py-2 text-sm">取消</button>
+              <button type="button" onClick={() => void save()} disabled={saving || testingCardId !== null} className="rounded-lg bg-neutral-900 px-5 py-2 text-sm font-medium text-white disabled:opacity-50" data-smoke="settings-pi-save">
+                {saving ? '保存中…' : editingCardId ? '保存修改' : '添加供应商'}
               </button>
-              {editingCardId && (
-                <button
-                  type="button"
-                  disabled={saving || testingCardId !== null || editorDirty}
-                  onClick={() => startCreate(selectedPreset)}
-                  className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50"
-                >
-                  新建空白
-                </button>
-              )}
             </div>
-      </section>
+      </section>}
+      {!editorOpen && <>
       <details className="rounded-lg border border-neutral-200 p-5"><summary className="cursor-pointer text-sm font-semibold">系统知识</summary><div className="mt-4">
       <SystemUserMemoryPanel
         scope="system"
@@ -604,6 +655,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
       />
 
       </div></details>
+      </>}
     </div>
   );
 }

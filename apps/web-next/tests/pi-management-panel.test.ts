@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   runTest: vi.fn(),
   cancelTest: vi.fn(),
   publishCard: vi.fn(),
+  deleteCard: vi.fn(),
   getActiveModel: vi.fn(),
   setActiveModel: vi.fn(),
 }));
@@ -209,7 +210,8 @@ describe('PI Management console scope', () => {
     render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
     await waitFor(() => expect(mocks.listPresets).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: '保存 Draft' }));
+    fireEvent.click(screen.getByRole('button', { name: /添加新供应商/ }));
+    fireEvent.click(screen.getByRole('button', { name: '添加供应商' }));
 
     await waitFor(() => expect(screen.getByText('Draft 已创建')).toBeTruthy());
     await waitFor(() => expect(mocks.listPresets).toHaveBeenCalledTimes(2));
@@ -361,13 +363,13 @@ describe('PI Management console scope', () => {
     render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
     fireEvent.click(await screen.findByRole('button', { name: '编辑' }));
     fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'new-model' } });
-    expect((screen.getByRole('button', { name: '运行测试' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '发布' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '新建 OpenAI' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '运行测试' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '发布' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /添加新供应商/ })).toBeNull();
     const savedCard = { ...sourceCard, draftRevision: { ...sourceCard.draftRevision, config: { ...sourceCard.draftRevision.config, modelId: 'new-model' } } };
     mocks.updateCard.mockResolvedValue({ ok: true, card: savedCard });
     mocks.listCards.mockResolvedValue({ ok: true, cards: [savedCard] });
-    fireEvent.click(screen.getByRole('button', { name: '保存 Draft' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存修改' }));
     await waitFor(() => expect(screen.queryByRole('button', { name: '放弃未保存修改' })).toBeNull());
     expect(mocks.updateCard).toHaveBeenCalledWith(expect.objectContaining({ cardId: 'card-1', modelId: 'new-model', apiKey: null }));
     expect((screen.getByRole('button', { name: '运行测试' }) as HTMLButtonElement).disabled).toBe(false);
@@ -399,4 +401,55 @@ describe('PI Management console scope', () => {
     expect(screen.queryByLabelText('Model ID')).toBeNull();
   });
 
+});
+
+describe('provider CRUD views', () => {
+  test('cancel protects unsaved input and returns to the list after confirmation', async () => {
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    const add = await screen.findByRole('button', { name: /添加新供应商/ });
+    await waitFor(() => expect((add as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByLabelText('供应商名称')).toBeNull();
+    fireEvent.click(add);
+    fireEvent.change(screen.getByLabelText('供应商名称'), { target: { value: 'My provider' } });
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    fireEvent.click(screen.getByRole('button', { name: '继续编辑' }));
+    expect((screen.getByLabelText('供应商名称') as HTMLInputElement).value).toBe('My provider');
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    fireEvent.click(screen.getByRole('button', { name: '放弃并返回' }));
+    expect(screen.queryByLabelText('供应商名称')).toBeNull();
+    expect(mocks.createCard).not.toHaveBeenCalled();
+  });
+
+  test('deletion needs confirmation and only removes the row after success', async () => {
+    mocks.deleteCard.mockImplementation(async () => {
+      mocks.listCards.mockResolvedValue({ ok: true, cards: [] });
+      return { ok: true, cardId: 'card-1' };
+    });
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    fireEvent.click(await screen.findByRole('button', { name: '删除', exact: true }));
+    expect(mocks.deleteCard).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    fireEvent.click(screen.getByRole('button', { name: '删除', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+    await screen.findByText('供应商已删除，历史记录与运行中的任务已保留。');
+    await waitFor(() => expect(screen.queryByRole('button', { name: '编辑' })).toBeNull());
+    expect(mocks.deleteCard).toHaveBeenCalledWith('card-1');
+  });
+
+  test('active provider cannot be deleted; server rejection preserves an inactive row', async () => {
+    mocks.getActiveModel.mockResolvedValue({ ok: true, activeModel: { cardId: 'card-1', revisionId: 'r1', modelId: 'model', changedAt: 1 }, history: [] });
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    const view = render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    expect((await screen.findByRole('button', { name: '删除', exact: true }) as HTMLButtonElement).disabled).toBe(true);
+    view.unmount();
+    mocks.getActiveModel.mockResolvedValue({ ok: true, activeModel: null, history: [] });
+    mocks.deleteCard.mockResolvedValue({ ok: false, message: '请先切换当前生效模型' });
+    render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    fireEvent.click(await screen.findByRole('button', { name: '删除', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+    await waitFor(() => expect(screen.getByRole('alertdialog').textContent).toContain('请先切换当前生效模型'));
+    expect(screen.getByRole('button', { name: '编辑' })).toBeTruthy();
+  });
 });

@@ -765,6 +765,8 @@ _Avoid_: Public PI health、普通用户 PI 状态、侧栏常驻 normal、把�
 ## PI Provider Card
 
 系统管理员维护的一份完整 Server provider 配置，也是 PI Provider Supply 在 MVP 中的基本管理单元。它从预设或 Custom 创建，包含显示信息、协议、Endpoint、Credential 引用、可选模型目录、默认模型和经过校验的高级配置；支持复制、模型获取、生产同路径测试、备注与控制台链接。高级配置不作为默认入口，Credential 不向 Team 暴露。
+
+管理界面以供应商列表为入口，添加与编辑使用独立表单。系统管理员可以删除非当前生效的供应商；删除与激活在同一事务边界内互斥。删除留下审计时间与操作者，供应商不再出现在管理列表，也不能编辑、复制、测试、发布或重新激活；已发布 revision、加密 Credential 与切换历史保留，供删除前已固定版本的运行继续使用。删除当前 Active PI Model 所属供应商必须先切换到其他供应商。
 _Avoid_: Provider Connection 与 Model Deployment 多层对象、Team 模型配置、可回显明文 Credential。
 
 ## PI Provider Card revision

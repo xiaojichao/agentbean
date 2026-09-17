@@ -216,6 +216,7 @@ export function registerWebSocketHandlers(
     bind(socket, WEB_EVENTS.piProvider.runTest, app, 'runPiProviderTest', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.cancelTest, app, 'cancelPiProviderTest', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.publishCard, app, 'publishPiProviderCard', undefined, piProviderBindOptions);
+    bind(socket, WEB_EVENTS.piProvider.deleteCard, app, 'deletePiProviderCard', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.setActiveModel, app, 'setActivePiModel', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.getActiveModel, app, 'getActivePiModel', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.setEmergencyStop, app, 'setEmergencyStop', undefined, piProviderBindOptions);

@@ -167,7 +167,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
     cardId: string,
   ): Promise<{ summary: string; draftRevisionId: string; draft: PiProviderCardRevisionRecord } | null> {
     const card = await repositories.cards.getById(cardId);
-    if (!card?.draftRevisionId) return null;
+    if (card?.deletedAt != null || !card?.draftRevisionId) return null;
     const draft = await repositories.revisions.getById(card.draftRevisionId);
     if (!draft) return null;
     const credential = await repositories.credentials.getById(card.credentialRef);
@@ -193,7 +193,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
     repositories: PiProviderRepositories,
   ): Promise<PiProviderCardDto | null> {
     const card = await repositories.cards.getById(cardId);
-    if (!card) return null;
+    if (!card || card.deletedAt != null) return null;
     const credential = await repositories.credentials.getById(card.credentialRef);
     const draft = card.draftRevisionId
       ? await repositories.revisions.getById(card.draftRevisionId)
@@ -274,7 +274,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       return { status: 'attention_required', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
     }
     const card = await repositories.cards.getById(active.cardId);
-    if (!card) return { status: 'attention_required', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
+    if (!card || card.deletedAt != null) return { status: 'attention_required', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
     const credential = await resolveApiKey(repositories, card.credentialRef);
     if (!credential.ok) return { status: 'attention_required', diagnosticCode: 'PI_ACTIVE_MODEL_CREDENTIAL_UNAVAILABLE' };
     const summary = computePiProviderConfigSummary({ ...revision.config, credentialFingerprint: credential.fingerprint });
@@ -437,7 +437,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       try {
         outcome = await deps.unitOfWork.run(async (repositories) => {
           const existing = await repositories.cards.getById(parsed.value.cardId);
-          if (!existing) return { kind: 'not_found' } as const;
+          if (!existing || existing.deletedAt != null) return { kind: 'not_found' } as const;
           if (encrypted) {
             const credential = await repositories.credentials.getById(existing.credentialRef);
             if (!credential) throw new Error('Credential reference missing');
@@ -506,7 +506,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       try {
         outcome = await deps.unitOfWork.run(async (repositories) => {
           const source = await repositories.cards.getById(parsed.value.sourceCardId);
-          if (!source) return { kind: 'not_found' } as const;
+          if (!source || source.deletedAt != null) return { kind: 'not_found' } as const;
           const sourceRevisionId = source.draftRevisionId ?? source.publishedRevisionId;
           if (!sourceRevisionId) return { kind: 'no_revision' } as const;
           const sourceRevision = await repositories.revisions.getById(sourceRevisionId);
@@ -576,7 +576,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
 
       const prepared = await deps.unitOfWork.run(async (repositories) => {
         const card = await repositories.cards.getById(parsed.value.cardId);
-        if (!card) return { kind: 'not_found' } as const;
+        if (!card || card.deletedAt != null) return { kind: 'not_found' } as const;
         const workingRevisionId = card.draftRevisionId ?? card.publishedRevisionId;
         if (!workingRevisionId) return { kind: 'no_revision' } as const;
         const revision = await repositories.revisions.getById(workingRevisionId);
@@ -615,7 +615,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       try {
         persistOutcome = await deps.unitOfWork.run(async (repositories) => {
           const card = await repositories.cards.getById(parsed.value.cardId);
-          if (!card) throw new Error('card missing');
+          if (!card || card.deletedAt != null) return 'stale' as const;
           const currentRevisionId = card.draftRevisionId ?? card.publishedRevisionId;
           if (currentRevisionId !== prepared.workingRevisionId) return 'stale' as const;
           await repositories.cards.update({
@@ -655,7 +655,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
         const bound = await draftConfigSummary(repositories, parsed.value.cardId);
         if (!bound) return { kind: 'no_draft' } as const;
         const card = await repositories.cards.getById(parsed.value.cardId);
-        if (!card) return { kind: 'not_found' } as const;
+        if (!card || card.deletedAt != null) return { kind: 'not_found' } as const;
         const apiKey = await resolveApiKey(repositories, card.credentialRef);
         if (!apiKey.ok) return { kind: 'credential', failure: apiKey.failure } as const;
         return {
@@ -731,7 +731,8 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
         return makeFailure('INTERNAL_ERROR', 'Failed to persist test result');
       }
 
-      if (!card || !testDto) return makeFailure('INTERNAL_ERROR', 'Failed to load test result');
+      if (!card) return makeFailure('NOT_FOUND', '供应商已删除');
+      if (!testDto) return makeFailure('INTERNAL_ERROR', 'Failed to load test result');
       const result = makeSuccess({ test: testDto, card });
       assertSafeAckPayload(result);
       return result;
@@ -765,7 +766,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       try {
         outcome = await deps.unitOfWork.run(async (repositories) => {
           const card = await repositories.cards.getById(parsed.value.cardId);
-          if (!card) return { kind: 'not_found' } as const;
+          if (!card || card.deletedAt != null) return { kind: 'not_found' } as const;
           const bound = await draftConfigSummary(repositories, card.id);
           if (!bound) return { kind: 'no_draft' } as const;
 
@@ -831,7 +832,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
         const revision = await repositories.revisions.getById(parsed.value.revisionId);
         if (!revision || revision.status !== 'published') return null;
         const card = await repositories.cards.getById(revision.cardId);
-        if (!card) return null;
+        if (!card || card.deletedAt != null) return null;
         const credential = await repositories.credentials.getById(card.credentialRef);
         if (!credential) return null;
         const summary = computePiProviderConfigSummary({ ...revision.config, credentialFingerprint: credential.fingerprint });
@@ -846,9 +847,24 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       return result;
     },
 
-    // #699 US 26 (deferred)：系统的 DB 已用 ON DELETE RESTRICT 阻止删除正在使用的
-    // Card。应用层 deleteCard API 因需要跨 8+ 文件变更（repository 接口/实现、
-    // socket handler、contract DTO、domain parse 函数），留作后续独立 PR。
+    async deleteCard(raw: unknown): Promise<Ack<{ cardId: string }>> {
+      const parsed = parseGetPiProviderCardRequest(raw);
+      if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
+      const admin = await requireSystemAdmin(parsed.value.userId);
+      if (!admin.ok) return admin;
+      return deps.unitOfWork.run(async (repositories) => {
+        const card = await repositories.cards.getById(parsed.value.cardId);
+        if (!card || card.deletedAt != null) return makeFailure('NOT_FOUND', '供应商不存在或已删除');
+        const active = await repositories.activeModel.get();
+        if (active?.cardId === card.id) {
+          return makeFailure('CONFLICT', '请先切换当前生效模型，再删除此供应商');
+        }
+        const now = deps.clock.now();
+        await repositories.cards.update({ ...card, deletedAt: now, deletedBy: parsed.value.userId, updatedAt: now });
+        activeTests.get(activeTestKey(card.id))?.abort();
+        return makeSuccess({ cardId: card.id });
+      });
+    },
 
     async getActiveModel(raw: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelHistoryEntryDto[]; readiness: PiConfigurationReadinessDto }>> {
       const parsed = parseGetActivePiModelRequest(raw);
