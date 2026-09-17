@@ -909,6 +909,7 @@ export interface ServerNextUseCases {
   runPiProviderTest(input: unknown): Promise<Ack<RunPiProviderTestResult>>;
   cancelPiProviderTest(input: unknown): Promise<Ack<CancelPiProviderTestResult>>;
   publishPiProviderCard(input: unknown): Promise<Ack<PublishPiProviderCardResult>>;
+  deletePiProviderCard(input: unknown): Promise<Ack<{ cardId: string }>>;
   setActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto }>>;
   getActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelDto[]; readiness: PiConfigurationReadinessDto }>>;
   /** Server 内部配置门禁；不绑定到 Web socket。 */
@@ -13544,6 +13545,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async publishPiProviderCard(input) {
       return piProvider.publishCard(input);
+    },
+    async deletePiProviderCard(input) {
+      return piProvider.deleteCard(input);
     },
 
     async setActivePiModel(input) {

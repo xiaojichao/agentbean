@@ -103,6 +103,7 @@ describe('server-next socket handlers', () => {
       discoverPiProviderModels: vi.fn(async (payload) => makeSuccess({ payload })),
       runPiProviderTest: vi.fn(async (payload) => makeSuccess({ payload })),
       cancelPiProviderTest: vi.fn(async (payload) => makeSuccess({ payload })),
+      deletePiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
       publishPiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
       setActivePiModel: vi.fn(async (payload) => makeSuccess({ payload })),
       getActivePiModel: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -154,6 +155,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.piProvider.runTest,
       WEB_EVENTS.piProvider.cancelTest,
       WEB_EVENTS.piProvider.publishCard,
+      WEB_EVENTS.piProvider.deleteCard,
       WEB_EVENTS.piProvider.setActiveModel,
       WEB_EVENTS.piProvider.getActiveModel,
       WEB_EVENTS.piProvider.setEmergencyStop,
@@ -1091,6 +1093,7 @@ describe('server-next socket handlers', () => {
       updatePiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
       copyPiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
       cancelPiProviderTest,
+      deletePiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
     registerWebSocketHandlers(unauthenticatedSocket, app, {
       authenticatedUser: async () => ({
@@ -1112,6 +1115,10 @@ describe('server-next socket handlers', () => {
       userId: 'admin-spoofed', cardId: 'card-1',
     })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
     expect(cancelPiProviderTest).not.toHaveBeenCalled();
+    await expect(unauthenticatedSocket.trigger(WEB_EVENTS.piProvider.deleteCard, {
+      userId: 'admin-spoofed', cardId: 'card-1',
+    })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+    expect(app.deletePiProviderCard).not.toHaveBeenCalled();
 
     const authenticatedSocket = new FakeSocket();
     registerWebSocketHandlers(authenticatedSocket, app, {
@@ -1127,6 +1134,10 @@ describe('server-next socket handlers', () => {
       teamId: 'team-session',
       currentDeviceId: 'device-local',
     });
+    await authenticatedSocket.trigger(WEB_EVENTS.piProvider.deleteCard, {
+      userId: 'admin-spoofed', cardId: 'card-1',
+    });
+    expect(app.deletePiProviderCard).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-session', cardId: 'card-1' }));
     await authenticatedSocket.trigger(WEB_EVENTS.piProvider.cancelTest, {
       userId: 'admin-spoofed', cardId: 'card-1',
     });

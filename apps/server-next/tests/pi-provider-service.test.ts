@@ -861,3 +861,86 @@ describe('pi provider service', () => {
     }
   });
 });
+
+describe.each(['memory', 'sqlite'] as const)('provider deletion (%s)', (storage) => {
+  test('admin deletion preserves pinned invocations/history and prevents reuse, including concurrent activation', async () => {
+    const repos = createInMemoryRepositories();
+    await seedUsers(repos);
+    const db = storage === 'sqlite' ? new Database(':memory:') : null;
+    if (db) {
+      db.prepare('PRAGMA foreign_keys = ON').run();
+      applyGlobalMigrations(db);
+      db.prepare("INSERT INTO users (id, username, password_hash, role, created_at, updated_at) VALUES ('admin-1', 'sysadmin', 'x', 'admin', 1, 1)").run();
+    }
+    const persistence = db ? createSqlitePiProviderPersistence(db) : createInMemoryPiProviderPersistence();
+    let seq = 0;
+    const service = createPiProviderService({
+      ...persistence, users: repos.users, clock: { now: () => 1000 + seq },
+      ids: { nextId: () => `delete-${++seq}` }, resolveSecretKey: () => ({ ok: true, key: secretKey() }), fetch: passingTestFetch(),
+    });
+    try {
+      const created = await service.createCard(validCreate());
+      if (!created.ok) throw new Error('create failed');
+      const cardId = created.card.id;
+      expect(await service.deleteCard({ userId: 'owner-1', cardId })).toMatchObject({ ok: false, error: 'FORBIDDEN' });
+      expect(await service.runTest({ userId: 'admin-1', cardId })).toMatchObject({ ok: true, test: { status: 'passed' } });
+      const published = await service.publishCard({ userId: 'admin-1', cardId });
+      if (!published.ok || !published.card.publishedRevision) throw new Error('publish failed');
+      const revisionId = published.card.publishedRevision.id;
+      await service.setActiveModel({ userId: 'admin-1', revisionId });
+      expect(await service.deleteCard({ userId: 'admin-1', cardId })).toMatchObject({ ok: false, error: 'CONFLICT' });
+      // Move the active binding to another provider, retaining the original in history.
+      const second = await service.createCard(validCreate({ displayName: 'Replacement' }));
+      if (!second.ok) throw new Error('create failed');
+      await service.runTest({ userId: 'admin-1', cardId: second.card.id });
+      const replacement = await service.publishCard({ userId: 'admin-1', cardId: second.card.id });
+      if (!replacement.ok || !replacement.card.publishedRevision) throw new Error('publish failed');
+      await service.setActiveModel({ userId: 'admin-1', revisionId: replacement.card.publishedRevision.id });
+      const [deleted, activated] = await Promise.all([
+        service.deleteCard({ userId: 'admin-1', cardId }),
+        service.setActiveModel({ userId: 'admin-1', revisionId }),
+      ]);
+      expect(deleted).toEqual({ ok: true, cardId });
+      expect(activated.ok).toBe(false);
+      expect(await service.getCard({ userId: 'admin-1', cardId })).toMatchObject({ ok: false, error: 'NOT_FOUND' });
+      const listed = await service.listCards({ userId: 'admin-1' });
+      expect(listed).toMatchObject({ ok: true, cards: [expect.objectContaining({ id: second.card.id })] });
+      const { preset: _preset, ...update } = validCreate();
+      expect(await service.updateCard({ ...update, cardId })).toMatchObject({ ok: false, error: 'NOT_FOUND' });
+      expect(await service.copyCard({ userId: 'admin-1', sourceCardId: cardId })).toMatchObject({ ok: false, error: 'NOT_FOUND' });
+      expect((await service.publishCard({ userId: 'admin-1', cardId })).ok).toBe(false);
+      expect((await service.runTest({ userId: 'admin-1', cardId })).ok).toBe(false);
+      expect((await service.discoverModels({ userId: 'admin-1', cardId })).ok).toBe(false);
+      expect(await service.resolveInvocationTarget({ cardId, revisionId })).toMatchObject({ kind: 'available', modelId: 'gpt-4.1-mini' });
+      expect(await service.getActiveModel({ userId: 'admin-1' })).toMatchObject({ ok: true, history: expect.arrayContaining([expect.objectContaining({ cardId, revisionId })]) });
+      const stored = await persistence.repositories.cards.getById(cardId);
+      expect(stored).toMatchObject({ deletedBy: 'admin-1', deletedAt: expect.any(Number) });
+      if (db) {
+        // A new repository instance reads the tombstone from SQLite, not process state.
+        expect(await createSqlitePiProviderPersistence(db).repositories.cards.getById(cardId)).toMatchObject({ deletedBy: 'admin-1' });
+        expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+      }
+    } finally { db?.close(); }
+  });
+});
+
+test('a discovery response arriving after deletion cannot restore the card or candidates', async () => {
+  const started = createDeferred();
+  const finish = createDeferred();
+  const { repos, service } = createService(undefined, { fetch: vi.fn<typeof fetch>(async () => {
+    started.resolve();
+    await finish.promise;
+    return new Response(JSON.stringify({ data: [{ id: 'late-model' }] }), { status: 200 });
+  }) });
+  await seedUsers(repos);
+  const created = await service.createCard(validCreate());
+  if (!created.ok) throw new Error('create failed');
+  const cardId = created.card.id;
+  const pending = service.discoverModels({ userId: 'admin-1', cardId });
+  await started.promise;
+  expect(await service.deleteCard({ userId: 'admin-1', cardId })).toEqual({ ok: true, cardId });
+  finish.resolve();
+  expect((await pending).ok).toBe(false);
+  expect(await repos.piProvider.cards.getById(cardId)).toMatchObject({ deletedBy: 'admin-1', modelCandidates: [] });
+  expect(await service.listCards({ userId: 'admin-1' })).toEqual({ ok: true, cards: [] });
+});

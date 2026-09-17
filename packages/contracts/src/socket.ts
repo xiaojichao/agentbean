@@ -61,6 +61,7 @@ export const WEB_EVENTS = {
     runTest: 'pi-provider:run-test',
     cancelTest: 'pi-provider:cancel-test',
     publishCard: 'pi-provider:publish-card',
+    deleteCard: 'pi-provider:delete-card',
     setActiveModel: 'pi-provider:set-active-model',
     getActiveModel: 'pi-provider:get-active-model',
     /** #699 US 84：系统管理员紧急停止/恢复 PI 自动协调。 */

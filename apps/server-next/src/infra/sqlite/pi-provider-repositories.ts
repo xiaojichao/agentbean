@@ -92,6 +92,8 @@ function mapCard(row: Record<string, unknown>): PiProviderCardRecord {
   return {
     id: sqliteText(row, 'id'),
     preset: sqliteText(row, 'preset') as PiProviderPreset,
+    deletedAt: sqliteNullableInt(row, 'deleted_at'),
+    deletedBy: sqliteNullableText(row, 'deleted_by'),
     credentialRef: sqliteText(row, 'credential_ref'),
     draftRevisionId: sqliteNullableText(row, 'draft_revision_id'),
     publishedRevisionId: sqliteNullableText(row, 'published_revision_id'),
@@ -225,7 +227,8 @@ export function createSqlitePiProviderRepositories(db: SqliteDatabase): PiProvid
         db.prepare(`
           UPDATE pi_provider_cards
           SET draft_revision_id = ?, published_revision_id = ?,
-              model_candidates_json = ?, model_candidates_updated_at = ?, updated_at = ?
+              model_candidates_json = ?, model_candidates_updated_at = ?, updated_at = ?,
+              deleted_at = ?, deleted_by = ?
           WHERE id = ?
         `).run(
           input.draftRevisionId,
@@ -233,6 +236,8 @@ export function createSqlitePiProviderRepositories(db: SqliteDatabase): PiProvid
           JSON.stringify(input.modelCandidates ?? []),
           input.modelCandidatesUpdatedAt,
           input.updatedAt,
+          input.deletedAt ?? null,
+          input.deletedBy ?? null,
           input.id,
         );
         return input;

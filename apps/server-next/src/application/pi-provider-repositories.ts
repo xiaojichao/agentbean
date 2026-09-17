@@ -28,6 +28,8 @@ export interface PiProviderCardRevisionRecord {
 
 /** Card 身份与 revision 指针；元数据只存在于 revision。 */
 export interface PiProviderCardRecord {
+  readonly deletedAt?: number | null;
+  readonly deletedBy?: string | null;
   readonly id: string;
   readonly preset: PiProviderPreset;
   readonly credentialRef: string;

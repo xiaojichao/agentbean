@@ -163,6 +163,9 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0020_system_user_memory.sql');
   applyMigration(db, 'global/0021_agent_descriptor.sql');
   applyMigration(db, 'global/0022_agent_summarized_capabilities.sql');
+  if (sqliteTableExists(db, 'pi_provider_cards')) {
+    applyMigration(db, 'global/0023_pi_provider_deletion.sql');
+  }
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
