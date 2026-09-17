@@ -116,6 +116,7 @@ const panelSource = readFileSync(
   resolve(import.meta.dirname, '../app/[teamPath]/settings/PiManagementPanel.tsx'),
   'utf8',
 );
+const switcherSource = readFileSync(resolve(import.meta.dirname, '../components/PiModelSwitcher.tsx'), 'utf8');
 const settingsSource = readFileSync(
   resolve(import.meta.dirname, '../app/[teamPath]/settings/page.tsx'),
   'utf8',
@@ -185,9 +186,9 @@ describe('PI Management console scope', () => {
     expect(panelSource).toContain('settings-pi-run-test');
     expect(panelSource).toContain('settings-pi-cancel-test');
     expect(panelSource).toContain('settings-pi-publish');
-    expect(panelSource).toContain('settings-pi-active-model');
-    expect(panelSource).toContain('设为 Active');
-    expect(panelSource).toContain('configurationReadiness.diagnosticCode');
+    expect(switcherSource).toContain('settings-pi-active-model');
+    expect(switcherSource).toContain('确认切换');
+    expect(switcherSource).toContain('readiness.diagnosticCode');
     expect(panelSource).not.toContain('只影响后续新建 Run');
   });
 
@@ -265,6 +266,137 @@ describe('PI Management console scope', () => {
       card: sourceCard,
     });
     await waitFor(() => expect(screen.getByText('生产同路径测试已取消')).toBeTruthy());
+  });
+
+  test('non-admin does not request or display provider configuration', async () => {
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    render(React.createElement(PiManagementPanel, { isSystemAdmin: false }));
+    expect(screen.queryByLabelText('切换 Provider')).toBeNull();
+    expect(mocks.listCards).not.toHaveBeenCalled();
+    expect(mocks.getActiveModel).not.toHaveBeenCalled();
+  });
+
+  const publishedCard = {
+    ...sourceCard,
+    publishedRevision: { ...sourceCard.draftRevision, id: 'published-1', status: 'published' as const },
+    publishedRevisions: [
+      { ...sourceCard.draftRevision, id: 'published-1', status: 'published' as const },
+      { ...sourceCard.draftRevision, id: 'published-old', status: 'published' as const, config: { ...sourceCard.draftRevision.config, modelId: 'previous-model' } },
+    ],
+  };
+  const originalActive = { cardId: 'card-1', revisionId: 'published-1', modelId: 'gpt-4.1-mini', changedBy: 'admin-1', changedAt: 1 };
+
+  async function selectPreviousModel() {
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'gpt-4.1-mini' })).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('切换 Provider'), { target: { value: 'card-1' } });
+    fireEvent.change(screen.getByLabelText('切换模型版本'), { target: { value: 'published-old' } });
+    fireEvent.click(screen.getByRole('button', { name: '预览切换' }));
+  }
+
+  test('switches to an immutable historical version only after confirmation and displays the server result', async () => {
+    mocks.listCards.mockResolvedValue({ ok: true, cards: [publishedCard] });
+    mocks.getActiveModel.mockResolvedValue({ ok: true, activeModel: originalActive, history: [] });
+    const nextActive = { ...originalActive, revisionId: 'published-old', modelId: 'previous-model' };
+    mocks.setActiveModel.mockImplementation(async () => {
+      mocks.getActiveModel.mockResolvedValue({ ok: true, activeModel: nextActive, history: [originalActive] });
+      return { ok: true, activeModel: nextActive };
+    });
+    await selectPreviousModel();
+    expect(mocks.setActiveModel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '确认切换' }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'previous-model' })).toBeTruthy());
+    expect(mocks.setActiveModel).toHaveBeenCalledWith('published-old');
+  });
+
+  test('rejected switch keeps the active model and shows the error', async () => {
+    mocks.listCards.mockResolvedValue({ ok: true, cards: [publishedCard] });
+    mocks.getActiveModel.mockResolvedValue({ ok: true, activeModel: originalActive, history: [] });
+    mocks.setActiveModel.mockResolvedValue({ ok: false, message: '该版本需要重新测试' });
+    await selectPreviousModel();
+    fireEvent.click(screen.getByRole('button', { name: '确认切换' }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('该版本需要重新测试'));
+    expect(screen.getByRole('heading', { name: 'gpt-4.1-mini' })).toBeTruthy();
+  });
+
+  test('active historical model stays separate from the draft and version labels survive new publications', async () => {
+    mocks.listCards.mockResolvedValue({ ok: true, cards: [publishedCard] });
+    mocks.getActiveModel.mockResolvedValue({ ok: true, activeModel: { ...originalActive, revisionId: 'published-old', modelId: 'previous-model' }, history: [] });
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    await screen.findByText('当前生效：previous-model · published-old');
+    fireEvent.change(screen.getByLabelText('切换 Provider'), { target: { value: 'card-1' } });
+    const oldLabel = screen.getByRole('option', { name: /previous-model.*published-old/ }).textContent;
+    mocks.listCards.mockResolvedValue({ ok: true, cards: [{ ...publishedCard, publishedRevisions: [{ ...publishedCard.publishedRevisions[0], id: 'new-release', createdAt: 99 }, ...publishedCard.publishedRevisions] }] });
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }));
+    await screen.findByRole('option', { name: /new-release/ });
+    expect(screen.getByRole('option', { name: /previous-model.*published-old/ }).textContent).toBe(oldLabel);
+    expect(screen.getByText('当前生效：previous-model · published-old')).toBeTruthy();
+  });
+
+  test('changing provider clears the previous version and drafts cannot be activated', async () => {
+    mocks.listCards.mockResolvedValue({ ok: true, cards: [publishedCard, { ...sourceCard, id: 'draft-only', displayName: 'Draft Provider' }] });
+    mocks.getActiveModel.mockResolvedValue({ ok: true, activeModel: originalActive, history: [] });
+    await selectPreviousModel();
+    fireEvent.change(screen.getByLabelText('切换 Provider'), { target: { value: 'draft-only' } });
+    expect((screen.getByLabelText('切换模型版本') as HTMLSelectElement).value).toBe('');
+    expect((screen.getByRole('button', { name: '预览切换' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '确认切换' })).toBeNull();
+    expect(mocks.setActiveModel).not.toHaveBeenCalled();
+  });
+
+  test('unknown active state blocks switching and offers refresh', async () => {
+    mocks.getActiveModel.mockResolvedValue({ ok: false, message: '连接失败' });
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('连接失败'));
+    expect((screen.getByLabelText('切换 Provider') as HTMLSelectElement).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: '刷新' })).toBeTruthy();
+  });
+
+  test('unsaved model changes cannot test or publish the previously saved draft', async () => {
+    mocks.listCards.mockResolvedValue({ ok: true, cards: [{ ...sourceCard, canPublish: true }] });
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }));
+    fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'new-model' } });
+    expect((screen.getByRole('button', { name: '运行测试' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '发布' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '新建 OpenAI' }) as HTMLButtonElement).disabled).toBe(true);
+    const savedCard = { ...sourceCard, draftRevision: { ...sourceCard.draftRevision, config: { ...sourceCard.draftRevision.config, modelId: 'new-model' } } };
+    mocks.updateCard.mockResolvedValue({ ok: true, card: savedCard });
+    mocks.listCards.mockResolvedValue({ ok: true, cards: [savedCard] });
+    fireEvent.click(screen.getByRole('button', { name: '保存 Draft' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '放弃未保存修改' })).toBeNull());
+    expect(mocks.updateCard).toHaveBeenCalledWith(expect.objectContaining({ cardId: 'card-1', modelId: 'new-model', apiKey: null }));
+    expect((screen.getByRole('button', { name: '运行测试' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: '发布' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test('explicit discard restores saved configuration without sending a mutation', async () => {
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }));
+    fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'unsaved-model' } });
+    fireEvent.click(screen.getByRole('button', { name: '放弃未保存修改' }));
+    expect((screen.getByLabelText('Model ID') as HTMLInputElement).value).toBe('gpt-4.1-mini');
+    expect(mocks.updateCard).not.toHaveBeenCalled();
+  });
+
+  test('clicking the current JSON tab preserves edits and invalid JSON cannot silently become a form', async () => {
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    const { container } = render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }));
+    fireEvent.click(screen.getByRole('button', { name: '高级 JSON' }));
+    const editor = container.querySelector<HTMLTextAreaElement>('[data-smoke="settings-pi-field-advanced-json"]')!;
+    fireEvent.change(editor, { target: { value: '{invalid' } });
+    fireEvent.click(screen.getByRole('button', { name: '高级 JSON' }));
+    expect(editor.value).toBe('{invalid');
+    fireEvent.click(screen.getByRole('button', { name: '表单' }));
+    expect(screen.getByRole('alert').textContent).toContain('JSON 格式不正确');
+    expect(editor.value).toBe('{invalid');
+    expect(screen.queryByLabelText('Model ID')).toBeNull();
   });
 
 });
