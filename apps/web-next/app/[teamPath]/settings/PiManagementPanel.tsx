@@ -442,7 +442,8 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
                   data-card-id={card.id}
                 >
                   <div>
-                    <div className="flex items-center justify-between gap-2 text-sm font-semibold">{card.displayName}{activeModel?.cardId === card.id && <span className="text-xs font-medium text-emerald-700">当前使用</span>}</div>
+                    <div className="text-sm font-semibold">{card.displayName}</div>
+                    {activeModel?.cardId === card.id && <p className="mt-2 break-all text-xs text-emerald-700">当前生效：{activeModel.modelId} · {activeModel.revisionId}</p>}
                     <p className="my-2 break-all text-sm"><span className="mr-2 text-xs text-neutral-500">{card.draftRevision ? '草稿模型' : '已发布模型'}</span><span className="font-mono">{card.draftRevision?.config.modelId ?? card.publishedRevision?.config.modelId ?? '待选择模型'}</span></p>
                     <div className="text-xs text-neutral-500">
                       {card.preset}

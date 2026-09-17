@@ -320,6 +320,21 @@ describe('PI Management console scope', () => {
     expect(screen.getByRole('heading', { name: 'gpt-4.1-mini' })).toBeTruthy();
   });
 
+  test('active historical model stays separate from the draft and version labels survive new publications', async () => {
+    mocks.listCards.mockResolvedValue({ ok: true, cards: [publishedCard] });
+    mocks.getActiveModel.mockResolvedValue({ ok: true, activeModel: { ...originalActive, revisionId: 'published-old', modelId: 'previous-model' }, history: [] });
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    await screen.findByText('当前生效：previous-model · published-old');
+    fireEvent.change(screen.getByLabelText('切换 Provider'), { target: { value: 'card-1' } });
+    const oldLabel = screen.getByRole('option', { name: /previous-model.*published-old/ }).textContent;
+    mocks.listCards.mockResolvedValue({ ok: true, cards: [{ ...publishedCard, publishedRevisions: [{ ...publishedCard.publishedRevisions[0], id: 'new-release', createdAt: 99 }, ...publishedCard.publishedRevisions] }] });
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }));
+    await screen.findByRole('option', { name: /new-release/ });
+    expect(screen.getByRole('option', { name: /previous-model.*published-old/ }).textContent).toBe(oldLabel);
+    expect(screen.getByText('当前生效：previous-model · published-old')).toBeTruthy();
+  });
+
   test('changing provider clears the previous version and drafts cannot be activated', async () => {
     mocks.listCards.mockResolvedValue({ ok: true, cards: [publishedCard, { ...sourceCard, id: 'draft-only', displayName: 'Draft Provider' }] });
     mocks.getActiveModel.mockResolvedValue({ ok: true, activeModel: originalActive, history: [] });

@@ -18,6 +18,9 @@ export function PiModelSwitcher({ cards, activeModel, history, readiness, disabl
   const [revisionId, setRevisionId] = useState('');
   const [confirming, setConfirming] = useState(false);
   const activeCard = cards.find((card) => card.id === activeModel?.cardId);
+  const activeRevision = (activeCard?.publishedRevisions ?? (activeCard?.publishedRevision ? [activeCard.publishedRevision] : []))
+    .find((revision) => revision.id === activeModel?.revisionId);
+  const activeProviderName = activeRevision?.displayName ?? activeCard?.displayName;
   const selectedCard = cards.find((card) => card.id === cardId);
   const revisions = selectedCard?.publishedRevisions ?? (selectedCard?.publishedRevision ? [selectedCard.publishedRevision] : []);
   const selectedRevision = revisions.find((revision) => revision.id === revisionId);
@@ -29,7 +32,7 @@ export function PiModelSwitcher({ cards, activeModel, history, readiness, disabl
         <div className="min-w-0">
           <div className="mb-3 flex items-center gap-2 text-xs font-medium text-neutral-500"><SlidersHorizontal size={15} />全系统当前模型</div>
           <h3 className="break-all text-2xl font-semibold tracking-tight">{loading ? '正在读取当前配置…' : unavailable ? '当前配置加载失败' : activeModel?.modelId ?? '尚未启用模型'}</h3>
-          <p className="mt-2 text-sm text-neutral-500">{activeCard?.displayName ?? (activeModel ? activeModel.cardId : '添加 Provider 并发布模型后，即可在此启用。')}</p>
+          <p className="mt-2 text-sm text-neutral-500">{activeProviderName ?? (activeModel ? activeModel.cardId : '添加 Provider 并发布模型后，即可在此启用。')}</p>
         </div>
         <span className={`rounded-full px-3 py-1 text-xs font-medium ${!unavailable && readiness?.status === 'ready' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'}`}>
           {loading ? '读取中' : !unavailable && readiness?.status === 'ready' ? '配置就绪' : unavailable ? '状态未知' : '需要配置'}
@@ -49,7 +52,7 @@ export function PiModelSwitcher({ cards, activeModel, history, readiness, disabl
           <label className="min-w-0 text-xs font-medium text-neutral-600">模型 / 已发布版本
             <select aria-label="切换模型版本" value={revisionId} disabled={disabled || !selectedCard || unavailable} onChange={(event) => { setRevisionId(event.target.value); setConfirming(false); }} className="mt-2 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2.5 text-sm disabled:opacity-50">
               <option value="">{selectedCard && revisions.length === 0 ? '尚无已发布模型' : '选择模型版本'}</option>
-              {revisions.map((revision, index) => <option key={revision.id} value={revision.id}>{revision.config.modelId} · 版本 {index + 1} · {new Date(revision.createdAt).toLocaleString()}{activeModel?.revisionId === revision.id ? '（当前）' : ''}</option>)}
+              {revisions.map((revision) => <option key={revision.id} value={revision.id}>{revision.config.modelId} · {new Date(revision.createdAt).toLocaleString()} · {revision.id}{activeModel?.revisionId === revision.id ? '（当前）' : ''}</option>)}
             </select>
           </label>
           <button type="button" disabled={!canSwitch} onClick={() => setConfirming(true)} className="flex items-center justify-center gap-2 rounded-lg bg-neutral-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-40">预览切换<ArrowRight size={15} /></button>
@@ -59,7 +62,7 @@ export function PiModelSwitcher({ cards, activeModel, history, readiness, disabl
         {confirming && selectedRevision && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-4" role="region" aria-label="确认模型切换">
             <h4 className="text-sm font-semibold">确认全系统切换</h4>
-            <p className="mt-2 break-words text-sm">{activeCard?.displayName ?? '当前'} / {activeModel?.modelId ?? '未配置'} → {selectedCard?.displayName} / {selectedRevision.config.modelId}</p>
+            <p className="mt-2 break-words text-sm">{activeProviderName ?? '当前'} / {activeModel?.modelId ?? '未配置'} → {selectedRevision.displayName} / {selectedRevision.config.modelId}</p>
             <p className="mt-2 text-xs leading-5 text-amber-900">服务器将校验该版本的测试与凭据。切换失败时保留当前配置；系统不会自动切换到其他模型。</p>
             <div className="mt-3 flex gap-2">
               <button type="button" disabled={!canSwitch} onClick={async () => { if (await onActivate(revisionId)) setConfirming(false); }} className="rounded-md bg-neutral-900 px-3 py-2 text-xs font-medium text-white disabled:opacity-40">{disabled ? '切换中…' : '确认切换'}</button>
