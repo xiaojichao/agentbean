@@ -1097,7 +1097,11 @@ describe('server-next dev server entry', () => {
     cleanups.push(() => server.close());
 
     const truncated = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/truncated/preview?token=token-1`);
-    expect(truncated.status).toBe(413);
+    expect(truncated.status).toBe(200);
+    expect(truncated.headers.get('x-agentbean-preview-truncated')).toBe('true');
+    const truncatedText = await truncated.text();
+    expect(Buffer.byteLength(truncatedText, 'utf8')).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(truncatedText).not.toContain('\uFFFD');
 
     const oversized = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/oversized/preview?token=token-1`);
     expect(oversized.status).toBe(413);

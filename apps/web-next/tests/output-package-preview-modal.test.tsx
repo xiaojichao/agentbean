@@ -436,6 +436,21 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.queryByRole('textbox', { name: '文本源文' })).toBeNull();
   });
 
+  test('服务端返回 Markdown 截断预览时不开放文件包编辑', async () => {
+    const markdownVersion = version('version-1', 'collection-1', 'notes.md', 4);
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(markdownVersion) });
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'true' },
+      text: async () => '# partial preview',
+    } as unknown as Response);
+    renderModal();
+
+    expect(await screen.findByText('文件超过 2 MiB，暂不支持在线预览和编辑，可下载查看')).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: 'Markdown 源文' })).toBeNull();
+  });
+
   test('关闭脏草稿前确认，并让页脚保存按钮跟随编辑器状态', async () => {
     const onClose = vi.fn();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);

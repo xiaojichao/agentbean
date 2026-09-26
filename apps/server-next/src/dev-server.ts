@@ -1523,18 +1523,30 @@ async function handleArtifactRead(
   }
   const textPreview = options.disposition === 'inline' && isTextArtifact(result.artifact);
   if (textPreview) {
-    if (fileSize > MAX_TEXT_ARTIFACT_PREVIEW_BYTES) {
+    const mimeType = result.artifact.mimeType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+    const markdownPreview = mimeType === 'text/markdown' || /\.(?:md|markdown)$/i.test(result.artifact.filename);
+    if (fileSize > MAX_TEXT_ARTIFACT_PREVIEW_BYTES && !markdownPreview) {
       writeJson(input.response, 413, { ok: false, error: 'TEXT_PREVIEW_TOO_LARGE' });
       return;
     }
-    const body = readFileSync(stored.absolutePath);
+    if (markdownPreview && fileSize > 10 * 1024 * 1024) {
+      writeJson(input.response, 413, { ok: false, error: 'MARKDOWN_PREVIEW_TOO_LARGE' });
+      return;
+    }
+    let body = readFileSync(stored.absolutePath);
     if (!isUtf8(body)) {
       writeJson(input.response, 415, { ok: false, error: 'TEXT_PREVIEW_REQUIRES_UTF8' });
       return;
     }
+    if (markdownPreview && body.length > MAX_TEXT_ARTIFACT_PREVIEW_BYTES) {
+      let previewBytes = MAX_TEXT_ARTIFACT_PREVIEW_BYTES;
+      while (previewBytes > 0 && !isUtf8(body.subarray(0, previewBytes))) previewBytes -= 1;
+      body = body.subarray(0, previewBytes);
+    }
     input.response.writeHead(200, {
       'content-type': result.artifact.mimeType,
       'content-length': String(body.length),
+      ...(fileSize > body.length ? { 'x-agentbean-preview-truncated': 'true' } : {}),
       'content-disposition': buildContentDisposition(
         shouldForceArtifactDownload(result.artifact.mimeType) ? 'attachment' : 'inline',
         result.artifact.filename,

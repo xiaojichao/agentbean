@@ -27,10 +27,11 @@ export function sanitizeTextArtifactFilename(value: string): string {
   return normalized || 'document.txt';
 }
 
-export function textArtifactMimeType(filename: string): string {
+export function textArtifactMimeType(filename: string, fallbackMimeType?: string): string {
   const extension = filename.toLowerCase().split('.').at(-1);
   if (extension === 'md' || extension === 'markdown') return 'text/markdown';
   if (extension === 'json') return 'application/json';
   if (extension === 'csv') return 'text/csv';
+  if (fallbackMimeType) return fallbackMimeType.split(';', 1)[0]?.trim().toLowerCase() || 'text/plain';
   return 'text/plain';
 }

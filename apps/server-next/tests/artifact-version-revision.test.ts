@@ -591,6 +591,31 @@ for (const variant of variants) {
       expect(s.contentWrites).toEqual(['plain text with javascript: as literal content']);
     });
 
+    test('文件名不变时保留 HTML 文本 Artifact 的 MIME 类型', async () => {
+      const s = await makeSeed();
+      const fixture = await seedPackage(s.repositories, s, { filename: 'page.html', mimeType: 'text/html' });
+      const result = await s.app.saveArtifactVersionRevision({
+        ...saveInput(s, fixture, 'unused'),
+        content: '<h1>source text</h1>',
+        filename: 'page.html',
+        revisionBasis: { sourceVersionId: fixture.versionId },
+        idempotencyKey: 'revise:html-text',
+      });
+
+      expect(result).toMatchObject({ ok: true, replayed: false });
+      if (!result.ok) throw new Error(result.error);
+      const versions = await s.repositories.channelProjects.listArtifactVersions({
+        teamId: s.teamId,
+        channelId: s.channelId,
+      });
+      const saved = versions.find((version) => version.id === result.revision.versionId);
+      const savedArtifact = await s.repositories.artifacts.getForTeam({
+        teamId: s.teamId,
+        artifactId: saved!.artifactId,
+      });
+      expect(savedArtifact).toMatchObject({ filename: 'page.html', mimeType: 'text/html' });
+    });
+
     test('AC4:final 指针在修订后不移动(已有 final 的集合)', async () => {
       const s = await makeSeed();
       const fixture = await seedPackage(s.repositories, s);

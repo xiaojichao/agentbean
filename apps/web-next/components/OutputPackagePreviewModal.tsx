@@ -292,6 +292,10 @@ export function OutputPackagePreviewModal({
               : '版本内容加载失败');
           return;
         }
+        if (response.headers?.get('x-agentbean-preview-truncated') === 'true') {
+          setContentError('文件超过 2 MiB，暂不支持在线预览和编辑，可下载查看');
+          return;
+        }
         setContent(await response.text());
       })
       .catch(() => { if (!cancelled) setContentError('版本内容加载失败'); });
@@ -567,8 +571,14 @@ export function OutputPackagePreviewModal({
       ...(artifact.teamId ? { teamId: artifact.teamId } : {}),
     });
     if (!url) throw new Error('最新版没有可用的在线内容');
+    if (artifact.sizeBytes > MAX_TEXT_ARTIFACT_PREVIEW_BYTES) {
+      throw new Error('文件超过 2 MiB，暂不支持在线预览和编辑，可下载查看');
+    }
     const response = await fetch(url);
     if (!response.ok) throw new Error(response.status === 415 ? '最新版不是 UTF-8，仅支持下载' : '最新版加载失败');
+    if (response.headers?.get('x-agentbean-preview-truncated') === 'true') {
+      throw new Error('文件超过 2 MiB，暂不支持在线预览和编辑，可下载查看');
+    }
     return {
       content: await response.text(),
       filename: artifact.filename,

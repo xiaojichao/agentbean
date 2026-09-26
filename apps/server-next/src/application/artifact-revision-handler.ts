@@ -4,6 +4,7 @@ import {
   ARTIFACT_REVISION_COMMAND_SCHEMA_VERSION,
   canonicalizeArtifactRevisionCommand,
   isTextArtifact,
+  normalizeArtifactMimeType,
   type ArtifactRevisionConflictDto,
   type ArtifactRevisionRejectionReason,
   type ArtifactVersionRevisionSaveResultDto,
@@ -248,7 +249,10 @@ export async function saveArtifactVersionRevisionCommand(
   }
 
   const filename = sanitizeTextArtifactFilename(input.filename ?? baseArtifact?.filename ?? 'document.txt');
-  const mimeType = textArtifactMimeType(filename);
+  const preserveMimeType = baseArtifact && filename === baseArtifact.filename
+    ? normalizeArtifactMimeType(baseArtifact.mimeType)
+    : undefined;
+  const mimeType = textArtifactMimeType(filename, preserveMimeType);
   if (!validateRevisionTextContent(input.content, mimeType === 'text/markdown')) {
     return { kind: 'rejected', reasonCode: 'content-invalid' };
   }
