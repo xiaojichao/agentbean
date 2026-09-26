@@ -88,6 +88,7 @@ describe('first-slice contract result shape', () => {
     expect(supportsArtifactPreviewDerivativeMimeType('text/plain')).toBe(false);
     expect(isTextArtifact({ filename: 'notes.txt', mimeType: 'application/octet-stream' })).toBe(true);
     expect(isTextArtifact({ filename: 'main.ts', mimeType: 'application/octet-stream' })).toBe(true);
+    expect(isTextArtifact({ filename: 'schema', mimeType: 'application/xml' })).toBe(true);
     expect(isTextArtifact({ filename: 'diagram.png', mimeType: 'image/png' })).toBe(false);
     expect(isTextArtifact({ filename: 'report.pdf', mimeType: 'application/pdf' })).toBe(false);
     expect(MAX_TEXT_ARTIFACT_PREVIEW_BYTES).toBe(2 * 1024 * 1024);

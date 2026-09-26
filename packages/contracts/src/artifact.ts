@@ -76,6 +76,12 @@ const TEXT_ARTIFACT_EXTENSIONS = new Set([
   'yaml', 'yml', 'zsh',
 ]);
 
+const TEXT_ARTIFACT_MIME_TYPES = new Set([
+  'application/graphql', 'application/javascript', 'application/json', 'application/sql',
+  'application/toml', 'application/typescript', 'application/xml', 'application/yaml',
+  'application/x-hcl', 'application/x-httpd-php', 'application/x-sh', 'application/x-terraform',
+]);
+
 /** Maximum source size accepted by inline text previews and editors. */
 export const MAX_TEXT_ARTIFACT_PREVIEW_BYTES = 2 * 1024 * 1024;
 
@@ -85,7 +91,7 @@ export function isTextArtifact(artifact: { filename: string; mimeType: string })
   if (mimeType.startsWith('image/') || mimeType.startsWith('audio/') || mimeType.startsWith('video/')
     || mimeType === 'application/pdf') return false;
   if (mimeType.startsWith('text/')) return true;
-  if (mimeType === 'application/json' || mimeType.endsWith('+json') || mimeType.endsWith('+xml')) return true;
+  if (TEXT_ARTIFACT_MIME_TYPES.has(mimeType) || mimeType.endsWith('+json') || mimeType.endsWith('+xml')) return true;
   const extension = artifact.filename.toLowerCase().split('.').at(-1) ?? '';
   return TEXT_ARTIFACT_EXTENSIONS.has(extension);
 }
