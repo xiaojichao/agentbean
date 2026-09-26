@@ -67,6 +67,35 @@ export function normalizeArtifactMimeType(mimeType: string): string {
   return mimeType.toLowerCase().split(';', 1)[0]?.trim() ?? '';
 }
 
+const TEXT_ARTIFACT_EXTENSIONS = new Set([
+  'bat', 'c', 'cc', 'cfg', 'cmd', 'conf', 'cpp', 'cs', 'css', 'csv', 'dart', 'dockerfile', 'env',
+  'ex', 'exs', 'gql', 'go', 'gradle', 'graphql', 'h', 'hcl', 'hpp', 'hs', 'html', 'ini', 'java',
+  'js', 'jsx', 'json', 'kt', 'less', 'lock', 'log', 'make', 'markdown', 'md', 'mdx', 'mjs', 'cjs',
+  'mk', 'pl', 'php', 'properties', 'proto', 'ps1', 'py', 'r', 'rb', 'rst', 'rs', 'sass', 'scss',
+  'sh', 'sql', 'svelte', 'swift', 'tf', 'toml', 'ts', 'tsx', 'txt', 'vue', 'xml', 'xsd', 'xsl',
+  'yaml', 'yml', 'zsh',
+]);
+
+const TEXT_ARTIFACT_MIME_TYPES = new Set([
+  'application/graphql', 'application/javascript', 'application/json', 'application/sql',
+  'application/toml', 'application/typescript', 'application/xml', 'application/yaml',
+  'application/x-hcl', 'application/x-httpd-php', 'application/x-sh', 'application/x-terraform',
+]);
+
+/** Maximum source size accepted by inline text previews and editors. */
+export const MAX_TEXT_ARTIFACT_PREVIEW_BYTES = 2 * 1024 * 1024;
+
+/** Text files can be fetched and edited as UTF-8 source; never use this to render HTML as markup. */
+export function isTextArtifact(artifact: { filename: string; mimeType: string }): boolean {
+  const mimeType = normalizeArtifactMimeType(artifact.mimeType);
+  if (mimeType.startsWith('image/') || mimeType.startsWith('audio/') || mimeType.startsWith('video/')
+    || mimeType === 'application/pdf') return false;
+  if (mimeType.startsWith('text/')) return true;
+  if (TEXT_ARTIFACT_MIME_TYPES.has(mimeType) || mimeType.endsWith('+json') || mimeType.endsWith('+xml')) return true;
+  const extension = artifact.filename.toLowerCase().split('.').at(-1) ?? '';
+  return TEXT_ARTIFACT_EXTENSIONS.has(extension);
+}
+
 export function isSafeArtifactInlinePreviewMimeType(mimeType: string): boolean {
   return SAFE_ARTIFACT_INLINE_MIME_TYPES.has(normalizeArtifactMimeType(mimeType));
 }

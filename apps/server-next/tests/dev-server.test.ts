@@ -1058,17 +1058,23 @@ describe('server-next dev server entry', () => {
     await expect(unsupportedAudio.text()).resolves.toBe('unknown audio');
   });
 
-  test('限制 Markdown 在线预览大小并要求 UTF-8，同时保留下载能力', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-markdown-preview-'));
+  test('限制文本在线预览大小并要求 UTF-8，同时保留下载能力', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-text-preview-'));
     const truncatedBody = Buffer.concat([Buffer.alloc(2 * 1024 * 1024 - 1, 0x61), Buffer.from('你tail')]);
     const oversizedBody = Buffer.alloc(10 * 1024 * 1024 + 1, 0x62);
     writeFileSync(join(dataDir, 'truncated.md'), truncatedBody);
     writeFileSync(join(dataDir, 'oversized.md'), oversizedBody);
     writeFileSync(join(dataDir, 'invalid.md'), Buffer.from([0xff, 0xfe]));
+    writeFileSync(join(dataDir, 'invalid.txt'), Buffer.from([0xff, 0xfe]));
+    writeFileSync(join(dataDir, 'invalid.py'), Buffer.from([0xff, 0xfe]));
+    writeFileSync(join(dataDir, 'large.log'), Buffer.alloc(2 * 1024 * 1024 + 1, 0x63));
     const bodies = {
-      truncated: { filename: 'truncated.md', sizeBytes: truncatedBody.length },
-      oversized: { filename: 'oversized.md', sizeBytes: oversizedBody.length },
-      invalid: { filename: 'invalid.md', sizeBytes: 2 },
+      truncated: { filename: 'truncated.md', mimeType: 'text/markdown', sizeBytes: truncatedBody.length },
+      oversized: { filename: 'oversized.md', mimeType: 'text/markdown', sizeBytes: oversizedBody.length },
+      invalid: { filename: 'invalid.md', mimeType: 'text/markdown', sizeBytes: 2 },
+      invalidText: { filename: 'invalid.txt', mimeType: 'text/plain', sizeBytes: 2 },
+      invalidSource: { filename: 'invalid.py', mimeType: 'application/octet-stream', sizeBytes: 2 },
+      largeLog: { filename: 'large.log', mimeType: 'text/plain', sizeBytes: 2 * 1024 * 1024 + 1 },
     };
     const app = {
       whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
@@ -1077,7 +1083,7 @@ describe('server-next dev server entry', () => {
         return makeSuccess({
           artifact: {
             id: artifactId, teamId: 'team-1', channelId: 'channel-1', filename: file.filename,
-            mimeType: 'text/markdown', sizeBytes: file.sizeBytes, createdAt: 1,
+            mimeType: file.mimeType, sizeBytes: file.sizeBytes, createdAt: 1,
           },
           storagePath: file.filename,
         });
@@ -1101,6 +1107,12 @@ describe('server-next dev server entry', () => {
     expect(oversized.status).toBe(413);
     const invalid = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/invalid/preview?token=token-1`);
     expect(invalid.status).toBe(415);
+    const invalidText = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/invalidText/preview?token=token-1`);
+    expect(invalidText.status).toBe(415);
+    const invalidSource = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/invalidSource/preview?token=token-1`);
+    expect(invalidSource.status).toBe(415);
+    const largeLog = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/largeLog/preview?token=token-1`);
+    expect(largeLog.status).toBe(413);
 
     const download = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/oversized/download?token=token-1`);
     expect(download.status).toBe(200);

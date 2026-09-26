@@ -373,7 +373,13 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
 
 
   test('非 Markdown 成员仍可查看版本历史，但不显示编辑和保存动作', async () => {
-    const imageVersion = version('version-1', 'collection-1', '分镜.png', 4);
+    const imageVersion = {
+      ...version('version-1', 'collection-1', '分镜.png', 4),
+      artifact: {
+        ...version('version-1', 'collection-1', '分镜.png', 4).artifact,
+        mimeType: 'image/png',
+      },
+    };
     mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(imageVersion) });
     renderModal();
 
@@ -383,6 +389,88 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.queryByRole('button', { name: '保存新版本' })).toBeNull();
     expect(screen.getByRole('button', { name: '通过' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '退回修改…' })).toBeTruthy();
+  });
+
+  test('普通文本成员可预览、编辑并显示文本保存入口', async () => {
+    const textVersion = {
+      ...version('version-1', 'collection-1', 'notes.txt', 4),
+      artifact: {
+        ...version('version-1', 'collection-1', 'notes.txt', 4).artifact,
+        mimeType: 'text/plain; charset=utf-8',
+      },
+    };
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(textVersion) });
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => 'plain text content',
+    } as Response);
+    renderModal();
+
+    expect(await screen.findByRole('textbox', { name: '文本源文' })).toBeTruthy();
+    expect((await screen.findByRole('textbox', { name: '文本源文' }) as HTMLTextAreaElement).value)
+      .toBe('plain text content');
+    expect(document.querySelector('pre')?.textContent).toBe('plain text content');
+    expect(screen.getByText('文本预览')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '保存新版本' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '通过' }));
+    expect(await screen.findByRole('radio', { name: '通过当前已保存的 Server v4' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: '保存编辑稿为新版本，然后通过新版本' })).toBeTruthy();
+  });
+
+  test('规范化 Markdown MIME 参数后仍使用 Markdown 预览与快捷键', async () => {
+    const markdownVersion = {
+      ...version('version-1', 'collection-1', 'readme', 4),
+      artifact: {
+        ...version('version-1', 'collection-1', 'readme', 4).artifact,
+        mimeType: 'Text/Markdown; charset=utf-8',
+      },
+    };
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(markdownVersion) });
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => '# heading',
+    } as unknown as Response);
+    renderModal();
+
+    expect(await screen.findByRole('textbox', { name: 'Markdown 源文' })).toBeTruthy();
+    expect(screen.getByText('Markdown 预览')).toBeTruthy();
+    expect(screen.queryByText('文本预览')).toBeNull();
+  });
+
+  test('超过在线文本大小上限时不拉取内容或打开编辑器', async () => {
+    const largeTextVersion = {
+      ...version('version-1', 'collection-1', 'large.log', 4),
+      artifact: {
+        ...version('version-1', 'collection-1', 'large.log', 4).artifact,
+        mimeType: 'text/plain',
+        sizeBytes: 2 * 1024 * 1024 + 1,
+      },
+    };
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(largeTextVersion) });
+    renderModal();
+
+    expect(await screen.findByText('文件超过 2 MiB，暂不支持在线预览和编辑，可下载查看')).toBeTruthy();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(screen.queryByRole('textbox', { name: '文本源文' })).toBeNull();
+  });
+
+  test('服务端返回 Markdown 截断预览时不开放文件包编辑', async () => {
+    const markdownVersion = version('version-1', 'collection-1', 'notes.md', 4);
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(markdownVersion) });
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'true' },
+      text: async () => '# partial preview',
+    } as unknown as Response);
+    renderModal();
+
+    expect(await screen.findByText('文件超过 2 MiB，暂不支持在线预览和编辑，可下载查看')).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: 'Markdown 源文' })).toBeNull();
   });
 
   test('关闭脏草稿前确认，并让页脚保存按钮跟随编辑器状态', async () => {

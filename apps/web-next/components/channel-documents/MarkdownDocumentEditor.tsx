@@ -54,6 +54,10 @@ export interface MarkdownDocumentEditorProps {
   renderPreview: (content: string) => ReactNode;
   /** 文件包浮窗使用固定的「源文 + 实时预览」双栏，不展示通用文档工具栏。 */
   presentation?: 'default' | 'package-preview';
+  /** Labels for package members that are plain text rather than Markdown. */
+  sourceLabel?: string;
+  previewLabel?: string;
+  markdownShortcuts?: boolean;
 }
 
 /** 安全的源码编辑器：预览由 React 节点渲染，不把原始 HTML 交给 innerHTML。 */
@@ -76,6 +80,9 @@ export function MarkdownDocumentEditor({
   onStateChange,
   renderPreview,
   presentation = 'default',
+  sourceLabel = 'Markdown 源文',
+  previewLabel = 'Markdown 预览',
+  markdownShortcuts = true,
 }: MarkdownDocumentEditorProps) {
   const [content, setContent] = useState(initialContent);
   const [filename, setFilename] = useState(initialFilename);
@@ -550,7 +557,7 @@ export function MarkdownDocumentEditor({
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2" data-smoke="package-preview-split-editor">
         <section className="grid min-h-0 grid-rows-[38px_minmax(0,1fr)] border-r border-neutral-200">
           <div className="flex items-center border-b border-neutral-200 px-3 text-xs font-semibold text-neutral-500">
-            <span>Markdown 源文</span>
+            <span>{sourceLabel}</span>
           </div>
           <textarea
             ref={textareaRef}
@@ -563,22 +570,22 @@ export function MarkdownDocumentEditor({
                 event.preventDefault();
                 if (!readOnly) void save();
               }
-              if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b') {
+              if (markdownShortcuts && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b') {
                 event.preventDefault();
                 insert('**');
               }
-              if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'i') {
+              if (markdownShortcuts && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'i') {
                 event.preventDefault();
                 insert('*');
               }
             }}
-            aria-label="Markdown 源文"
+            aria-label={sourceLabel}
             className="h-full min-h-0 w-full resize-none border-0 p-3 font-mono text-xs leading-6 text-neutral-800 outline-none disabled:bg-neutral-50"
           />
         </section>
         <section className="grid min-h-0 grid-rows-[38px_minmax(0,1fr)]">
           <div className="flex items-center border-b border-neutral-200 px-3 text-xs font-semibold text-neutral-500">
-            <span>Markdown 预览</span>
+            <span>{previewLabel}</span>
           </div>
           <article className="min-h-0 overflow-y-auto px-4 py-3 text-sm leading-7" data-smoke="package-preview-rendered-markdown">
             {renderPreview(content)}

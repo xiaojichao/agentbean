@@ -553,7 +553,7 @@ for (const variant of variants) {
       expect(onArchived).toMatchObject({ ok: false, error: 'FORBIDDEN' });
     });
 
-    test('非 Markdown base 版本 → rejected(not-markdown-version)', async () => {
+    test('非文本 base 版本 → rejected(兼容旧拒绝码)', async () => {
       const s = await makeSeed();
       const fixture = await seedPackage(s.repositories, s, { filename: 'chart.png', mimeType: 'image/png' });
       const result = await s.app.saveArtifactVersionRevision({
@@ -563,6 +563,98 @@ for (const variant of variants) {
       });
       expect(result).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
       expect(result.ok ? '' : result.message).toContain('not-markdown-version');
+    });
+
+    test('普通文本文件可保存修订并保留文件名与文本 MIME 类型', async () => {
+      const s = await makeSeed();
+      const fixture = await seedPackage(s.repositories, s, { filename: 'notes.txt', mimeType: 'text/plain' });
+      const result = await s.app.saveArtifactVersionRevision({
+        ...saveInput(s, fixture, 'unused'),
+        content: 'plain text with javascript: as literal content',
+        filename: 'notes.txt',
+        revisionBasis: { sourceVersionId: fixture.versionId },
+        idempotencyKey: 'revise:plain-text',
+      });
+
+      expect(result).toMatchObject({ ok: true, replayed: false });
+      if (!result.ok) throw new Error(result.error);
+      const versions = await s.repositories.channelProjects.listArtifactVersions({
+        teamId: s.teamId,
+        channelId: s.channelId,
+      });
+      const saved = versions.find((version) => version.id === result.revision.versionId);
+      const savedArtifact = await s.repositories.artifacts.getForTeam({
+        teamId: s.teamId,
+        artifactId: saved!.artifactId,
+      });
+      expect(savedArtifact).toMatchObject({ filename: 'notes.txt', mimeType: 'text/plain' });
+      expect(s.contentWrites).toEqual(['plain text with javascript: as literal content']);
+    });
+
+    test('Markdown 扩展名即使原 MIME 为 text/plain 也保留内容校验', async () => {
+      const s = await makeSeed();
+      const fixture = await seedPackage(s.repositories, s, { filename: 'README.md', mimeType: 'text/plain' });
+      const result = await s.app.saveArtifactVersionRevision({
+        ...saveInput(s, fixture, 'unused'),
+        content: '<script>run()</script>',
+        filename: 'README.md',
+        revisionBasis: { sourceVersionId: fixture.versionId },
+        idempotencyKey: 'revise:markdown-plain-mime',
+      });
+
+      expect(result).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+      expect(result.ok ? '' : result.message).toContain('content-invalid');
+      expect(s.contentWrites).toEqual([]);
+    });
+
+    test('文件名不变时保留 HTML 文本 Artifact 的 MIME 类型', async () => {
+      const s = await makeSeed();
+      const fixture = await seedPackage(s.repositories, s, { filename: 'page.html', mimeType: 'text/html' });
+      const result = await s.app.saveArtifactVersionRevision({
+        ...saveInput(s, fixture, 'unused'),
+        content: '<h1>source text</h1>',
+        filename: 'page.html',
+        revisionBasis: { sourceVersionId: fixture.versionId },
+        idempotencyKey: 'revise:html-text',
+      });
+
+      expect(result).toMatchObject({ ok: true, replayed: false });
+      if (!result.ok) throw new Error(result.error);
+      const versions = await s.repositories.channelProjects.listArtifactVersions({
+        teamId: s.teamId,
+        channelId: s.channelId,
+      });
+      const saved = versions.find((version) => version.id === result.revision.versionId);
+      const savedArtifact = await s.repositories.artifacts.getForTeam({
+        teamId: s.teamId,
+        artifactId: saved!.artifactId,
+      });
+      expect(savedArtifact).toMatchObject({ filename: 'page.html', mimeType: 'text/html' });
+    });
+
+    test('文本文件改名时按新扩展名推导 MIME 类型', async () => {
+      const s = await makeSeed();
+      const fixture = await seedPackage(s.repositories, s, { filename: 'page.html', mimeType: 'text/html' });
+      const result = await s.app.saveArtifactVersionRevision({
+        ...saveInput(s, fixture, 'unused'),
+        content: 'body { color: blue; }',
+        filename: 'styles.css',
+        revisionBasis: { sourceVersionId: fixture.versionId },
+        idempotencyKey: 'revise:renamed-css',
+      });
+
+      expect(result).toMatchObject({ ok: true, replayed: false });
+      if (!result.ok) throw new Error(result.error);
+      const versions = await s.repositories.channelProjects.listArtifactVersions({
+        teamId: s.teamId,
+        channelId: s.channelId,
+      });
+      const saved = versions.find((version) => version.id === result.revision.versionId);
+      const savedArtifact = await s.repositories.artifacts.getForTeam({
+        teamId: s.teamId,
+        artifactId: saved!.artifactId,
+      });
+      expect(savedArtifact).toMatchObject({ filename: 'styles.css', mimeType: 'text/css' });
     });
 
     test('AC4:final 指针在修订后不移动(已有 final 的集合)', async () => {

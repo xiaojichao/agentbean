@@ -29,7 +29,7 @@ const baseFacts: ArtifactVersionRevisionFacts = {
     id: 'ver-1',
     collectionId: 'col-1',
     versionNumber: 2,
-    isMarkdown: true,
+    isText: true,
     source: {
       stageId: 'stage-1',
       taskId: 'task-1',
@@ -171,7 +171,7 @@ describe('evaluateArtifactVersionRevision (#1062)', () => {
       facts: { ...baseFacts, sourceVersion: null }, input: validInput,
     })).toEqual({ kind: 'rejected', reasonCode: 'version-not-in-collection' });
     expect(evaluateArtifactVersionRevision({
-      facts: { ...baseFacts, baseVersion: { ...baseFacts.baseVersion!, isMarkdown: false } },
+      facts: { ...baseFacts, baseVersion: { ...baseFacts.baseVersion!, isText: false } },
       input: validInput,
     })).toEqual({ kind: 'rejected', reasonCode: 'not-markdown-version' });
   });
