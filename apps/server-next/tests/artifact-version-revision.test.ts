@@ -553,7 +553,7 @@ for (const variant of variants) {
       expect(onArchived).toMatchObject({ ok: false, error: 'FORBIDDEN' });
     });
 
-    test('非 Markdown base 版本 → rejected(not-markdown-version)', async () => {
+    test('非文本 base 版本 → rejected(not-text-version)', async () => {
       const s = await makeSeed();
       const fixture = await seedPackage(s.repositories, s, { filename: 'chart.png', mimeType: 'image/png' });
       const result = await s.app.saveArtifactVersionRevision({
@@ -562,7 +562,33 @@ for (const variant of variants) {
         idempotencyKey: 'revise:binary',
       });
       expect(result).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
-      expect(result.ok ? '' : result.message).toContain('not-markdown-version');
+      expect(result.ok ? '' : result.message).toContain('not-text-version');
+    });
+
+    test('普通文本文件可保存修订并保留文件名与文本 MIME 类型', async () => {
+      const s = await makeSeed();
+      const fixture = await seedPackage(s.repositories, s, { filename: 'notes.txt', mimeType: 'text/plain' });
+      const result = await s.app.saveArtifactVersionRevision({
+        ...saveInput(s, fixture, 'unused'),
+        content: 'plain text with javascript: as literal content',
+        filename: 'notes.txt',
+        revisionBasis: { sourceVersionId: fixture.versionId },
+        idempotencyKey: 'revise:plain-text',
+      });
+
+      expect(result).toMatchObject({ ok: true, replayed: false });
+      if (!result.ok) throw new Error(result.error);
+      const versions = await s.repositories.channelProjects.listArtifactVersions({
+        teamId: s.teamId,
+        channelId: s.channelId,
+      });
+      const saved = versions.find((version) => version.id === result.revision.versionId);
+      const savedArtifact = await s.repositories.artifacts.getForTeam({
+        teamId: s.teamId,
+        artifactId: saved!.artifactId,
+      });
+      expect(savedArtifact).toMatchObject({ filename: 'notes.txt', mimeType: 'text/plain' });
+      expect(s.contentWrites).toEqual(['plain text with javascript: as literal content']);
     });
 
     test('AC4:final 指针在修订后不移动(已有 final 的集合)', async () => {

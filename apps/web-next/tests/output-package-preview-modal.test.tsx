@@ -373,7 +373,13 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
 
 
   test('非 Markdown 成员仍可查看版本历史，但不显示编辑和保存动作', async () => {
-    const imageVersion = version('version-1', 'collection-1', '分镜.png', 4);
+    const imageVersion = {
+      ...version('version-1', 'collection-1', '分镜.png', 4),
+      artifact: {
+        ...version('version-1', 'collection-1', '分镜.png', 4).artifact,
+        mimeType: 'image/png',
+      },
+    };
     mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(imageVersion) });
     renderModal();
 
@@ -383,6 +389,30 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.queryByRole('button', { name: '保存新版本' })).toBeNull();
     expect(screen.getByRole('button', { name: '通过' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '退回修改…' })).toBeTruthy();
+  });
+
+  test('普通文本成员可预览、编辑并显示文本保存入口', async () => {
+    const textVersion = {
+      ...version('version-1', 'collection-1', 'notes.txt', 4),
+      artifact: {
+        ...version('version-1', 'collection-1', 'notes.txt', 4).artifact,
+        mimeType: 'text/plain; charset=utf-8',
+      },
+    };
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(textVersion) });
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => 'plain text content',
+    } as Response);
+    renderModal();
+
+    expect(await screen.findByRole('textbox', { name: '文本源文' })).toBeTruthy();
+    expect((await screen.findByRole('textbox', { name: '文本源文' }) as HTMLTextAreaElement).value)
+      .toBe('plain text content');
+    expect(document.querySelector('pre')?.textContent).toBe('plain text content');
+    expect(screen.getByText('文本预览')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '保存新版本' })).toBeTruthy();
   });
 
   test('关闭脏草稿前确认，并让页脚保存按钮跟随编辑器状态', async () => {

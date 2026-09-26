@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import {
   ARTIFACT_REVISION_COMMAND_SCHEMA_VERSION,
   canonicalizeArtifactRevisionCommand,
+  isTextArtifact,
   type ArtifactRevisionConflictDto,
   type ArtifactRevisionRejectionReason,
   type ArtifactVersionRevisionSaveResultDto,
@@ -18,12 +19,12 @@ import type {
   ProjectArtifactCollectionRecord,
   ProjectArtifactVersionRecord,
 } from './project-repositories.js';
-import { isMarkdownArtifact, sanitizeMarkdownFilename } from './channel-document-policy.js';
+import { sanitizeTextArtifactFilename, textArtifactMimeType } from './channel-document-policy.js';
 
 /**
  * #1062 ArtifactRevision application handler(父规格 #1059 §7/§9/§11;ADR-0067)。
  *
- * `save-artifact-version-revision`:频道人类成员对 collection 内明确 base 版本保存 Markdown
+ * `save-artifact-version-revision`:频道人类成员对 collection 内明确 base 版本保存文本
  * 修订。单事务原子产生新 Artifact + 新 ProjectArtifactVersion + current 指针移动 +
  * receipt;不继承旧 review/acceptance/finalization(AC4——写计划里结构性不存在这些写入);
  * 原 Run artifact 与旧版本行永不改写(AC5);stale base/collection/basis → 结构化 conflict,
@@ -85,10 +86,10 @@ export type SaveArtifactVersionRevisionResult =
   }
   | { readonly kind: 'rejected'; readonly reasonCode: ArtifactRevisionRejectionReason };
 
-/** 与 Channel document 保存同源的内容规则(2MB / 危险 HTML 与协议)。 */
-function validateRevisionMarkdownContent(content: string): boolean {
+/** 限制文本大小；Markdown 才额外限制危险标记，因为其他文本始终以纯文本显示。 */
+function validateRevisionTextContent(content: string, markdown: boolean): boolean {
   if (Buffer.byteLength(content, 'utf8') > 2 * 1024 * 1024) return false;
-  if (/<script\b/i.test(content) || /(?:javascript|vbscript|data):/i.test(content)) return false;
+  if (markdown && (/<script\b/i.test(content) || /(?:javascript|vbscript|data):/i.test(content))) return false;
   return true;
 }
 
@@ -203,7 +204,7 @@ export async function saveArtifactVersionRevisionCommand(
           id: baseVersion.id,
           collectionId: baseVersion.collectionId,
           versionNumber: baseVersion.versionNumber,
-          isMarkdown: baseArtifact != null && isMarkdownArtifact(baseArtifact),
+          isText: baseArtifact != null && isTextArtifact(baseArtifact),
           source: versionSourceSnapshot(baseVersion),
         }
         : null,
@@ -246,7 +247,9 @@ export async function saveArtifactVersionRevisionCommand(
     };
   }
 
-  if (!validateRevisionMarkdownContent(input.content)) {
+  const filename = sanitizeTextArtifactFilename(input.filename ?? baseArtifact?.filename ?? 'document.txt');
+  const mimeType = textArtifactMimeType(filename);
+  if (!validateRevisionTextContent(input.content, mimeType === 'text/markdown')) {
     return { kind: 'rejected', reasonCode: 'content-invalid' };
   }
 
@@ -254,9 +257,6 @@ export async function saveArtifactVersionRevisionCommand(
   const plan = decision.plan;
   const now = deps.clock.now();
   const artifactId = deps.ids.nextId();
-  const filename = sanitizeMarkdownFilename(
-    input.filename ?? baseArtifact?.filename ?? 'document.md',
-  );
   const stored = await deps.artifactContentStore.writeContent({
     teamId,
     artifactId,
@@ -269,7 +269,7 @@ export async function saveArtifactVersionRevisionCommand(
     channelId: input.channelId,
     uploaderId: input.userId,
     filename,
-    mimeType: 'text/markdown',
+    mimeType,
     sizeBytes: stored.sizeBytes,
     pathKind: 'upload' as const,
     role: 'attachment' as const,

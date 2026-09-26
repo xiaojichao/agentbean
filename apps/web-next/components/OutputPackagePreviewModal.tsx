@@ -7,6 +7,8 @@ import { getResolvedServerUrl, getStoredAuthToken, projectEvents } from '@/lib/s
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { reviewStateLabel } from '@/lib/delivery-labels';
 import type { Artifact } from '@/lib/schema';
+import { isTextArtifact } from '@agentbean/contracts';
+import { isMarkdownArtifact } from './artifact/ArtifactViewer';
 import type {
   OutputPackageDto,
   PackageMemberAvailableActionsDto,
@@ -52,10 +54,6 @@ const EMPTY_EDITOR_STATE: MarkdownDocumentEditorState = {
   saveDisabled: true,
   conflicted: false,
 };
-
-function isMarkdownFilename(filename: string): boolean {
-  return /\.(md|markdown)$/i.test(filename);
-}
 
 function isImageFilename(filename: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg)$/i.test(filename);
@@ -240,7 +238,10 @@ export function OutputPackagePreviewModal({
   const historicalPreview = Boolean(active && active.current.id !== active.collection.currentVersionId);
   const viewReadOnly = readOnly || historicalPreview;
   const activeIsMarkdown = active
-    ? isMarkdownFilename((active.current.artifact as unknown as Artifact).filename)
+    ? isMarkdownArtifact(active.current.artifact as unknown as Artifact)
+    : false;
+  const activeIsText = active
+    ? isTextArtifact(active.current.artifact as unknown as Artifact)
     : false;
   const activeActions = active && availableActions && !viewReadOnly
     ? availableActions.find((entry) => (
@@ -257,7 +258,7 @@ export function OutputPackagePreviewModal({
   useEffect(() => {
     if (!active) return;
     const artifact = active.current.artifact as unknown as Artifact;
-    if (!isMarkdownFilename(artifact.filename)) {
+    if (!isTextArtifact(artifact)) {
       setContent(null);
       setContentError(null);
       return;
@@ -673,8 +674,8 @@ export function OutputPackagePreviewModal({
               <div className="flex h-full items-center justify-center text-sm text-red-600">{loadError}</div>
             ) : !active ? (
               <div className="flex h-full items-center justify-center text-sm text-neutral-400">选择左侧文件</div>
-            ) : !activeIsMarkdown ? (
-              <NonMarkdownPreview target={active} />
+            ) : !activeIsText ? (
+              <NonTextPreview target={active} />
             ) : contentError ? (
               <div className="flex h-full items-center justify-center text-sm text-red-600">{contentError}</div>
             ) : content === null ? (
@@ -688,8 +689,13 @@ export function OutputPackagePreviewModal({
                 {...(viewReadOnly ? { readOnlyReason: historicalPreview ? '所选历史版本只读' : '归档频道只读' } : {})}
                 onSave={saveCurrent}
                 onLoadLatest={loadLatest}
-                renderPreview={renderPreview}
+                renderPreview={activeIsMarkdown
+                  ? renderPreview
+                  : (text) => <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-6">{text}</pre>}
                 presentation="package-preview"
+                sourceLabel={activeIsMarkdown ? 'Markdown 源文' : '文本源文'}
+                previewLabel={activeIsMarkdown ? 'Markdown 预览' : '文本预览'}
+                markdownShortcuts={activeIsMarkdown}
                 simulateConflictMessage={`模拟冲突：假设 Server 已有 ${active.collection.name} v${active.current.versionNumber + 1}；你的草稿仍保留，请先查看最新版再手工合并。`}
                 onStateChange={handleEditorStateChange}
               />
@@ -747,7 +753,7 @@ export function OutputPackagePreviewModal({
                         <div className="mt-2 flex gap-2">
                           <button
                             type="button"
-                            disabled={historyBusyVersionId !== null || !isMarkdownFilename(artifact.filename)}
+                            disabled={historyBusyVersionId !== null || !isTextArtifact(artifact)}
                             onClick={() => void previewHistoryVersion(version)}
                             className="rounded border border-neutral-300 px-2 py-1 text-[10px] text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
                             aria-label={`预览 v${version.versionNumber}`}
@@ -775,7 +781,9 @@ export function OutputPackagePreviewModal({
                 ) : historyPreview ? (
                   <article data-smoke="package-preview-history-rendered">
                     <p className="mb-3 text-xs font-semibold text-neutral-500">v{historyPreview.version.versionNumber} 只读预览</p>
-                    {renderPreview(historyPreview.content)}
+                    {isMarkdownArtifact(historyPreview.version.artifact as unknown as Artifact)
+                      ? renderPreview(historyPreview.content)
+                      : <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-6">{historyPreview.content}</pre>}
                   </article>
                 ) : (
                   <div className="flex h-full items-center justify-center text-sm text-neutral-400">选择左侧版本进行预览</div>
@@ -972,7 +980,7 @@ export function OutputPackagePreviewModal({
               className="flex min-w-0 max-w-full items-center gap-1.5 overflow-x-auto [&>*]:shrink-0"
               data-smoke="package-preview-actions"
             >
-              {activeIsMarkdown && !viewReadOnly && (
+              {activeIsText && !viewReadOnly && (
                 <button
                   type="button"
                   onClick={() => editorContainerRef.current?.querySelector<HTMLButtonElement>('[data-markdown-document-simulate-conflict]')?.click()}
@@ -996,7 +1004,7 @@ export function OutputPackagePreviewModal({
               >
                 查看版本历史
               </button>
-              {activeIsMarkdown && !viewReadOnly && (
+              {activeIsText && !viewReadOnly && (
                 <>
                   <button
                     type="button"
@@ -1069,8 +1077,8 @@ function packageMemberSummary(
   return `current v${current.versionNumber} · ${source} · ${state}`;
 }
 
-/** 非 Markdown 成员:图片内嵌预览,其他类型提示仅下载。 */
-function NonMarkdownPreview({ target }: { target: ActiveTarget }) {
+/** 非文本成员:图片内嵌预览,其他类型提示仅下载。 */
+function NonTextPreview({ target }: { target: ActiveTarget }) {
   const artifact = target.current.artifact as unknown as Artifact;
   const url = chatArtifactUrl(artifact, isImageFilename(artifact.filename) ? 'preview' : 'download', {
     serverUrl: getResolvedServerUrl(),

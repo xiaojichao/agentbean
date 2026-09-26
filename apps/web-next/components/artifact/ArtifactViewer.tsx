@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Download, X } from 'lucide-react';
-import { normalizeArtifactMimeType } from '@agentbean/contracts';
+import { isTextArtifact as isTextFile, normalizeArtifactMimeType } from '@agentbean/contracts';
 import type { Artifact } from '@/lib/schema';
 
 export interface ArtifactViewerProps {
@@ -101,15 +101,7 @@ export function isMarkdownArtifact(artifact: Artifact): boolean {
 }
 
 export function isInlineTextArtifact(artifact: Artifact): boolean {
-  const name = artifact.filename.toLowerCase();
-  const mimeType = normalizeArtifactMimeType(artifact.mimeType);
-  return isMarkdownArtifact(artifact)
-    || mimeType === 'text/plain'
-    || mimeType === 'text/csv'
-    || mimeType === 'application/json'
-    || name.endsWith('.txt')
-    || name.endsWith('.json')
-    || name.endsWith('.csv');
+  return isTextFile(artifact);
 }
 
 export function formatArtifactTextPreview(artifact: Artifact, text: string): string {

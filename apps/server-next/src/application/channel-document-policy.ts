@@ -21,3 +21,16 @@ export function isMarkdownArtifact(
   const mediaType = artifact.mimeType.split(';', 1)[0]?.trim().toLowerCase();
   return mediaType === 'text/markdown' || /\.(?:md|markdown)$/i.test(artifact.filename);
 }
+
+export function sanitizeTextArtifactFilename(value: string): string {
+  const normalized = value.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').slice(0, 240);
+  return normalized || 'document.txt';
+}
+
+export function textArtifactMimeType(filename: string): string {
+  const extension = filename.toLowerCase().split('.').at(-1);
+  if (extension === 'md' || extension === 'markdown') return 'text/markdown';
+  if (extension === 'json') return 'application/json';
+  if (extension === 'csv') return 'text/csv';
+  return 'text/plain';
+}
