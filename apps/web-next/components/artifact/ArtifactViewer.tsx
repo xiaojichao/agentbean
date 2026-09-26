@@ -97,7 +97,8 @@ export function ArtifactViewer({ artifact, previewUrl, downloadUrl, onClose, ren
 
 export function isMarkdownArtifact(artifact: Artifact): boolean {
   const name = artifact.filename.toLowerCase();
-  return artifact.mimeType === 'text/markdown' || name.endsWith('.md') || name.endsWith('.markdown');
+  return normalizeArtifactMimeType(artifact.mimeType) === 'text/markdown'
+    || name.endsWith('.md') || name.endsWith('.markdown');
 }
 
 export function isInlineTextArtifact(artifact: Artifact): boolean {

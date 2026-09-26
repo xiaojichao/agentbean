@@ -419,6 +419,28 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.getByRole('radio', { name: '保存编辑稿为新版本，然后通过新版本' })).toBeTruthy();
   });
 
+  test('规范化 Markdown MIME 参数后仍使用 Markdown 预览与快捷键', async () => {
+    const markdownVersion = {
+      ...version('version-1', 'collection-1', 'readme', 4),
+      artifact: {
+        ...version('version-1', 'collection-1', 'readme', 4).artifact,
+        mimeType: 'Text/Markdown; charset=utf-8',
+      },
+    };
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(markdownVersion) });
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => '# heading',
+    } as unknown as Response);
+    renderModal();
+
+    expect(await screen.findByRole('textbox', { name: 'Markdown 源文' })).toBeTruthy();
+    expect(screen.getByText('Markdown 预览')).toBeTruthy();
+    expect(screen.queryByText('文本预览')).toBeNull();
+  });
+
   test('超过在线文本大小上限时不拉取内容或打开编辑器', async () => {
     const largeTextVersion = {
       ...version('version-1', 'collection-1', 'large.log', 4),

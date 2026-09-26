@@ -20,7 +20,7 @@ import type {
   ProjectArtifactCollectionRecord,
   ProjectArtifactVersionRecord,
 } from './project-repositories.js';
-import { sanitizeTextArtifactFilename, textArtifactMimeType } from './channel-document-policy.js';
+import { isMarkdownArtifact, sanitizeTextArtifactFilename, textArtifactMimeType } from './channel-document-policy.js';
 
 /**
  * #1062 ArtifactRevision application handler(父规格 #1059 §7/§9/§11;ADR-0067)。
@@ -253,7 +253,7 @@ export async function saveArtifactVersionRevisionCommand(
     ? normalizeArtifactMimeType(baseArtifact.mimeType)
     : undefined;
   const mimeType = textArtifactMimeType(filename, preserveMimeType);
-  if (!validateRevisionTextContent(input.content, mimeType === 'text/markdown')) {
+  if (!validateRevisionTextContent(input.content, isMarkdownArtifact({ filename, mimeType }))) {
     return { kind: 'rejected', reasonCode: 'content-invalid' };
   }
 

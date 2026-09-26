@@ -591,6 +591,22 @@ for (const variant of variants) {
       expect(s.contentWrites).toEqual(['plain text with javascript: as literal content']);
     });
 
+    test('Markdown 扩展名即使原 MIME 为 text/plain 也保留内容校验', async () => {
+      const s = await makeSeed();
+      const fixture = await seedPackage(s.repositories, s, { filename: 'README.md', mimeType: 'text/plain' });
+      const result = await s.app.saveArtifactVersionRevision({
+        ...saveInput(s, fixture, 'unused'),
+        content: '<script>run()</script>',
+        filename: 'README.md',
+        revisionBasis: { sourceVersionId: fixture.versionId },
+        idempotencyKey: 'revise:markdown-plain-mime',
+      });
+
+      expect(result).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+      expect(result.ok ? '' : result.message).toContain('content-invalid');
+      expect(s.contentWrites).toEqual([]);
+    });
+
     test('文件名不变时保留 HTML 文本 Artifact 的 MIME 类型', async () => {
       const s = await makeSeed();
       const fixture = await seedPackage(s.repositories, s, { filename: 'page.html', mimeType: 'text/html' });
