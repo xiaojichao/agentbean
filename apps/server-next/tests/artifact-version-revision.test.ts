@@ -616,6 +616,31 @@ for (const variant of variants) {
       expect(savedArtifact).toMatchObject({ filename: 'page.html', mimeType: 'text/html' });
     });
 
+    test('文本文件改名时按新扩展名推导 MIME 类型', async () => {
+      const s = await makeSeed();
+      const fixture = await seedPackage(s.repositories, s, { filename: 'page.html', mimeType: 'text/html' });
+      const result = await s.app.saveArtifactVersionRevision({
+        ...saveInput(s, fixture, 'unused'),
+        content: 'body { color: blue; }',
+        filename: 'styles.css',
+        revisionBasis: { sourceVersionId: fixture.versionId },
+        idempotencyKey: 'revise:renamed-css',
+      });
+
+      expect(result).toMatchObject({ ok: true, replayed: false });
+      if (!result.ok) throw new Error(result.error);
+      const versions = await s.repositories.channelProjects.listArtifactVersions({
+        teamId: s.teamId,
+        channelId: s.channelId,
+      });
+      const saved = versions.find((version) => version.id === result.revision.versionId);
+      const savedArtifact = await s.repositories.artifacts.getForTeam({
+        teamId: s.teamId,
+        artifactId: saved!.artifactId,
+      });
+      expect(savedArtifact).toMatchObject({ filename: 'styles.css', mimeType: 'text/css' });
+    });
+
     test('AC4:final 指针在修订后不移动(已有 final 的集合)', async () => {
       const s = await makeSeed();
       const fixture = await seedPackage(s.repositories, s);
