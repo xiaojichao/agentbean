@@ -76,6 +76,9 @@ const TEXT_ARTIFACT_EXTENSIONS = new Set([
   'yaml', 'yml', 'zsh',
 ]);
 
+/** Maximum source size accepted by inline text previews and editors. */
+export const MAX_TEXT_ARTIFACT_PREVIEW_BYTES = 2 * 1024 * 1024;
+
 /** Text files can be fetched and edited as UTF-8 source; never use this to render HTML as markup. */
 export function isTextArtifact(artifact: { filename: string; mimeType: string }): boolean {
   const mimeType = normalizeArtifactMimeType(artifact.mimeType);

@@ -413,6 +413,27 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(document.querySelector('pre')?.textContent).toBe('plain text content');
     expect(screen.getByText('文本预览')).toBeTruthy();
     expect(screen.getByRole('button', { name: '保存新版本' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '通过' }));
+    expect(await screen.findByRole('radio', { name: '通过当前已保存的 Server v4' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: '保存编辑稿为新版本，然后通过新版本' })).toBeTruthy();
+  });
+
+  test('超过在线文本大小上限时不拉取内容或打开编辑器', async () => {
+    const largeTextVersion = {
+      ...version('version-1', 'collection-1', 'large.log', 4),
+      artifact: {
+        ...version('version-1', 'collection-1', 'large.log', 4).artifact,
+        mimeType: 'text/plain',
+        sizeBytes: 2 * 1024 * 1024 + 1,
+      },
+    };
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(largeTextVersion) });
+    renderModal();
+
+    expect(await screen.findByText('文件超过 2 MiB，暂不支持在线预览和编辑，可下载查看')).toBeTruthy();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(screen.queryByRole('textbox', { name: '文本源文' })).toBeNull();
   });
 
   test('关闭脏草稿前确认，并让页脚保存按钮跟随编辑器状态', async () => {

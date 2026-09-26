@@ -37,7 +37,7 @@ import {
 } from './application/project-collaboration-rollout.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
-import { DEFAULT_ARTIFACT_MAX_BYTES, isSafeArtifactInlinePreviewMimeType, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRevisionCommittedPayload, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { DEFAULT_ARTIFACT_MAX_BYTES, isSafeArtifactInlinePreviewMimeType, isTextArtifact, MAX_TEXT_ARTIFACT_PREVIEW_BYTES, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRevisionCommittedPayload, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases } from './application/usecases.js';
 import { createServerRuntimeAssembly } from './server-runtime-assembly.js';
 
@@ -1521,28 +1521,25 @@ async function handleArtifactRead(
     writeJson(input.response, 409, { ok: false, error: 'ARTIFACT_SIZE_MISMATCH' });
     return;
   }
-  const markdownPreview = options.disposition === 'inline'
-    && (result.artifact.mimeType === 'text/markdown' || /\.(?:md|markdown)$/i.test(result.artifact.filename));
-  if (markdownPreview) {
-    if (fileSize > 10 * 1024 * 1024) {
-      writeJson(input.response, 413, { ok: false, error: 'MARKDOWN_PREVIEW_TOO_LARGE' });
+  const textPreview = options.disposition === 'inline' && isTextArtifact(result.artifact);
+  if (textPreview) {
+    if (fileSize > MAX_TEXT_ARTIFACT_PREVIEW_BYTES) {
+      writeJson(input.response, 413, { ok: false, error: 'TEXT_PREVIEW_TOO_LARGE' });
       return;
     }
-    let body = readFileSync(stored.absolutePath);
+    const body = readFileSync(stored.absolutePath);
     if (!isUtf8(body)) {
-      writeJson(input.response, 415, { ok: false, error: 'MARKDOWN_PREVIEW_REQUIRES_UTF8' });
+      writeJson(input.response, 415, { ok: false, error: 'TEXT_PREVIEW_REQUIRES_UTF8' });
       return;
-    }
-    if (body.length > 2 * 1024 * 1024) {
-      let previewBytes = 2 * 1024 * 1024;
-      while (previewBytes > 0 && !isUtf8(body.subarray(0, previewBytes))) previewBytes -= 1;
-      body = body.subarray(0, previewBytes);
     }
     input.response.writeHead(200, {
       'content-type': result.artifact.mimeType,
       'content-length': String(body.length),
-      ...(fileSize > body.length ? { 'x-agentbean-preview-truncated': 'true' } : {}),
-      'content-disposition': buildContentDisposition('inline', result.artifact.filename),
+      'content-disposition': buildContentDisposition(
+        shouldForceArtifactDownload(result.artifact.mimeType) ? 'attachment' : 'inline',
+        result.artifact.filename,
+      ),
+      'x-content-type-options': 'nosniff',
     });
     input.response.end(body);
     return;

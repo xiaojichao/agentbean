@@ -7,7 +7,7 @@ import { getResolvedServerUrl, getStoredAuthToken, projectEvents } from '@/lib/s
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { reviewStateLabel } from '@/lib/delivery-labels';
 import type { Artifact } from '@/lib/schema';
-import { isTextArtifact } from '@agentbean/contracts';
+import { isTextArtifact, MAX_TEXT_ARTIFACT_PREVIEW_BYTES } from '@agentbean/contracts';
 import { isMarkdownArtifact } from './artifact/ArtifactViewer';
 import type {
   OutputPackageDto,
@@ -263,6 +263,11 @@ export function OutputPackagePreviewModal({
       setContentError(null);
       return;
     }
+    if (artifact.sizeBytes > MAX_TEXT_ARTIFACT_PREVIEW_BYTES) {
+      setContent(null);
+      setContentError('文件超过 2 MiB，暂不支持在线预览和编辑，可下载查看');
+      return;
+    }
     const url = chatArtifactUrl(artifact, 'preview', {
       serverUrl: getResolvedServerUrl(),
       token: getStoredAuthToken(),
@@ -280,7 +285,11 @@ export function OutputPackagePreviewModal({
       .then(async (response) => {
         if (cancelled) return;
         if (!response.ok) {
-          setContentError(response.status === 415 ? '该版本不是 UTF-8，仅支持下载' : '版本内容加载失败');
+          setContentError(response.status === 415
+            ? '该版本不是 UTF-8，仅支持下载'
+            : response.status === 413
+              ? '文件超过 2 MiB，暂不支持在线预览和编辑，可下载查看'
+              : '版本内容加载失败');
           return;
         }
         setContent(await response.text());
@@ -810,7 +819,7 @@ export function OutputPackagePreviewModal({
             <p className="mt-1 text-[11px] text-neutral-500">
               审核对象：{(active.current.artifact as unknown as Artifact).filename} · Server v{active.current.versionNumber}
             </p>
-            {reviewPanel === 'approve' && activeIsMarkdown && (
+            {reviewPanel === 'approve' && activeIsText && (
               <fieldset className="mt-3 space-y-2 text-xs text-neutral-700">
                 <label className="flex items-start gap-2">
                   <input

@@ -10,6 +10,7 @@ import {
   isErrorCode,
   isSafeArtifactInlinePreviewMimeType,
   isTextArtifact,
+  MAX_TEXT_ARTIFACT_PREVIEW_BYTES,
   makeFailure,
   makeSuccess,
   normalizeArtifactMimeType,
@@ -89,6 +90,7 @@ describe('first-slice contract result shape', () => {
     expect(isTextArtifact({ filename: 'main.ts', mimeType: 'application/octet-stream' })).toBe(true);
     expect(isTextArtifact({ filename: 'diagram.png', mimeType: 'image/png' })).toBe(false);
     expect(isTextArtifact({ filename: 'report.pdf', mimeType: 'application/pdf' })).toBe(false);
+    expect(MAX_TEXT_ARTIFACT_PREVIEW_BYTES).toBe(2 * 1024 * 1024);
   });
 
   test('creates success and failure acknowledgements with stable error codes', () => {
