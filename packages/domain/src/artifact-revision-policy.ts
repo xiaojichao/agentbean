@@ -141,7 +141,8 @@ export function evaluateArtifactVersionRevision(input: {
     || sourceVersion.id !== command.revisionBasis.sourceVersionId) {
     return { kind: 'rejected', reasonCode: 'version-not-in-collection' };
   }
-  if (!facts.baseVersion.isText) return { kind: 'rejected', reasonCode: 'not-text-version' };
+  // 拒绝码属于既有 v1 command contract；保留历史名称以兼容旧客户端。
+  if (!facts.baseVersion.isText) return { kind: 'rejected', reasonCode: 'not-markdown-version' };
 
   // --- basis 校验(AC1/AC8:identity 级错误是 rejected,不是 fence 漂移) ---
   const basis = command.revisionBasis;

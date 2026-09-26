@@ -68,8 +68,8 @@ export const ARTIFACT_REVISION_REJECTION_REASONS = [
   'collection-not-found',
   /** base/source version 不属于声明的 collection。 */
   'version-not-in-collection',
-  /** base 版本不是可在线修订的文本文件。 */
-  'not-text-version',
+  /** base 版本不是可在线修订的文本文件。沿用既有 v1 code 以保持协议兼容。 */
+  'not-markdown-version',
   /** 操作者不是当前频道人类成员(权限撤销 fail closed;Agent/PI 无此命令)。 */
   'actor-not-authorized',
   /** 冻结 basis 与 Server 事实对不上:review 不属于 sourceVersion 或 decision 非

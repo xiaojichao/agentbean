@@ -553,7 +553,7 @@ for (const variant of variants) {
       expect(onArchived).toMatchObject({ ok: false, error: 'FORBIDDEN' });
     });
 
-    test('非文本 base 版本 → rejected(not-text-version)', async () => {
+    test('非文本 base 版本 → rejected(兼容旧拒绝码)', async () => {
       const s = await makeSeed();
       const fixture = await seedPackage(s.repositories, s, { filename: 'chart.png', mimeType: 'image/png' });
       const result = await s.app.saveArtifactVersionRevision({
@@ -562,7 +562,7 @@ for (const variant of variants) {
         idempotencyKey: 'revise:binary',
       });
       expect(result).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
-      expect(result.ok ? '' : result.message).toContain('not-text-version');
+      expect(result.ok ? '' : result.message).toContain('not-markdown-version');
     });
 
     test('普通文本文件可保存修订并保留文件名与文本 MIME 类型', async () => {

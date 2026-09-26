@@ -173,7 +173,7 @@ describe('evaluateArtifactVersionRevision (#1062)', () => {
     expect(evaluateArtifactVersionRevision({
       facts: { ...baseFacts, baseVersion: { ...baseFacts.baseVersion!, isText: false } },
       input: validInput,
-    })).toEqual({ kind: 'rejected', reasonCode: 'not-text-version' });
+    })).toEqual({ kind: 'rejected', reasonCode: 'not-markdown-version' });
   });
 
   test('rejected:basis review 不属于 sourceVersion 或 decision 非否定结论', () => {
